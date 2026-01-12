@@ -43,6 +43,44 @@ go install
 go build -ldflags="-s -w" -o chiffremento main.go
 ```
 
+### ⚠️ Guide : Exécuter un binaire téléchargé (GitHub Releases)
+
+Si vous avez téléchargé l'exécutable depuis GitHub au lieu de le compiler, suivez ces étapes :
+
+#### Sur macOS (Apple Silicon ou Intel)
+
+1.  Ouvrez votre Terminal.
+2.  Rendez le fichier exécutable :
+    ```bash
+    cd ~/Downloads  # ou le dossier où se trouve le fichier
+    chmod +x chiffremento-darwin-arm64
+    ```
+3.  Lancez-le une première fois :
+    ```bash
+    ./chiffremento-darwin-arm64
+    ```
+4.  **Si macOS bloque l'ouverture ("Développeur non identifié")** :
+    *   Une pop-up apparaît. Cliquez sur **OK**.
+    *   Allez dans **Réglages Système** > **Confidentialité et sécurité**.
+    *   Faites défiler vers le bas jusqu'à la section Sécurité.
+    *   Cliquez sur le bouton **"Ouvrir quand même"** (Open Anyway) à côté du message concernant `chiffremento`.
+    *   Tapez votre mot de passe Mac pour valider.
+    *   Relancez la commande `./chiffremento-darwin-arm64` dans le terminal.
+
+#### Sur Linux
+
+```bash
+chmod +x chiffremento-linux-amd64
+./chiffremento-linux-amd64
+```
+
+#### Sur Windows
+
+Lancez simplement `cmd` ou `PowerShell`, allez dans le dossier et exécutez :
+```cmd
+.\chiffremento-windows-amd64.exe
+```
+
 ## Utilisation
 
 L'outil s'utilise via la ligne de commande avec différents flags.
@@ -159,6 +197,44 @@ go install
 
 ```bash
 go build -ldflags="-s -w" -o chiffremento main.go
+```
+
+### ⚠️ Guide: Running Downloaded Binaries (GitHub Releases)
+
+If you downloaded the executable from GitHub instead of compiling it:
+
+#### On macOS (Apple Silicon or Intel)
+
+1.  Open your Terminal.
+2.  Make the file executable:
+    ```bash
+    cd ~/Downloads  # or wherever the file is
+    chmod +x chiffremento-darwin-arm64
+    ```
+3.  Run it once:
+    ```bash
+    ./chiffremento-darwin-arm64
+    ```
+4.  **If macOS blocks execution ("Unidentified Developer")**:
+    *   A popup appears. Click **OK**.
+    *   Go to **System Settings** > **Privacy & Security**.
+    *   Scroll down to the Security section.
+    *   Click **"Open Anyway"** next to the message about `chiffremento`.
+    *   Enter your password/TouchID.
+    *   Run the command `./chiffremento-darwin-arm64` again in the terminal.
+
+#### On Linux
+
+```bash
+chmod +x chiffremento-linux-amd64
+./chiffremento-linux-amd64
+```
+
+#### On Windows
+
+Simply launch `cmd` or `PowerShell` and run:
+```cmd
+.\chiffremento-windows-amd64.exe
 ```
 
 ## Usage
