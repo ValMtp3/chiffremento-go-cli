@@ -29,7 +29,7 @@ Cela rendra le programme exécutable, contournera les sécurités macOS (Gatekee
 *(Une fois le Tap configuré)*
 
 ```bash
-brew tap <votre-user>/tap
+brew tap ValMtp3/tap
 brew install chiffremento
 ```
 
@@ -208,7 +208,7 @@ This will make the program executable, bypass macOS security checks (Gatekeeper)
 *(Once Tap is configured)*
 
 ```bash
-brew tap <your-user>/tap
+brew tap ValMtp3/tap
 brew install chiffremento
 ```
 
