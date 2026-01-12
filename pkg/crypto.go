@@ -250,8 +250,7 @@ func Decrypt(inputPath string, outputPath string, password []byte) error {
 // decryptBytes analyse l'en-tête, déchiffre et gère la récursivité (Mode Cascade).
 func decryptBytes(data []byte, password []byte) ([]byte, error) {
 	// 1. Validation de l'en-tête
-	if len(data) < headerSize
- {
+	if len(data) < headerSize {
 		return nil, fmt.Errorf("trop court")
 	}
 	if string(data[:magicSize]) != magicNumber {
