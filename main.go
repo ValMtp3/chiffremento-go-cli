@@ -15,6 +15,7 @@ func main() {
 	password := flag.String("key", "", "Mot de passe")
 	compress := flag.Bool("comp", false, "Compresser les données avant chiffrement")
 	chacha := flag.Bool("chacha", false, "Utiliser ChaCha20-Poly1305 au lieu d'AES-GCM")
+	parano := flag.Bool("parano", false, "Mode Parano : Double chiffrement (Cascade AES + ChaCha20), plus lent mais plus robuste")
 
 	flag.Parse()
 	if *mode == "" || *fileIn == "" || *fileOut == "" || *password == "" {
@@ -26,7 +27,7 @@ func main() {
 	var err error
 	switch *mode {
 	case "enc":
-		err = pkg.Encrypt(*fileIn, *fileOut, []byte(*password), *compress, *chacha)
+		err = pkg.Encrypt(*fileIn, *fileOut, []byte(*password), *compress, *chacha, *parano)
 	case "dec":
 		err = pkg.Decrypt(*fileIn, *fileOut, []byte(*password))
 	default:
