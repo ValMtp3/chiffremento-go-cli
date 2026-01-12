@@ -36,10 +36,8 @@ const (
 
 	AlgoAES     = byte(1)
 	AlgoChaCha  = byte(2)
-	AlgoCascade = byte(3) // Nouveau mode Parano
+	AlgoCascade = byte(3)
 )
-
-// --- Fonctions Helper ---
 
 func deriveKey(password []byte, salt []byte) ([]byte, error) {
 	if len(salt) == 0 {
@@ -59,7 +57,7 @@ func addPadding(data []byte) ([]byte, error) {
 	}
 	paddingSize := int(b[0])
 	if paddingSize == 0 {
-		paddingSize = 13 // Arbitraire si 0
+		paddingSize = 13
 	}
 	padding := make([]byte, paddingSize)
 	if _, err := rand.Read(padding); err != nil {
@@ -106,14 +104,7 @@ func decompress(data []byte) ([]byte, error) {
 
 func initCipher(algoID byte, key []byte) (cipher.AEAD, error) {
 	switch algoID {
-	case AlgoAES, AlgoCascade: // Cascade utilise AES pour la couche interne, ou ChaCha pour l'externe, à gérer par l'appelant
-		// Ici on initialise juste l'algo demandé par le header.
-		// Si le header dit "AES", on donne AES.
-		// Pour le mode Cascade, le header externe dira "Cascade" (qu'on traitera comme ChaCha),
-		// et le header interne dira "AES".
-
-		// Note : Par convention, on va dire que si on demande AlgoCascade au niveau chiffrement 'technique',
-		// on utilise ChaCha20 comme couche externe.
+	case AlgoAES, AlgoCascade:
 		if algoID == AlgoCascade {
 			return chacha20poly1305.New(key)
 		}
@@ -132,7 +123,6 @@ func initCipher(algoID byte, key []byte) (cipher.AEAD, error) {
 	}
 }
 
-// sealData : La fonction "Cuisine" qui chiffre un blob d'octets
 func sealData(data []byte, password []byte, algoID byte, flags byte) ([]byte, error) {
 	salt := make([]byte, saltSize)
 	if _, err := rand.Read(salt); err != nil {
@@ -144,7 +134,6 @@ func sealData(data []byte, password []byte, algoID byte, flags byte) ([]byte, er
 		return nil, fmt.Errorf("key: %w", err)
 	}
 
-	// Pour sealData, si on demande Cascade, on utilise ChaCha comme moteur de chiffrement
 	engineAlgo := algoID
 	if algoID == AlgoCascade {
 		engineAlgo = AlgoChaCha
@@ -162,12 +151,11 @@ func sealData(data []byte, password []byte, algoID byte, flags byte) ([]byte, er
 
 	ciphertext := aead.Seal(nil, nonce, data, nil)
 
-	// Construction Header + Output
 	output := make([]byte, 0, headerSize+len(ciphertext))
 	output = append(output, []byte(magicNumber)...)
 	output = append(output, currentVersion)
 	output = append(output, flags)
-	output = append(output, algoID) // Ici on met le VRAI ID (donc potentiellement AlgoCascade)
+	output = append(output, algoID)
 	output = append(output, salt...)
 	output = append(output, nonce...)
 	output = append(output, ciphertext...)
@@ -175,17 +163,12 @@ func sealData(data []byte, password []byte, algoID byte, flags byte) ([]byte, er
 	return output, nil
 }
 
-// --- Fonctions Principales ---
-
 func Encrypt(inputPath string, outputPath string, password []byte, compressData bool, useChaCha bool, useParano bool) error {
-	// 1. Lecture
 	data, err := os.ReadFile(inputPath)
 	if err != nil {
 		return fmt.Errorf("lecture: %w", err)
 	}
 
-	// 2. Préparation (Compression + Padding)
-	// Ces étapes ne se font qu'une seule fois, sur les données claires.
 	currentFlags := byte(0)
 	if compressData {
 		data, err = compress(data)
@@ -200,26 +183,20 @@ func Encrypt(inputPath string, outputPath string, password []byte, compressData 
 		return fmt.Errorf("padding: %w", err)
 	}
 
-	// 3. Chiffrement
 	var finalOutput []byte
 
 	if useParano {
-		// Mode Parano : Double couche (Oignon)
-		// Couche 1 : AES (Interne)
 		layer1, err := sealData(data, password, AlgoAES, currentFlags)
 		if err != nil {
 			return fmt.Errorf("layer1 aes: %w", err)
 		}
 
-		// Couche 2 : ChaCha (Externe) marqué comme "Cascade"
-		// On passe flags=0 car la compression/padding est déjà encapsulée dans layer1
 		finalOutput, err = sealData(layer1, password, AlgoCascade, 0)
 		if err != nil {
 			return fmt.Errorf("layer2 cascade: %w", err)
 		}
 
 	} else {
-		// Mode Standard
 		algo := AlgoAES
 		if useChaCha {
 			algo = AlgoChaCha
@@ -230,7 +207,6 @@ func Encrypt(inputPath string, outputPath string, password []byte, compressData 
 		}
 	}
 
-	// 4. Écriture
 	if err := os.WriteFile(outputPath, finalOutput, 0644); err != nil {
 		return fmt.Errorf("écriture: %w", err)
 	}
@@ -254,7 +230,6 @@ func Decrypt(inputPath string, outputPath string, password []byte) error {
 	return nil
 }
 
-// decryptBytes : Fonction récursive capable de peler l'oignon
 func decryptBytes(data []byte, password []byte) ([]byte, error) {
 	if len(data) < headerSize {
 		return nil, fmt.Errorf("trop court")
@@ -263,8 +238,6 @@ func decryptBytes(data []byte, password []byte) ([]byte, error) {
 		return nil, fmt.Errorf("magic number invalide")
 	}
 
-	// Parsing Header
-	// version := data[magicSize] (on ignore la vérif version pour simplifier ici)
 	flags := data[magicSize+versionSize]
 	algoID := data[magicSize+versionSize+flagsSize]
 
@@ -274,13 +247,11 @@ func decryptBytes(data []byte, password []byte) ([]byte, error) {
 	nonce := data[headerOffset : headerOffset+nonceSize]
 	ciphertext := data[headerSize:]
 
-	// Dérivation & Init
 	key, err := deriveKey(password, salt)
 	if err != nil {
 		return nil, err
 	}
 
-	// Si l'algo est Cascade, on utilise ChaCha pour déchiffrer cette couche
 	engineAlgo := algoID
 	if algoID == AlgoCascade {
 		engineAlgo = AlgoChaCha
@@ -296,21 +267,15 @@ func decryptBytes(data []byte, password []byte) ([]byte, error) {
 		return nil, fmt.Errorf("déchiffrement échoué: %w", err)
 	}
 
-	// Logique Récursive (Parano)
 	if algoID == AlgoCascade {
-		// Le plaintext est LUI-MÊME un fichier chiffré (couche AES interne)
-		// On appelle récursivement decryptBytes
 		return decryptBytes(plaintext, password)
 	}
 
-	// Traitement final (Standard)
-	// 1. Retrait Padding
 	plaintext, err = removePadding(plaintext)
 	if err != nil {
 		return nil, fmt.Errorf("remove padding: %w", err)
 	}
 
-	// 2. Décompression
 	if flags&FlagCompressed != 0 {
 		plaintext, err = decompress(plaintext)
 		if err != nil {

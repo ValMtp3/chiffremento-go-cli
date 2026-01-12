@@ -1,14 +1,10 @@
 #!/bin/bash
 
-# Script d'installation automatique pour Chiffremento CLI
-# Supporte macOS et Linux
-
 set -e
 
 BINARY_NAME="chiffremento"
 INSTALL_DIR="/usr/local/bin"
 
-# 1. Détection du système
 OS="$(uname -s)"
 ARCH="$(uname -m)"
 SOURCE_BIN=""
@@ -16,7 +12,7 @@ SOURCE_BIN=""
 echo "🔍 Détection du système : $OS ($ARCH)"
 
 case "$OS" in
-    Darwin) # macOS
+    Darwin)
         if [ "$ARCH" = "arm64" ]; then
             SOURCE_BIN="chiffremento-darwin-arm64"
         else
@@ -36,8 +32,6 @@ case "$OS" in
         ;;
 esac
 
-# 2. Recherche du binaire
-# On cherche soit dans le dossier courant (téléchargement), soit dans build/ (compilation)
 PATH_TO_BIN=""
 
 if [ -f "./$SOURCE_BIN" ]; then
@@ -51,22 +45,17 @@ else
     exit 1
 fi
 
-echo "✅ Finaire trouvé : $PATH_TO_BIN"
+echo "✅ Binaire trouvé : $PATH_TO_BIN"
 
-# 3. Installation
 echo "🚀 Installation de $BINARY_NAME dans $INSTALL_DIR..."
 echo "🔑 Un mot de passe peut être demandé pour les permissions (sudo)..."
 
-# Rendre exécutable
 chmod +x "$PATH_TO_BIN"
 
-# Copier vers /usr/local/bin
 sudo cp "$PATH_TO_BIN" "$INSTALL_DIR/$BINARY_NAME"
 
-# 4. Nettoyage spécifique macOS (Gatekeeper)
 if [ "$OS" = "Darwin" ]; then
     echo "🍎 Tentative de suppression de la quarantaine macOS..."
-    # Supprime l'attribut de quarantaine qui cause le message "Développeur non identifié"
     sudo xattr -d com.apple.quarantine "$INSTALL_DIR/$BINARY_NAME" 2>/dev/null || true
 fi
 
