@@ -1,20 +1,37 @@
-# Chiffremento CLI
+<div align="center">
+  <h1>Chiffremento CLI</h1>
+  <p>
+    <strong>L'outil de chiffrement ultime pour vos fichiers.</strong><br>
+    The ultimate file encryption tool.
+  </p>
+  <p>
+    <a href="#-français">🇫🇷 Français</a> •
+    <a href="#-english">🇬🇧 English</a>
+  </p>
+</div>
 
-Chiffremento CLI est une application en ligne de commande écrite en Go qui permet de chiffrer et déchiffrer des fichiers de manière sécurisée. Elle supporte plusieurs algorithmes de chiffrement (AES-GCM, ChaCha20-Poly1305) ainsi que la compression des données.
+---
 
-## Fonctionnalités
+<a id="-français"></a>
 
-- **Chiffrement Authentifié** : Utilise AES-GCM (par défaut) ou ChaCha20-Poly1305.
-- **Dérivation de Clé Robuste** : Utilise Argon2id pour dériver la clé de chiffrement à partir du mot de passe.
-- **Compression** : Support optionnel de la compression GZIP avant chiffrement.
-- **Mode Parano** : Un mode "Cascade" qui double-chiffre les données (AES puis ChaCha20) pour une sécurité maximale.
-- **Format de Fichier Sécurisé** : En-tête personnalisé incluant Magic Number, version, flags, et sel aléatoire.
+# 🇫🇷 Français
 
-## Installation Facile (Recommandé)
+**Chiffremento CLI** est une application en ligne de commande moderne écrite en Go qui permet de chiffrer et déchiffrer des fichiers de manière sécurisée, rapide et simple.
+
+## ✨ Fonctionnalités
+
+- **🔐 Chiffrement Authentifié** : Utilise **AES-GCM** (par défaut) ou **ChaCha20-Poly1305**.
+- **🔑 Dérivation de Clé Robuste** : Utilise **Argon2id** pour transformer votre mot de passe en clé cryptographique inviolable.
+- **📦 Compression** : Support optionnel de la compression **GZIP** pour réduire la taille avant chiffrement.
+- **😱 Mode Parano** : Un mode "Cascade" unique qui double-chiffre les données (AES puis ChaCha20) pour une sécurité maximale.
+- **🛡️ Format Sécurisé** : En-tête binaire personnalisé incluant Magic Number, versioning, et sel aléatoire unique par fichier.
+- **🕵️ Anti-Analyse** : Padding aléatoire pour masquer la taille réelle des fichiers.
+
+## 📥 Installation Facile (Recommandé)
 
 Le plus simple est d'utiliser le script d'installation automatique fourni (fonctionne sur macOS et Linux).
 
-1.  Téléchargez le binaire pour votre système et le fichier `install.sh` (disponibles dans la Release).
+1.  Téléchargez le binaire pour votre système et le fichier `install.sh` depuis la section **Releases** de GitHub.
 2.  Ouvrez un terminal dans le dossier de téléchargement.
 3.  Lancez l'installation :
 
@@ -22,178 +39,128 @@ Le plus simple est d'utiliser le script d'installation automatique fourni (fonct
 sh install.sh
 ```
 
-Cela rendra le programme exécutable, contournera les sécurités macOS (Gatekeeper), et l'installera dans votre système (`/usr/local/bin`). Vous pourrez ensuite utiliser la commande `chiffremento` n'importe où, sans le `./`.
+Cela rendra le programme exécutable, contournera les sécurités macOS (Gatekeeper), et l'installera dans votre système (`/usr/local/bin`). Vous pourrez ensuite utiliser la commande `chiffremento` n'importe où.
 
 ### Installation via Homebrew (macOS)
 
-*(Une fois le Tap configuré)*
+Si vous préférez utiliser Homebrew :
 
 ```bash
 brew tap ValMtp3/tap
 brew install chiffremento
 ```
 
-## Compilation (Pour les développeurs)
+## 🛠 Compilation (Avancé)
 
-Assurez-vous d'avoir Go installé (version 1.25+ recommandée).
+Si vous êtes développeur et souhaitez compiler le projet vous-même (nécessite Go 1.25+).
 
-### Option 1 : Compilation via Makefile (Recommandé)
-
-Un `Makefile` est fourni pour simplifier la compilation et le déploiement.
+### Option 1 : Via Makefile (Recommandé)
 
 ```bash
-# Compiler pour votre système actuel (crée le binaire 'chiffremento')
+# Compiler pour le système actuel
 make build
 
-# Compiler pour toutes les plateformes (Linux, Mac, Windows) dans le dossier build/
+# Compiler pour toutes les plateformes (Linux, Mac, Windows)
 make build-all
 
-# Installer globalement (nécessite que $GOPATH/bin soit dans votre PATH)
+# Installer globalement
 make install
 ```
 
-### Option 2 : Installation via Go Install
-
-Si vous souhaitez installer l'outil directement dans votre `GOPATH` :
-
-```bash
-go install
-```
-
-### Option 3 : Compilation Manuelle
+### Option 2 : Manuelle
 
 ```bash
 go build -ldflags="-s -w" -o chiffremento main.go
 ```
 
-### ⚠️ Guide : Exécuter un binaire téléchargé (GitHub Releases)
+## 🚀 Utilisation
 
-Si vous avez téléchargé l'exécutable depuis GitHub au lieu de le compiler, suivez ces étapes :
-
-#### Sur macOS (Apple Silicon ou Intel)
-
-1.  Ouvrez votre Terminal.
-2.  Rendez le fichier exécutable :
-    ```bash
-    cd ~/Downloads  # ou le dossier où se trouve le fichier
-    chmod +x chiffremento-darwin-arm64
-    ```
-3.  Lancez-le une première fois :
-    ```bash
-    ./chiffremento-darwin-arm64
-    ```
-4.  **Si macOS bloque l'ouverture ("Développeur non identifié")** :
-    *   Une pop-up apparaît. Cliquez sur **OK**.
-    *   Allez dans **Réglages Système** > **Confidentialité et sécurité**.
-    *   Faites défiler vers le bas jusqu'à la section Sécurité.
-    *   Cliquez sur le bouton **"Ouvrir quand même"** (Open Anyway) à côté du message concernant `chiffremento`.
-    *   Tapez votre mot de passe Mac pour valider.
-    *   Relancez la commande `./chiffremento-darwin-arm64` dans le terminal.
-
-#### Sur Linux
-
-```bash
-chmod +x chiffremento-linux-amd64
-./chiffremento-linux-amd64
-```
-
-#### Sur Windows
-
-Lancez simplement `cmd` ou `PowerShell`, allez dans le dossier et exécutez :
-```cmd
-.\chiffremento-windows-amd64.exe
-```
-
-## Utilisation
-
-L'outil s'utilise via la ligne de commande avec différents flags.
+L'outil s'utilise via la ligne de commande.
 
 ### Syntaxe Générale
 
 ```bash
-./chiffremento -mode <enc|dec> -in <fichier_entrée> -out <fichier_sortie> -key <mot_de_passe> [options]
+chiffremento -mode <enc|dec> -in <fichier_entrée> -out <fichier_sortie> -key <mot_de_passe> [options]
 ```
 
 ### Flags Disponibles
 
-- `-mode` : Mode d'opération (`enc` pour chiffrer, `dec` pour déchiffrer). **(Obligatoire)**
-- `-in` : Chemin du fichier d'entrée. **(Obligatoire)**
-- `-out` : Chemin du fichier de sortie. **(Obligatoire)**
-- `-key` : Mot de passe pour le chiffrement/déchiffrement. **(Obligatoire)**
-- `-comp` : (Chiffrement uniquement) Active la compression GZIP avant le chiffrement.
-- `-chacha` : (Chiffrement uniquement) Utilise ChaCha20-Poly1305 au lieu d'AES-GCM.
-- `-parano` : (Chiffrement uniquement) Mode Parano : Double chiffrement (AES + ChaCha20). Plus lent mais plus robuste.
+| Flag | Description |
+| :--- | :--- |
+| `-mode` | **Obligatoire.** Mode d'opération (`enc` pour chiffrer, `dec` pour déchiffrer). |
+| `-in` | **Obligatoire.** Chemin du fichier d'entrée. |
+| `-out` | **Obligatoire.** Chemin du fichier de sortie. |
+| `-key` | **Obligatoire.** Mot de passe. |
+| `-comp` | *(Chiffrement)* Active la compression GZIP. |
+| `-chacha`| *(Chiffrement)* Utilise ChaCha20-Poly1305 au lieu d'AES-GCM. |
+| `-parano`| *(Chiffrement)* Mode Parano : Double chiffrement (AES + ChaCha20). |
 
 ### Exemples
 
 #### 1. Chiffrement Standard (AES-GCM)
 ```bash
-./chiffremento -mode enc -in document.txt -out document.enc -key "monSuperMotDePasse"
+chiffremento -mode enc -in document.txt -out document.enc -key "monSuperMotDePasse"
 ```
 
 #### 2. Chiffrement avec Compression et ChaCha20
 ```bash
-./chiffremento -mode enc -in image.bmp -out image.enc -key "password123" -comp -chacha
+chiffremento -mode enc -in image.bmp -out image.enc -key "password123" -comp -chacha
 ```
 
 #### 3. Mode Parano (Double Chiffrement)
 ```bash
-./chiffremento -mode enc -in secrets.txt -out secrets.parano -key "topSecret" -parano
+chiffremento -mode enc -in secrets.txt -out secrets.parano -key "topSecret" -parano
 ```
 
 #### 4. Déchiffrement
-Le mode de déchiffrement détecte automatiquement l'algorithme et les options utilisés lors du chiffrement (compression, algo, etc.) grâce à l'en-tête du fichier. Il n'est pas nécessaire de spécifier `-comp` ou `-chacha` lors du déchiffrement.
+Le déchiffrement est **intelligent** : il détecte automatiquement l'algorithme, la compression et le mode utilisés grâce à l'en-tête du fichier.
 
 ```bash
-./chiffremento -mode dec -in document.enc -out document_clair.txt -key "monSuperMotDePasse"
+chiffremento -mode dec -in document.enc -out document_clair.txt -key "monSuperMotDePasse"
 ```
 
-## Structure Technique
+## 🧠 Structure Technique
 
 ### Format du Fichier Chiffré
-Le fichier binaire généré respecte la structure suivante :
 ```
 [MagicNumber (8 bytes)] "CHFRMT03"
 [Version (1 byte)]
-[Flags (1 byte)] (Indique la compression, etc.)
+[Flags (1 byte)] (Compression, etc.)
 [AlgoID (1 byte)] (1=AES, 2=ChaCha, 3=Cascade)
-[Salt (16 bytes)] (Pour Argon2)
-[Nonce (12 bytes)]
+[Salt (16 bytes)] (Aléatoire pour Argon2)
+[Nonce (12 bytes)] (Aléatoire pour le chiffrement)
 [Ciphertext (Variable)]
 ```
 
-### Structure du Code
-- `main.go` : Point d'entrée, gestion des arguments CLI.
-- `pkg/crypto.go` : Implémentation de la cryptographie, compression et gestion du format de fichier.
-- `pkg/crypto_test.go` : Tests unitaires et d'intégration couvrant tous les modes.
-
-## Tests
-
-Pour exécuter la suite de tests :
+### Tests
 
 ```bash
 go test -v ./pkg
 ```
 
 ---
+<br>
 
-# Chiffremento CLI (English)
+<a id="-english"></a>
 
-Chiffremento CLI is a command-line application written in Go that provides secure file encryption and decryption. It supports multiple encryption algorithms (AES-GCM, ChaCha20-Poly1305) as well as data compression.
+# 🇬🇧 English
 
-## Features
+**Chiffremento CLI** is a modern command-line application written in Go that provides secure, fast, and simple file encryption and decryption.
 
-- **Authenticated Encryption**: Uses AES-GCM (default) or ChaCha20-Poly1305.
-- **Robust Key Derivation**: Uses Argon2id to derive the encryption key from the password.
-- **Compression**: Optional support for GZIP compression before encryption.
-- **Parano Mode**: A "Cascade" mode that double-encrypts data (AES then ChaCha20) for maximum security.
-- **Secure File Format**: Custom header including Magic Number, version, flags, and random salt.
+## ✨ Features
 
-## Easy Installation (Recommended)
+- **🔐 Authenticated Encryption**: Uses **AES-GCM** (default) or **ChaCha20-Poly1305**.
+- **🔑 Robust Key Derivation**: Uses **Argon2id** to transform your password into an unbreakable cryptographic key.
+- **📦 Compression**: Optional **GZIP** compression support to reduce file size before encryption.
+- **😱 Parano Mode**: A unique "Cascade" mode that double-encrypts data (AES then ChaCha20) for maximum security.
+- **🛡️ Secure Format**: Custom binary header including Magic Number, versioning, and unique random salt per file.
+- **🕵️ Anti-Analysis**: Random padding to hide the actual file size.
+
+## 📥 Easy Installation (Recommended)
 
 The easiest way is to use the provided automatic installation script (works on macOS and Linux).
 
-1.  Download the binary for your system and the `install.sh` file (available in the Release).
+1.  Download the binary for your system and the `install.sh` file from the **Releases** section.
 2.  Open a terminal in the download folder.
 3.  Run the installation:
 
@@ -201,154 +168,100 @@ The easiest way is to use the provided automatic installation script (works on m
 sh install.sh
 ```
 
-This will make the program executable, bypass macOS security checks (Gatekeeper), and install it on your system (`/usr/local/bin`). You can then use the `chiffremento` command anywhere, without the `./`.
+This will make the program executable, bypass macOS security checks (Gatekeeper), and install it on your system (`/usr/local/bin`). You can then use the `chiffremento` command anywhere.
 
 ### Installation via Homebrew (macOS)
 
-*(Once Tap is configured)*
+If you prefer using Homebrew:
 
 ```bash
 brew tap ValMtp3/tap
 brew install chiffremento
 ```
 
-## Compilation (For Developers)
+## 🛠 Compilation (Advanced)
 
-Ensure you have Go installed (version 1.25+ recommended).
+If you are a developer and want to build the project yourself (requires Go 1.25+).
 
-### Option 1: Compilation via Makefile (Recommended)
-
-A `Makefile` is provided to simplify compilation and deployment.
+### Option 1: Via Makefile (Recommended)
 
 ```bash
-# Compile for your current system (creates the 'chiffremento' binary)
+# Build for current system
 make build
 
-# Compile for all platforms (Linux, Mac, Windows) in the build/ folder
+# Build for all platforms (Linux, Mac, Windows)
 make build-all
 
-# Install globally (requires $GOPATH/bin in your PATH)
+# Install globally
 make install
 ```
 
-### Option 2: Installation via Go Install
-
-If you wish to install the tool directly into your `GOPATH`:
-
-```bash
-go install
-```
-
-### Option 3: Manual Compilation
+### Option 2: Manual
 
 ```bash
 go build -ldflags="-s -w" -o chiffremento main.go
 ```
 
-### ⚠️ Guide: Running Downloaded Binaries (GitHub Releases)
+## 🚀 Usage
 
-If you downloaded the executable from GitHub instead of compiling it:
-
-#### On macOS (Apple Silicon or Intel)
-
-1.  Open your Terminal.
-2.  Make the file executable:
-    ```bash
-    cd ~/Downloads  # or wherever the file is
-    chmod +x chiffremento-darwin-arm64
-    ```
-3.  Run it once:
-    ```bash
-    ./chiffremento-darwin-arm64
-    ```
-4.  **If macOS blocks execution ("Unidentified Developer")**:
-    *   A popup appears. Click **OK**.
-    *   Go to **System Settings** > **Privacy & Security**.
-    *   Scroll down to the Security section.
-    *   Click **"Open Anyway"** next to the message about `chiffremento`.
-    *   Enter your password/TouchID.
-    *   Run the command `./chiffremento-darwin-arm64` again in the terminal.
-
-#### On Linux
-
-```bash
-chmod +x chiffremento-linux-amd64
-./chiffremento-linux-amd64
-```
-
-#### On Windows
-
-Simply launch `cmd` or `PowerShell` and run:
-```cmd
-.\chiffremento-windows-amd64.exe
-```
-
-## Usage
-
-The tool is used via the command line with various flags.
+The tool is used via the command line.
 
 ### General Syntax
 
 ```bash
-./chiffremento -mode <enc|dec> -in <input_file> -out <output_file> -key <password> [options]
+chiffremento -mode <enc|dec> -in <input_file> -out <output_file> -key <password> [options]
 ```
 
 ### Available Flags
 
-- `-mode`: Operation mode (`enc` to encrypt, `dec` to decrypt). **(Required)**
-- `-in`: Input file path. **(Required)**
-- `-out`: Output file path. **(Required)**
-- `-key`: Password for encryption/decryption. **(Required)**
-- `-comp`: (Encryption only) Enables GZIP compression before encryption.
-- `-chacha`: (Encryption only) Uses ChaCha20-Poly1305 instead of AES-GCM.
-- `-parano`: (Encryption only) Parano Mode: Double encryption (AES + ChaCha20). Slower but more robust.
+| Flag | Description |
+| :--- | :--- |
+| `-mode` | **Required.** Operation mode (`enc` to encrypt, `dec` to decrypt). |
+| `-in` | **Required.** Input file path. |
+| `-out` | **Required.** Output file path. |
+| `-key` | **Required.** Password. |
+| `-comp` | *(Encryption)* Enables GZIP compression. |
+| `-chacha`| *(Encryption)* Uses ChaCha20-Poly1305 instead of AES-GCM. |
+| `-parano`| *(Encryption)* Parano Mode: Double encryption (AES + ChaCha20). |
 
 ### Examples
 
 #### 1. Standard Encryption (AES-GCM)
 ```bash
-./chiffremento -mode enc -in document.txt -out document.enc -key "mySuperPassword"
+chiffremento -mode enc -in document.txt -out document.enc -key "mySuperPassword"
 ```
 
 #### 2. Encryption with Compression and ChaCha20
 ```bash
-./chiffremento -mode enc -in image.bmp -out image.enc -key "password123" -comp -chacha
+chiffremento -mode enc -in image.bmp -out image.enc -key "password123" -comp -chacha
 ```
 
 #### 3. Parano Mode (Double Encryption)
 ```bash
-./chiffremento -mode enc -in secrets.txt -out secrets.parano -key "topSecret" -parano
+chiffremento -mode enc -in secrets.txt -out secrets.parano -key "topSecret" -parano
 ```
 
 #### 4. Decryption
-The decryption mode automatically detects the algorithm and options used during encryption (compression, algo, etc.) thanks to the file header. It is not necessary to specify `-comp` or `-chacha` during decryption.
+Decryption is **smart**: it automatically detects the algorithm, compression, and mode used thanks to the file header.
 
 ```bash
-./chiffremento -mode dec -in document.enc -out clear_document.txt -key "mySuperPassword"
+chiffremento -mode dec -in document.enc -out clear_document.txt -key "mySuperPassword"
 ```
 
-## Technical Structure
+## 🧠 Technical Structure
 
 ### Encrypted File Format
-The generated binary file respects the following structure:
 ```
 [MagicNumber (8 bytes)] "CHFRMT03"
 [Version (1 byte)]
-[Flags (1 byte)] (Indicates compression, etc.)
+[Flags (1 byte)] (Compression, etc.)
 [AlgoID (1 byte)] (1=AES, 2=ChaCha, 3=Cascade)
-[Salt (16 bytes)] (For Argon2)
-[Nonce (12 bytes)]
+[Salt (16 bytes)] (Random for Argon2)
+[Nonce (12 bytes)] (Random for encryption)
 [Ciphertext (Variable)]
 ```
 
-### Code Structure
-- `main.go`: Entry point, CLI argument management.
-- `pkg/crypto.go`: Implementation of cryptography, compression, and file format management.
-- `pkg/crypto_test.go`: Unit and integration tests covering all modes.
-
-## Tests
-
-To run the test suite:
+### Tests
 
 ```bash
 go test -v ./pkg
