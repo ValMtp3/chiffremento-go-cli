@@ -14,6 +14,7 @@ import (
 	"golang.org/x/crypto/chacha20poly1305"
 )
 
+// Configuration Argon2 et format de fichier
 const (
 	argonTime    = 1
 	argonMemory  = 64 * 1024
@@ -39,6 +40,9 @@ const (
 	AlgoCascade = byte(3)
 )
 
+// --- Fonctions Helper ---
+
+// deriveKey génère une clé de 32 bytes via Argon2id.
 func deriveKey(password []byte, salt []byte) ([]byte, error) {
 	if len(salt) == 0 {
 		salt = make([]byte, saltSize)
@@ -50,6 +54,7 @@ func deriveKey(password []byte, salt []byte) ([]byte, error) {
 	return key, nil
 }
 
+// addPadding ajoute des octets aléatoires pour masquer la taille réelle du fichier.
 func addPadding(data []byte) ([]byte, error) {
 	b := make([]byte, 1)
 	if _, err := rand.Read(b); err != nil {
@@ -67,6 +72,7 @@ func addPadding(data []byte) ([]byte, error) {
 	return append(data, padding...), nil
 }
 
+// removePadding retire et valide le padding ajouté.
 func removePadding(data []byte) ([]byte, error) {
 	if len(data) == 0 {
 		return nil, fmt.Errorf("données vides")
@@ -78,6 +84,7 @@ func removePadding(data []byte) ([]byte, error) {
 	return data[:len(data)-paddingSize], nil
 }
 
+// Helpers GZIP
 func compress(data []byte) ([]byte, error) {
 	var buf bytes.Buffer
 	w, err := gzip.NewWriterLevel(&buf, gzip.BestCompression)
@@ -102,13 +109,13 @@ func decompress(data []byte) ([]byte, error) {
 	return io.ReadAll(r)
 }
 
+// initCipher initialise le moteur de chiffrement (AES-GCM ou ChaCha20-Poly1305).
 func initCipher(algoID byte, key []byte) (cipher.AEAD, error) {
 	switch algoID {
 	case AlgoAES, AlgoCascade:
 		if algoID == AlgoCascade {
 			return chacha20poly1305.New(key)
 		}
-
 		block, err := aes.NewCipher(key)
 		if err != nil {
 			return nil, fmt.Errorf("création AES: %w", err)
@@ -123,6 +130,7 @@ func initCipher(algoID byte, key []byte) (cipher.AEAD, error) {
 	}
 }
 
+// sealData gère le processus bas niveau : génération sel/nonce, dérivation clé, chiffrement et assemblage.
 func sealData(data []byte, password []byte, algoID byte, flags byte) ([]byte, error) {
 	salt := make([]byte, saltSize)
 	if _, err := rand.Read(salt); err != nil {
@@ -151,6 +159,7 @@ func sealData(data []byte, password []byte, algoID byte, flags byte) ([]byte, er
 
 	ciphertext := aead.Seal(nil, nonce, data, nil)
 
+	// Construction du fichier final : [Magic][Version][Flags][Algo][Salt][Nonce][Ciphertext]
 	output := make([]byte, 0, headerSize+len(ciphertext))
 	output = append(output, []byte(magicNumber)...)
 	output = append(output, currentVersion)
@@ -163,12 +172,16 @@ func sealData(data []byte, password []byte, algoID byte, flags byte) ([]byte, er
 	return output, nil
 }
 
+// --- Fonctions Principales ---
+
+// Encrypt orchestre la lecture, la préparation (compression/padding) et le chiffrement (standard ou parano).
 func Encrypt(inputPath string, outputPath string, password []byte, compressData bool, useChaCha bool, useParano bool) error {
 	data, err := os.ReadFile(inputPath)
 	if err != nil {
 		return fmt.Errorf("lecture: %w", err)
 	}
 
+	// 1. Préparation des données (Compression + Padding)
 	currentFlags := byte(0)
 	if compressData {
 		data, err = compress(data)
@@ -183,9 +196,11 @@ func Encrypt(inputPath string, outputPath string, password []byte, compressData 
 		return fmt.Errorf("padding: %w", err)
 	}
 
+	// 2. Chiffrement selon le mode
 	var finalOutput []byte
 
 	if useParano {
+		// Mode Cascade : Chiffrement AES (Interne) -> Chiffrement ChaCha (Externe)
 		layer1, err := sealData(data, password, AlgoAES, currentFlags)
 		if err != nil {
 			return fmt.Errorf("layer1 aes: %w", err)
@@ -197,6 +212,7 @@ func Encrypt(inputPath string, outputPath string, password []byte, compressData 
 		}
 
 	} else {
+		// Mode Standard (Simple couche)
 		algo := AlgoAES
 		if useChaCha {
 			algo = AlgoChaCha
@@ -213,6 +229,7 @@ func Encrypt(inputPath string, outputPath string, password []byte, compressData 
 	return nil
 }
 
+// Decrypt point d'entrée pour le déchiffrement.
 func Decrypt(inputPath string, outputPath string, password []byte) error {
 	data, err := os.ReadFile(inputPath)
 	if err != nil {
@@ -230,8 +247,11 @@ func Decrypt(inputPath string, outputPath string, password []byte) error {
 	return nil
 }
 
+// decryptBytes analyse l'en-tête, déchiffre et gère la récursivité (Mode Cascade).
 func decryptBytes(data []byte, password []byte) ([]byte, error) {
-	if len(data) < headerSize {
+	// 1. Validation de l'en-tête
+	if len(data) < headerSize
+ {
 		return nil, fmt.Errorf("trop court")
 	}
 	if string(data[:magicSize]) != magicNumber {
@@ -247,6 +267,7 @@ func decryptBytes(data []byte, password []byte) ([]byte, error) {
 	nonce := data[headerOffset : headerOffset+nonceSize]
 	ciphertext := data[headerSize:]
 
+	// 2. Dérivation & Initialisation
 	key, err := deriveKey(password, salt)
 	if err != nil {
 		return nil, err
@@ -262,15 +283,18 @@ func decryptBytes(data []byte, password []byte) ([]byte, error) {
 		return nil, err
 	}
 
+	// 3. Déchiffrement du payload
 	plaintext, err := aead.Open(nil, nonce, ciphertext, nil)
 	if err != nil {
 		return nil, fmt.Errorf("déchiffrement échoué: %w", err)
 	}
 
+	// 4. Gestion de la récursivité (Mode Parano/Cascade)
 	if algoID == AlgoCascade {
 		return decryptBytes(plaintext, password)
 	}
 
+	// 5. Post-traitement (Padding + Décompression)
 	plaintext, err = removePadding(plaintext)
 	if err != nil {
 		return nil, fmt.Errorf("remove padding: %w", err)

@@ -6,10 +6,12 @@ BUILD_DIR=build
 
 all: test build
 
+# Compile pour le système actuel
 build:
 	@echo "Building for current OS..."
 	go build -ldflags="-s -w" -o $(BINARY_NAME) main.go
 
+# Compile pour Linux, Mac (Intel/M1) et Windows
 build-all: clean
 	@echo "Building for all platforms..."
 	mkdir -p $(BUILD_DIR)
@@ -20,14 +22,17 @@ build-all: clean
 	GOOS=windows GOARCH=amd64 go build -ldflags="-s -w" -o $(BUILD_DIR)/$(BINARY_NAME)-windows-amd64.exe main.go
 	@echo "Done! Binaries are in $(BUILD_DIR)/"
 
+# Nettoie les fichiers de build
 clean:
 	@echo "Cleaning..."
 	rm -f $(BINARY_NAME)
 	rm -rf $(BUILD_DIR)
 
+# Installe dans le $GOPATH/bin local
 install:
 	@echo "Installing globally with go install..."
 	go install
 
+# Lance les tests
 test:
 	go test ./pkg/...

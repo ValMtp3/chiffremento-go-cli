@@ -5,6 +5,7 @@ set -e
 BINARY_NAME="chiffremento"
 INSTALL_DIR="/usr/local/bin"
 
+# 1. Détection du système et de l'architecture
 OS="$(uname -s)"
 ARCH="$(uname -m)"
 SOURCE_BIN=""
@@ -32,6 +33,7 @@ case "$OS" in
         ;;
 esac
 
+# 2. Recherche du binaire source (local ou build/)
 PATH_TO_BIN=""
 
 if [ -f "./$SOURCE_BIN" ]; then
@@ -47,6 +49,7 @@ fi
 
 echo "✅ Binaire trouvé : $PATH_TO_BIN"
 
+# 3. Installation dans /usr/local/bin
 echo "🚀 Installation de $BINARY_NAME dans $INSTALL_DIR..."
 echo "🔑 Un mot de passe peut être demandé pour les permissions (sudo)..."
 
@@ -54,6 +57,7 @@ chmod +x "$PATH_TO_BIN"
 
 sudo cp "$PATH_TO_BIN" "$INSTALL_DIR/$BINARY_NAME"
 
+# 4. Nettoyage spécifique macOS (Gatekeeper)
 if [ "$OS" = "Darwin" ]; then
     echo "🍎 Tentative de suppression de la quarantaine macOS..."
     sudo xattr -d com.apple.quarantine "$INSTALL_DIR/$BINARY_NAME" 2>/dev/null || true
