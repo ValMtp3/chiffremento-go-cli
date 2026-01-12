@@ -10,7 +10,30 @@ Chiffremento CLI est une application en ligne de commande écrite en Go qui perm
 - **Mode Parano** : Un mode "Cascade" qui double-chiffre les données (AES puis ChaCha20) pour une sécurité maximale.
 - **Format de Fichier Sécurisé** : En-tête personnalisé incluant Magic Number, version, flags, et sel aléatoire.
 
-## Installation et Compilation
+## Installation Facile (Recommandé)
+
+Le plus simple est d'utiliser le script d'installation automatique fourni (fonctionne sur macOS et Linux).
+
+1.  Téléchargez le binaire pour votre système et le fichier `install.sh` (disponibles dans la Release).
+2.  Ouvrez un terminal dans le dossier de téléchargement.
+3.  Lancez l'installation :
+
+```bash
+sh install.sh
+```
+
+Cela rendra le programme exécutable, contournera les sécurités macOS (Gatekeeper), et l'installera dans votre système (`/usr/local/bin`). Vous pourrez ensuite utiliser la commande `chiffremento` n'importe où, sans le `./`.
+
+### Installation via Homebrew (macOS)
+
+*(Une fois le Tap configuré)*
+
+```bash
+brew tap <votre-user>/tap
+brew install chiffremento
+```
+
+## Compilation (Pour les développeurs)
 
 Assurez-vous d'avoir Go installé (version 1.25+ recommandée).
 
@@ -166,7 +189,30 @@ Chiffremento CLI is a command-line application written in Go that provides secur
 - **Parano Mode**: A "Cascade" mode that double-encrypts data (AES then ChaCha20) for maximum security.
 - **Secure File Format**: Custom header including Magic Number, version, flags, and random salt.
 
-## Installation and Compilation
+## Easy Installation (Recommended)
+
+The easiest way is to use the provided automatic installation script (works on macOS and Linux).
+
+1.  Download the binary for your system and the `install.sh` file (available in the Release).
+2.  Open a terminal in the download folder.
+3.  Run the installation:
+
+```bash
+sh install.sh
+```
+
+This will make the program executable, bypass macOS security checks (Gatekeeper), and install it on your system (`/usr/local/bin`). You can then use the `chiffremento` command anywhere, without the `./`.
+
+### Installation via Homebrew (macOS)
+
+*(Once Tap is configured)*
+
+```bash
+brew tap <your-user>/tap
+brew install chiffremento
+```
+
+## Compilation (For Developers)
 
 Ensure you have Go installed (version 1.25+ recommended).
 
