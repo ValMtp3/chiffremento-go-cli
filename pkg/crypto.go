@@ -19,7 +19,7 @@ import (
 // Configuration Argon2 et format de fichier
 const (
 	argonTime    = 3
-	argonMemory  = 64 * 1024
+	argonMemory  = 32 * 1024
 	argonThreads = 4
 	argonKeyLen  = 32
 	saltSize     = 16
@@ -275,6 +275,13 @@ func decryptBytes(data []byte, password []byte) ([]byte, error) {
 		return nil, fmt.Errorf("magic number invalide")
 	}
 
+	fileVersion := data[magicSize]
+
+	if fileVersion < currentVersion {
+		fmt.Fprintf(os.Stderr, "⚠️  Attention : Version de fichier obsolète (v%d). Pensez à rechiffrer ce fichier avec la version actuelle (v%d).\n", fileVersion, currentVersion)
+	} else if fileVersion > currentVersion {
+		return nil, fmt.Errorf("version de fichier trop récente (v%d), mettez à jour chiffrermento", fileVersion)
+	}
 	flags := data[magicSize+versionSize]
 	algoID := data[magicSize+versionSize+flagsSize]
 

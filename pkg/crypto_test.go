@@ -215,3 +215,36 @@ func TestEncryptDecryptParano(t *testing.T) {
 
 	t.Log("✅ Test réussi: chiffrement et déchiffrement en mode Parano (Cascade) fonctionnent")
 }
+
+func TestDeriveKey(t *testing.T) {
+	password := []byte("monSecret")
+	salt := make([]byte, 16) // Sel vide (tous zéros) pour la reproductibilité du test
+
+	// 1. Test de déterminisme : deux appels identiques doivent donner la même clé
+	key1, err := deriveKey(password, salt)
+	if err != nil {
+		t.Fatalf("deriveKey 1 failed: %v", err)
+	}
+	key2, err := deriveKey(password, salt)
+	if err != nil {
+		t.Fatalf("deriveKey 2 failed: %v", err)
+	}
+
+	if !bytes.Equal(key1, key2) {
+		t.Fatal("deriveKey n'est pas déterministe ! Les clés diffèrent pour les mêmes entrées.")
+	}
+
+	// 2. Test de sensibilité au sel : changer le sel doit changer la clé
+	salt2 := make([]byte, 16)
+	salt2[0] = 1 // On change un bit
+	key3, err := deriveKey(password, salt2)
+	if err != nil {
+		t.Fatalf("deriveKey 3 failed: %v", err)
+	}
+
+	if bytes.Equal(key1, key3) {
+		t.Fatal("deriveKey ignore le sel ! La clé est identique malgré un sel différent.")
+	}
+
+	t.Log("✅ Test réussi: deriveKey est robuste et déterministe")
+}
