@@ -6,17 +6,19 @@ import (
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/rand"
+	"crypto/sha256"
 	"fmt"
 	"io"
 	"os"
 
 	"golang.org/x/crypto/argon2"
 	"golang.org/x/crypto/chacha20poly1305"
+	"golang.org/x/crypto/hkdf"
 )
 
 // Configuration Argon2 et format de fichier
 const (
-	argonTime    = 1
+	argonTime    = 3
 	argonMemory  = 64 * 1024
 	argonThreads = 4
 	argonKeyLen  = 32
@@ -130,6 +132,20 @@ func initCipher(algoID byte, key []byte) (cipher.AEAD, error) {
 	}
 }
 
+func deriveSubPassword(masterPassword []byte) (innerPw, outerPw []byte) {
+	hash := sha256.New
+
+	hkdfStream := hkdf.New(hash, masterPassword, nil, []byte("chiffrement-cascade"))
+
+	innerPw = make([]byte, 32)
+	outerPw = make([]byte, 32)
+
+	io.ReadFull(hkdfStream, innerPw)
+	io.ReadFull(hkdfStream, outerPw)
+
+	return innerPw, outerPw
+}
+
 // sealData gère le processus bas niveau : génération sel/nonce, dérivation clé, chiffrement et assemblage.
 func sealData(data []byte, password []byte, algoID byte, flags byte) ([]byte, error) {
 	salt := make([]byte, saltSize)
@@ -200,13 +216,15 @@ func Encrypt(inputPath string, outputPath string, password []byte, compressData 
 	var finalOutput []byte
 
 	if useParano {
+		innerPw, outerPw := deriveSubPassword(password)
+
 		// Mode Cascade : Chiffrement AES (Interne) -> Chiffrement ChaCha (Externe)
-		layer1, err := sealData(data, password, AlgoAES, currentFlags)
+		layer1, err := sealData(data, innerPw, AlgoAES, currentFlags)
 		if err != nil {
 			return fmt.Errorf("layer1 aes: %w", err)
 		}
 
-		finalOutput, err = sealData(layer1, password, AlgoCascade, 0)
+		finalOutput, err = sealData(layer1, outerPw, AlgoCascade, 0)
 		if err != nil {
 			return fmt.Errorf("layer2 cascade: %w", err)
 		}
@@ -251,7 +269,7 @@ func Decrypt(inputPath string, outputPath string, password []byte) error {
 func decryptBytes(data []byte, password []byte) ([]byte, error) {
 	// 1. Validation de l'en-tête
 	if len(data) < headerSize {
-		return nil, fmt.Errorf("trop court")
+		return nil, fmt.Errorf("fichier trop petit pour être valide manque le header")
 	}
 	if string(data[:magicSize]) != magicNumber {
 		return nil, fmt.Errorf("magic number invalide")
@@ -266,8 +284,23 @@ func decryptBytes(data []byte, password []byte) ([]byte, error) {
 	nonce := data[headerOffset : headerOffset+nonceSize]
 	ciphertext := data[headerSize:]
 
+	var innerPw, outerPw []byte
+
+	if algoID == AlgoCascade {
+		innerPw, outerPw = deriveSubPassword(password)
+	}
+
 	// 2. Dérivation & Initialisation
-	key, err := deriveKey(password, salt)
+
+	var key []byte
+	var err error
+
+	if algoID == AlgoCascade {
+		key, err = deriveKey(outerPw, salt)
+	} else {
+		key, err = deriveKey(password, salt)
+	}
+
 	if err != nil {
 		return nil, err
 	}
@@ -290,7 +323,7 @@ func decryptBytes(data []byte, password []byte) ([]byte, error) {
 
 	// 4. Gestion de la récursivité (Mode Parano/Cascade)
 	if algoID == AlgoCascade {
-		return decryptBytes(plaintext, password)
+		return decryptBytes(plaintext, innerPw)
 	}
 
 	// 5. Post-traitement (Padding + Décompression)

@@ -18,10 +18,24 @@ func main() {
 	parano := flag.Bool("parano", false, "Mode Parano : Double chiffrement (Cascade AES + ChaCha20), plus lent mais plus robuste")
 
 	flag.Parse()
-	if *mode == "" || *fileIn == "" || *fileOut == "" || *password == "" {
-		fmt.Println("Erreur : tous les paramètres sont obligatoires")
+	if *mode == "" || *fileIn == "" || *password == "" {
+		fmt.Println("Erreur : mode, in et key sont obligatoires")
 		flag.Usage()
 		os.Exit(1)
+	}
+
+	if *fileOut == "" {
+		if *mode == "enc" {
+			*fileOut = *fileIn + ".chto"
+		} else if *mode == "dec" {
+			if len(*fileIn) > 5 && (*fileIn)[len(*fileIn)-5:] == ".chto" {
+				*fileOut = (*fileIn)[:len(*fileIn)-5]
+			} else {
+				*fileOut = *fileIn + ".dec"
+			}
+		}
+		fmt.Println("Sortie par défaut :", *fileOut)
+
 	}
 
 	var err error
