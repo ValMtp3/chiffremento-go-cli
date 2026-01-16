@@ -25,12 +25,13 @@ const (
 	saltSize     = 16
 	nonceSize    = 12
 
-	magicNumber = "CHFRMT03"
-	magicSize   = 8
-	versionSize = 1
-	flagsSize   = 1
-	algoIDSize  = 1
-	headerSize  = magicSize + versionSize + flagsSize + algoIDSize + saltSize + nonceSize
+	magicNumber       = "CHFRMT03"
+	magicSize         = 8
+	versionSize       = 1
+	flagsSize         = 1
+	algoIDSize        = 1
+	maxRecursionDepth = 2
+	headerSize        = magicSize + versionSize + flagsSize + algoIDSize + saltSize + nonceSize
 
 	currentVersion = byte(1)
 
@@ -254,7 +255,7 @@ func Decrypt(inputPath string, outputPath string, password []byte) error {
 		return fmt.Errorf("lecture: %w", err)
 	}
 
-	plaintext, err := decryptBytes(data, password)
+	plaintext, err := decryptBytes(data, password, 0)
 	if err != nil {
 		return err
 	}
@@ -266,7 +267,10 @@ func Decrypt(inputPath string, outputPath string, password []byte) error {
 }
 
 // decryptBytes analyse l'en-tête, déchiffre et gère la récursivité (Mode Cascade).
-func decryptBytes(data []byte, password []byte) ([]byte, error) {
+func decryptBytes(data []byte, password []byte, depth int) ([]byte, error) {
+	if depth > maxRecursionDepth {
+		return nil, fmt.Errorf("profondeur de recursion maximale atteinte (%d)", maxRecursionDepth)
+	}
 	// 1. Validation de l'en-tête
 	if len(data) < headerSize {
 		return nil, fmt.Errorf("fichier trop petit pour être valide manque le header")
@@ -330,7 +334,7 @@ func decryptBytes(data []byte, password []byte) ([]byte, error) {
 
 	// 4. Gestion de la récursivité (Mode Parano/Cascade)
 	if algoID == AlgoCascade {
-		return decryptBytes(plaintext, innerPw)
+		return decryptBytes(plaintext, innerPw, depth+1)
 	}
 
 	// 5. Post-traitement (Padding + Décompression)
