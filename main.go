@@ -7,8 +7,11 @@ import (
 	"os"
 )
 
+var version = "dev"
+
 func main() {
 	// Définition des flags
+	showVersion := flag.Bool("version", false, "Afficher la version")
 	mode := flag.String("mode", "", "enc ou dec")
 	fileIn := flag.String("in", "", "Fichier d'entrée")
 	fileOut := flag.String("out", "", "Fichier de sortie")
@@ -18,6 +21,10 @@ func main() {
 	parano := flag.Bool("parano", false, "Mode Parano : Double chiffrement (Cascade AES + ChaCha20), plus lent mais plus robuste")
 
 	flag.Parse()
+	if *showVersion {
+		fmt.Printf("Chiffremento CLI version %s\n", version)
+		os.Exit(0)
+	}
 	if *mode == "" || *fileIn == "" || *password == "" {
 		fmt.Println("Erreur : mode, in et key sont obligatoires")
 		flag.Usage()
