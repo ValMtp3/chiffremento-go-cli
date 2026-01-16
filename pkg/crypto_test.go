@@ -2,6 +2,7 @@ package pkg
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"testing"
 )
@@ -103,7 +104,9 @@ func TestDecryptWithWrongPassword(t *testing.T) {
 	defer os.Remove(encryptedFile)
 	defer os.Remove(decryptedFile)
 
-	os.WriteFile(inputFile, originalContent, 0644)
+	if err := os.WriteFile(inputFile, originalContent, 0644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
 
 	err := Encrypt(inputFile, encryptedFile, correctPassword, false, false, false)
 	if err != nil {
@@ -126,7 +129,9 @@ func TestDecryptInvalidFile(t *testing.T) {
 	defer os.Remove(invalidFile)
 	defer os.Remove(outputFile)
 
-	os.WriteFile(invalidFile, []byte("trop court"), 0644)
+	if err := os.WriteFile(invalidFile, []byte("trop court"), 0644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
 
 	err := Decrypt(invalidFile, outputFile, password)
 	if err == nil {
@@ -291,7 +296,9 @@ func TestRecursionLimit(t *testing.T) {
 	defer os.Remove(inputFile)
 	defer os.Remove(outputFile)
 
-	os.WriteFile(inputFile, l0, 0644)
+	if err := os.WriteFile(inputFile, l0, 0644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
 
 	err = Decrypt(inputFile, outputFile, password)
 	if err == nil {
@@ -299,4 +306,40 @@ func TestRecursionLimit(t *testing.T) {
 	}
 
 	t.Log("✅ Test réussi: limite de récursion respectée")
+}
+
+func TestProtocolSafety_Tripwire(t *testing.T) {
+	// --- ÉTAT CONNU (SNAPSHOT) ---
+	// Si tu modifies ces valeurs dans crypto.go, tu DOIS modifier ce test
+	// ET réfléchir si ça mérite un bump de version.
+	const (
+		expectedVersion    = 1
+		expectedHeaderSize = 39 // 8+1+1+1+16+12
+		expectedMagic      = "CHFRMT03"
+	)
+
+	// 1. Vérification que la version n'a pas régressé
+	if currentVersion < expectedVersion {
+		t.Fatalf("CRITIQUE: La version du protocole a reculé ! (Code: %d, Test attend: %d)", currentVersion, expectedVersion)
+	}
+
+	// 2. LE PIÈGE : Détection de changement de structure silencieux
+	structureChanged := false
+
+	if headerSize != expectedHeaderSize {
+		t.Logf("⚠️  La taille du header a changé (Avant: %d, Main: %d)", expectedHeaderSize, headerSize)
+		structureChanged = true
+	}
+
+	if magicNumber != expectedMagic {
+		t.Logf("⚠️  Le Magic Number a changé (Avant: %s, Main: %s)", expectedMagic, magicNumber)
+		structureChanged = true
+	}
+
+	// Si la structure a changé MAIS que la version est restée la même => ERREUR
+	if structureChanged && currentVersion == expectedVersion {
+		t.Fatal("🛑 STOP ! Tu as modifié la structure du fichier (Header/Magic) mais tu as oublié d'incrémenter 'currentVersion' dans crypto.go !\n" +
+			"-> Si c'est un changement compatible, mets à jour ce test.\n" +
+			"-> Sinon, passe currentVersion à " + fmt.Sprint(expectedVersion+1))
+	}
 }
