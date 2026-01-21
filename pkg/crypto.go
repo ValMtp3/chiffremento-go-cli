@@ -7,6 +7,7 @@ import (
 	"crypto/cipher"
 	"crypto/rand"
 	"crypto/sha256"
+	"encoding/binary"
 	"fmt"
 	"io"
 	"os"
@@ -31,6 +32,7 @@ const (
 	flagsSize         = 1
 	algoIDSize        = 1
 	maxRecursionDepth = 2
+	chunkSize         = 64 * 1024
 	headerSize        = magicSize + versionSize + flagsSize + algoIDSize + saltSize + nonceSize
 
 	currentVersion = byte(1)
@@ -147,208 +149,214 @@ func deriveSubPassword(masterPassword []byte) (innerPw, outerPw []byte) {
 	return innerPw, outerPw
 }
 
-// sealData gère le processus bas niveau : génération sel/nonce, dérivation clé, chiffrement et assemblage.
-func sealData(data []byte, password []byte, algoID byte, flags byte) ([]byte, error) {
+func encryptStream(src io.Reader, dst io.Writer, password []byte, algoID byte, flags byte) error {
+	// 1. Génération des aléas (Salt + Nonce)
 	salt := make([]byte, saltSize)
 	if _, err := rand.Read(salt); err != nil {
-		return nil, fmt.Errorf("salt: %w", err)
-	}
-
-	key, err := deriveKey(password, salt)
-	if err != nil {
-		return nil, fmt.Errorf("key: %w", err)
-	}
-
-	engineAlgo := algoID
-	if algoID == AlgoCascade {
-		engineAlgo = AlgoChaCha
-	}
-
-	aead, err := initCipher(engineAlgo, key)
-	if err != nil {
-		return nil, fmt.Errorf("cipher init: %w", err)
+		return fmt.Errorf("salt %w", err)
 	}
 
 	nonce := make([]byte, nonceSize)
 	if _, err := rand.Read(nonce); err != nil {
-		return nil, fmt.Errorf("nonce: %w", err)
+		return fmt.Errorf("nonce %w", err)
 	}
 
-	ciphertext := aead.Seal(nil, nonce, data, nil)
-
-	// Construction du fichier final : [Magic][Version][Flags][Algo][Salt][Nonce][Ciphertext]
-	output := make([]byte, 0, headerSize+len(ciphertext))
-	output = append(output, []byte(magicNumber)...)
-	output = append(output, currentVersion)
-	output = append(output, flags)
-	output = append(output, algoID)
-	output = append(output, salt...)
-	output = append(output, nonce...)
-	output = append(output, ciphertext...)
-
-	return output, nil
-}
-
-// --- Fonctions Principales ---
-
-// Encrypt orchestre la lecture, la préparation (compression/padding) et le chiffrement (standard ou parano).
-func Encrypt(inputPath string, outputPath string, password []byte, compressData bool, useChaCha bool, useParano bool) error {
-	data, err := os.ReadFile(inputPath)
+	// 2. Dérivation de la clé
+	key, err := deriveKey(password, salt)
 	if err != nil {
-		return fmt.Errorf("lecture: %w", err)
+		return fmt.Errorf("key: %w", err)
 	}
 
-	// 1. Préparation des données (Compression + Padding)
-	currentFlags := byte(0)
-	if compressData {
-		data, err = compress(data)
-		if err != nil {
-			return fmt.Errorf("compression: %w", err)
-		}
-		currentFlags |= FlagCompressed
-	}
-
-	data, err = addPadding(data)
-	if err != nil {
-		return fmt.Errorf("padding: %w", err)
-	}
-
-	// 2. Chiffrement selon le mode
-	var finalOutput []byte
-
-	if useParano {
-		innerPw, outerPw := deriveSubPassword(password)
-
-		// Mode Cascade : Chiffrement AES (Interne) -> Chiffrement ChaCha (Externe)
-		layer1, err := sealData(data, innerPw, AlgoAES, currentFlags)
-		if err != nil {
-			return fmt.Errorf("layer1 aes: %w", err)
-		}
-
-		finalOutput, err = sealData(layer1, outerPw, AlgoCascade, 0)
-		if err != nil {
-			return fmt.Errorf("layer2 cascade: %w", err)
-		}
-
-	} else {
-		// Mode Standard (Simple couche)
-		algo := AlgoAES
-		if useChaCha {
-			algo = AlgoChaCha
-		}
-		finalOutput, err = sealData(data, password, algo, currentFlags)
-		if err != nil {
-			return fmt.Errorf("chiffrement: %w", err)
-		}
-	}
-
-	if err := os.WriteFile(outputPath, finalOutput, 0644); err != nil {
-		return fmt.Errorf("écriture: %w", err)
-	}
-	return nil
-}
-
-// Decrypt point d'entrée pour le déchiffrement.
-func Decrypt(inputPath string, outputPath string, password []byte) error {
-	data, err := os.ReadFile(inputPath)
-	if err != nil {
-		return fmt.Errorf("lecture: %w", err)
-	}
-
-	plaintext, err := decryptBytes(data, password, 0)
-	if err != nil {
-		return err
-	}
-
-	if err := os.WriteFile(outputPath, plaintext, 0644); err != nil {
-		return fmt.Errorf("écriture: %w", err)
-	}
-	return nil
-}
-
-// decryptBytes analyse l'en-tête, déchiffre et gère la récursivité (Mode Cascade).
-func decryptBytes(data []byte, password []byte, depth int) ([]byte, error) {
-	if depth > maxRecursionDepth {
-		return nil, fmt.Errorf("profondeur de recursion maximale atteinte (%d)", maxRecursionDepth)
-	}
-	// 1. Validation de l'en-tête
-	if len(data) < headerSize {
-		return nil, fmt.Errorf("fichier trop petit pour être valide manque le header")
-	}
-	if string(data[:magicSize]) != magicNumber {
-		return nil, fmt.Errorf("magic number invalide")
-	}
-
-	fileVersion := data[magicSize]
-
-	if fileVersion < currentVersion {
-		fmt.Fprintf(os.Stderr, "⚠️  Attention : Version de fichier obsolète (v%d). Pensez à rechiffrer ce fichier avec la version actuelle (v%d).\n", fileVersion, currentVersion)
-	} else if fileVersion > currentVersion {
-		return nil, fmt.Errorf("version de fichier trop récente (v%d), mettez à jour chiffrermento", fileVersion)
-	}
-	flags := data[magicSize+versionSize]
-	algoID := data[magicSize+versionSize+flagsSize]
-
-	headerOffset := magicSize + versionSize + flagsSize + algoIDSize
-	salt := data[headerOffset : headerOffset+saltSize]
-	headerOffset += saltSize
-	nonce := data[headerOffset : headerOffset+nonceSize]
-	ciphertext := data[headerSize:]
-
-	var innerPw, outerPw []byte
-
-	if algoID == AlgoCascade {
-		innerPw, outerPw = deriveSubPassword(password)
-	}
-
-	// 2. Dérivation & Initialisation
-
-	var key []byte
-	var err error
-
-	if algoID == AlgoCascade {
-		key, err = deriveKey(outerPw, salt)
-	} else {
-		key, err = deriveKey(password, salt)
-	}
-
-	if err != nil {
-		return nil, err
-	}
-
+	// 3. Initialisation du moteur crypto
 	engineAlgo := algoID
 	if algoID == AlgoCascade {
 		engineAlgo = AlgoChaCha
 	}
-
 	aead, err := initCipher(engineAlgo, key)
 	if err != nil {
-		return nil, err
+		return fmt.Errorf("cipher init: %w", err)
 	}
 
-	// 3. Déchiffrement du payload
-	plaintext, err := aead.Open(nil, nonce, ciphertext, nil)
-	if err != nil {
-		return nil, fmt.Errorf("déchiffrement échoué: %w", err)
+	// 4. Écriture de l'En-tête (Header)
+	if _, err := dst.Write([]byte(magicNumber)); err != nil {
+		return err
+	}
+	if _, err := dst.Write([]byte{currentVersion}); err != nil {
+		return err
+	}
+	if _, err := dst.Write([]byte{flags}); err != nil {
+		return err
+	}
+	if _, err := dst.Write([]byte{algoID}); err != nil {
+		return err
+	}
+	if _, err := dst.Write(salt); err != nil {
+		return err
+	}
+	if _, err := dst.Write(nonce); err != nil {
+		return err
 	}
 
-	// 4. Gestion de la récursivité (Mode Parano/Cascade)
-	if algoID == AlgoCascade {
-		return decryptBytes(plaintext, innerPw, depth+1)
-	}
+	// 5. Boucle de lecture/écriture par chunks
+	buf := make([]byte, chunkSize)
 
-	// 5. Post-traitement (Padding + Décompression)
-	plaintext, err = removePadding(plaintext)
-	if err != nil {
-		return nil, fmt.Errorf("remove padding: %w", err)
-	}
+	for {
+		n, readErr := src.Read(buf)
+		if n > 0 {
+			ciphertext := aead.Seal(nil, nonce, buf[:n], nil)
 
-	if flags&FlagCompressed != 0 {
-		plaintext, err = decompress(plaintext)
-		if err != nil {
-			return nil, fmt.Errorf("decompress: %w", err)
+			chunkLen := uint16(len(ciphertext))
+			if err := binary.Write(dst, binary.BigEndian, chunkLen); err != nil {
+				return fmt.Errorf("write chunk len: %w", err)
+			}
+			if _, err := dst.Write(ciphertext); err != nil {
+				return fmt.Errorf("write chunk len: %w", err)
+			}
+
+			incNonce(nonce)
+		}
+		if readErr == io.EOF {
+			break
+		}
+		if readErr != nil {
+			return fmt.Errorf("read error: %w", readErr)
 		}
 	}
 
-	return plaintext, nil
+	return nil
+}
+
+func decryptStream(src io.Reader, dst io.Writer, password []byte) error {
+	// 1. Lecture de l'En-tête complet
+	header := make([]byte, headerSize)
+	if _, err := io.ReadFull(src, header); err != nil {
+		return fmt.Errorf("lecture header: %w", err)
+	}
+
+	// 2. Analyse de l'en-tête
+	if string(header[:magicSize]) != magicNumber {
+		return fmt.Errorf("magic number invalide")
+	}
+
+	algoID := header[magicSize+versionSize+flagsSize]
+
+	offset := magicSize + versionSize + flagsSize + algoIDSize
+	salt := header[offset : offset+saltSize]
+	offset += saltSize
+	nonce := header[offset : offset+nonceSize]
+
+	// 3. Dérivation de la clé
+	key, err := deriveKey(password, salt)
+	if err != nil {
+		return fmt.Errorf("key: %w", err)
+	}
+
+	// 4. Initialisation Moteur
+	engineAlgo := algoID
+	if algoID == AlgoCascade {
+		engineAlgo = AlgoChaCha
+	}
+	aead, err := initCipher(engineAlgo, key)
+	if err != nil {
+		return fmt.Errorf("cipher init: %w", err)
+	}
+
+	// 5. Boucle de déchiffrement
+	lenBuf := make([]byte, 2)
+
+	for {
+		// A. Lire la taille du prochain chunk
+		if _, err := io.ReadFull(src, lenBuf); err != nil {
+			if err == io.EOF {
+				break
+			}
+			return fmt.Errorf("lecture taille chunk: %w", err)
+		}
+		chunkLen := binary.BigEndian.Uint16(lenBuf)
+
+		// B. Lire le contenu chiffré
+		chunkCipher := make([]byte, chunkLen)
+		if _, err := io.ReadFull(src, chunkCipher); err != nil {
+			return fmt.Errorf("lecture body chunk: %w", err)
+		}
+
+		// C. Déchiffrer
+		plaintext, err := aead.Open(nil, nonce, chunkCipher, nil)
+		if err != nil {
+			return fmt.Errorf("déchiffrement chunk: %w", err)
+		}
+
+		// D. Écrire le clair
+		if _, err := dst.Write(plaintext); err != nil {
+			return fmt.Errorf("ecriture sortie: %w", err)
+		}
+
+		// E. Incrementer le Nonce
+		incNonce(nonce)
+	}
+	return nil
+}
+
+// --- Fonctions Principales ---
+
+// Encrypt
+func Encrypt(inputPath string, outputPath string, password []byte, compressData bool, useChaCha bool, useParano bool) error {
+	// 1. Ouverture du fichier d'entrée (Lecture)
+	inFile, err := os.Open(inputPath)
+	if err != nil {
+		return fmt.Errorf("lecture: %w", err)
+	}
+	defer inFile.Close()
+
+	// 2. Création du fichier (écriture)
+	outFile, err := os.Create(outputPath)
+	if err != nil {
+		return fmt.Errorf("écriture: %w", err)
+	}
+	defer outFile.Close()
+
+	algo := AlgoAES
+	if useChaCha {
+		algo = AlgoChaCha
+	}
+
+	err = encryptStream(inFile, outFile, password, algo, 0)
+
+	if err != nil {
+		return fmt.Errorf("streaming: %w", err)
+	}
+
+	return nil
+}
+
+// Decrypt
+func Decrypt(inputPath string, outputPath string, password []byte) error {
+	inFile, err := os.Open(inputPath)
+	if err != nil {
+		return fmt.Errorf("lecture: %w", err)
+	}
+	defer inFile.Close()
+
+	outFile, err := os.Create(outputPath)
+	if err != nil {
+		return fmt.Errorf("écriture: %w", err)
+	}
+	defer outFile.Close()
+
+	err = decryptStream(inFile, outFile, password)
+
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func incNonce(nonce []byte) {
+	for i := len(nonce) - 1; i >= 0; i-- {
+		nonce[i]++
+		if nonce[i] != 0 {
+			break
+		}
+	}
 }
