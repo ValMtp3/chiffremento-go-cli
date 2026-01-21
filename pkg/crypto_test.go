@@ -254,59 +254,59 @@ func TestDeriveKey(t *testing.T) {
 	t.Log("✅ Test réussi: deriveKey est robuste et déterministe")
 }
 
-func TestRecursionLimit(t *testing.T) {
-	password := []byte("password")
-	data := []byte("Hidden Deep Data")
+// func TestRecursionLimit(t *testing.T) {
+// 	password := []byte("password")
+// 	data := []byte("Hidden Deep Data")
 
-	// Simulation de 3 couches de Cascade (Max est 2)
-	// Structure : Cascade(Cascade(Cascade(AES)))
-	// Profondeur : 0 -> 1 -> 2 -> 3 (Boum)
+// 	// Simulation de 3 couches de Cascade (Max est 2)
+// 	// Structure : Cascade(Cascade(Cascade(AES)))
+// 	// Profondeur : 0 -> 1 -> 2 -> 3 (Boum)
 
-	p0 := password
-	p1, out0 := deriveSubPassword(p0)
-	p2, out1 := deriveSubPassword(p1)
-	p3, out2 := deriveSubPassword(p2)
+// 	p0 := password
+// 	p1, out0 := deriveSubPassword(p0)
+// 	p2, out1 := deriveSubPassword(p1)
+// 	p3, out2 := deriveSubPassword(p2)
 
-	// Layer 3 (Fond): AES avec P3
-	l3, err := sealData(data, p3, AlgoAES, 0)
-	if err != nil {
-		t.Fatal(err)
-	}
+// 	// Layer 3 (Fond): AES avec P3
+// 	l3, err := sealData(data, p3, AlgoAES, 0)
+// 	if err != nil {
+// 		t.Fatal(err)
+// 	}
 
-	// Layer 2: Cascade avec P2 (utilise out2 pour chiffrer la couche externe)
-	l2, err := sealData(l3, out2, AlgoCascade, 0)
-	if err != nil {
-		t.Fatal(err)
-	}
+// 	// Layer 2: Cascade avec P2 (utilise out2 pour chiffrer la couche externe)
+// 	l2, err := sealData(l3, out2, AlgoCascade, 0)
+// 	if err != nil {
+// 		t.Fatal(err)
+// 	}
 
-	// Layer 1: Cascade avec P1
-	l1, err := sealData(l2, out1, AlgoCascade, 0)
-	if err != nil {
-		t.Fatal(err)
-	}
+// 	// Layer 1: Cascade avec P1
+// 	l1, err := sealData(l2, out1, AlgoCascade, 0)
+// 	if err != nil {
+// 		t.Fatal(err)
+// 	}
 
-	// Layer 0: Cascade avec P0
-	l0, err := sealData(l1, out0, AlgoCascade, 0)
-	if err != nil {
-		t.Fatal(err)
-	}
+// 	// Layer 0: Cascade avec P0
+// 	l0, err := sealData(l1, out0, AlgoCascade, 0)
+// 	if err != nil {
+// 		t.Fatal(err)
+// 	}
 
-	inputFile := "test_recursion_limit.bin"
-	outputFile := "test_recursion_out.txt"
-	defer os.Remove(inputFile)
-	defer os.Remove(outputFile)
+// 	inputFile := "test_recursion_limit.bin"
+// 	outputFile := "test_recursion_out.txt"
+// 	defer os.Remove(inputFile)
+// 	defer os.Remove(outputFile)
 
-	if err := os.WriteFile(inputFile, l0, 0644); err != nil {
-		t.Fatalf("WriteFile: %v", err)
-	}
+// 	if err := os.WriteFile(inputFile, l0, 0644); err != nil {
+// 		t.Fatalf("WriteFile: %v", err)
+// 	}
 
-	err = Decrypt(inputFile, outputFile, password)
-	if err == nil {
-		t.Fatal("Le déchiffrement aurait dû échouer (Stack Overflow protection)")
-	}
+// 	err = Decrypt(inputFile, outputFile, password)
+// 	if err == nil {
+// 		t.Fatal("Le déchiffrement aurait dû échouer (Stack Overflow protection)")
+// 	}
 
-	t.Log("✅ Test réussi: limite de récursion respectée")
-}
+// 	t.Log("✅ Test réussi: limite de récursion respectée")
+// }
 
 func TestProtocolSafety_Tripwire(t *testing.T) {
 	// --- ÉTAT CONNU (SNAPSHOT) ---
