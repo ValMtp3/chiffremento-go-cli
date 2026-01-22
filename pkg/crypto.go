@@ -92,10 +92,24 @@ func Encrypt(inputPath string, outputPath string, password []byte, compressData 
 		return fmt.Errorf("génération du sel: %w", err)
 	}
 
-	// 2. On transforme le mot de passe en clé de 32 bytes
-	key, err := deriveKey(password, salt)
-	if err != nil {
-		return fmt.Errorf("dérivation de clé: %w", err)
+	// 2. Préparation des clés
+	var key, innerKey, outerKey []byte
+
+	if useParano {
+		innerPw, outerPw := deriveSubPassword(password)
+		innerKey, err = deriveKey(innerPw, salt)
+		if err != nil {
+			return fmt.Errorf("dérivation clé interne: %w", err)
+		}
+		outerKey, err = deriveKey(outerPw, salt)
+		if err != nil {
+			return fmt.Errorf("dérivation clé externe: %w", err)
+		}
+	} else {
+		key, err = deriveKey(password, salt)
+		if err != nil {
+			return fmt.Errorf("dérivation de clé: %w", err)
+		}
 	}
 
 	// C. ÉCRITURE DU HEADER
@@ -108,6 +122,9 @@ func Encrypt(inputPath string, outputPath string, password []byte, compressData 
 	algoID := AlgoAES
 	if useChaCha {
 		algoID = AlgoChaCha
+	}
+	if useParano {
+		algoID = AlgoCascade
 	}
 
 	// Écritures
@@ -128,27 +145,53 @@ func Encrypt(inputPath string, outputPath string, password []byte, compressData 
 	}
 
 	//D. Configuration SIO
-	config := sio.Config{
-		Key: key,
-	}
+	var finalWriter io.Writer
 
-	if useChaCha {
-		config.CipherSuites = []byte{sio.CHACHA20_POLY1305}
+	if useParano {
+		// Mode Cascade : ChaCha (Externe) wrapping AES (Interne)
+		outerConfig := sio.Config{
+			Key:          outerKey,
+			CipherSuites: []byte{sio.CHACHA20_POLY1305},
+		}
+		outerWriter, err := sio.EncryptWriter(outFile, outerConfig)
+		if err != nil {
+			return fmt.Errorf("création flux externe: %w", err)
+		}
+		defer outerWriter.Close()
+
+		innerConfig := sio.Config{
+			Key:          innerKey,
+			CipherSuites: []byte{sio.AES_256_GCM},
+		}
+		innerWriter, err := sio.EncryptWriter(outerWriter, innerConfig)
+		if err != nil {
+			return fmt.Errorf("création flux interne: %w", err)
+		}
+		defer innerWriter.Close()
+
+		finalWriter = innerWriter
 	} else {
-		config.CipherSuites = []byte{sio.AES_256_GCM}
-	}
+		config := sio.Config{
+			Key: key,
+		}
 
-	// E. Création du flux chiffré
-	encryptedWriter, err := sio.EncryptWriter(outFile, config)
-	if err != nil {
-		return fmt.Errorf("création du flux chiffré: %w", err)
-	}
-	defer encryptedWriter.Close()
+		if useChaCha {
+			config.CipherSuites = []byte{sio.CHACHA20_POLY1305}
+		} else {
+			config.CipherSuites = []byte{sio.AES_256_GCM}
+		}
 
-	var finalWriter io.Writer = encryptedWriter
+		encryptedWriter, err := sio.EncryptWriter(outFile, config)
+		if err != nil {
+			return fmt.Errorf("création du flux chiffré: %w", err)
+		}
+		defer encryptedWriter.Close()
+
+		finalWriter = encryptedWriter
+	}
 
 	if compressData {
-		gzipWriter, err := gzip.NewWriterLevel(encryptedWriter, gzip.BestCompression)
+		gzipWriter, err := gzip.NewWriterLevel(finalWriter, gzip.BestCompression)
 		if err != nil {
 			return fmt.Errorf("création du flux gzip: %w", err)
 		}
@@ -190,30 +233,63 @@ func Decrypt(inputPath string, outputPath string, password []byte) error {
 	}
 
 	flags := header[magicSize+versionSize]
+	algoID := header[magicSize+versionSize+flagsSize]
 	saltOffset := magicSize + versionSize + flagsSize + algoIDSize
 	salt := header[saltOffset : saltOffset+saltSize]
 
-	// 3. Dérivation clé
-	key, err := deriveKey(password, salt)
-	if err != nil {
-		return fmt.Errorf("clé: %w", err)
-	}
+	// 3. Préparation des clés et déchiffrement
+	var finalReader io.Reader
 
-	// 4. COnfig SIO
-	config := sio.Config{
-		Key: key,
-	}
+	if algoID == AlgoCascade {
+		innerPw, outerPw := deriveSubPassword(password)
+		innerKey, err := deriveKey(innerPw, salt)
+		if err != nil {
+			return fmt.Errorf("clé interne: %w", err)
+		}
+		outerKey, err := deriveKey(outerPw, salt)
+		if err != nil {
+			return fmt.Errorf("clé externe: %w", err)
+		}
 
-	//5. Création flux déchiffré
-	decryptedReader, err := sio.DecryptReader(inFile, config)
-	if err != nil {
-		return fmt.Errorf("création du flux déchiffré: %w", err)
-	}
+		// 1. Outer Layer (ChaCha)
+		outerConfig := sio.Config{
+			Key:          outerKey,
+			CipherSuites: []byte{sio.CHACHA20_POLY1305},
+		}
+		outerReader, err := sio.DecryptReader(inFile, outerConfig)
+		if err != nil {
+			return fmt.Errorf("init déchiffrement externe: %w", err)
+		}
 
-	var finalReader io.Reader = decryptedReader
+		// 2. Inner Layer (AES)
+		innerConfig := sio.Config{
+			Key:          innerKey,
+			CipherSuites: []byte{sio.AES_256_GCM},
+		}
+		innerReader, err := sio.DecryptReader(outerReader, innerConfig)
+		if err != nil {
+			return fmt.Errorf("init déchiffrement interne: %w", err)
+		}
+		finalReader = innerReader
+
+	} else {
+		key, err := deriveKey(password, salt)
+		if err != nil {
+			return fmt.Errorf("clé: %w", err)
+		}
+
+		config := sio.Config{
+			Key: key,
+		}
+		decryptedReader, err := sio.DecryptReader(inFile, config)
+		if err != nil {
+			return fmt.Errorf("création du flux déchiffré: %w", err)
+		}
+		finalReader = decryptedReader
+	}
 
 	if flags&FlagCompressed != 0 {
-		gzipReader, err := gzip.NewReader(decryptedReader)
+		gzipReader, err := gzip.NewReader(finalReader)
 		if err != nil {
 			return fmt.Errorf("création du flux gzip: %w", err)
 		}
