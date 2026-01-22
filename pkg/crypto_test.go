@@ -254,59 +254,48 @@ func TestDeriveKey(t *testing.T) {
 	t.Log("✅ Test réussi: deriveKey est robuste et déterministe")
 }
 
-// func TestRecursionLimit(t *testing.T) {
-// 	password := []byte("password")
-// 	data := []byte("Hidden Deep Data")
+func TestStreamingLargeFile(t *testing.T) {
+	// Test avec un fichier de 1 Mo pour s'assurer que le streaming (chunking) fonctionne
+	size := 1 * 1024 * 1024
+	originalContent := make([]byte, size)
+	for i := 0; i < size; i++ {
+		originalContent[i] = byte(i % 256)
+	}
 
-// 	// Simulation de 3 couches de Cascade (Max est 2)
-// 	// Structure : Cascade(Cascade(Cascade(AES)))
-// 	// Profondeur : 0 -> 1 -> 2 -> 3 (Boum)
+	password := []byte("streaming123")
+	inputFile := "test_stream_in.bin"
+	encryptedFile := "test_stream_enc.bin"
+	decryptedFile := "test_stream_out.bin"
 
-// 	p0 := password
-// 	p1, out0 := deriveSubPassword(p0)
-// 	p2, out1 := deriveSubPassword(p1)
-// 	p3, out2 := deriveSubPassword(p2)
+	defer os.Remove(inputFile)
+	defer os.Remove(encryptedFile)
+	defer os.Remove(decryptedFile)
 
-// 	// Layer 3 (Fond): AES avec P3
-// 	l3, err := sealData(data, p3, AlgoAES, 0)
-// 	if err != nil {
-// 		t.Fatal(err)
-// 	}
+	if err := os.WriteFile(inputFile, originalContent, 0644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
 
-// 	// Layer 2: Cascade avec P2 (utilise out2 pour chiffrer la couche externe)
-// 	l2, err := sealData(l3, out2, AlgoCascade, 0)
-// 	if err != nil {
-// 		t.Fatal(err)
-// 	}
+	// Encrypt (Standard AES)
+	if err := Encrypt(inputFile, encryptedFile, password, false, false, false); err != nil {
+		t.Fatalf("Encrypt: %v", err)
+	}
 
-// 	// Layer 1: Cascade avec P1
-// 	l1, err := sealData(l2, out1, AlgoCascade, 0)
-// 	if err != nil {
-// 		t.Fatal(err)
-// 	}
+	// Decrypt
+	if err := Decrypt(encryptedFile, decryptedFile, password); err != nil {
+		t.Fatalf("Decrypt: %v", err)
+	}
 
-// 	// Layer 0: Cascade avec P0
-// 	l0, err := sealData(l1, out0, AlgoCascade, 0)
-// 	if err != nil {
-// 		t.Fatal(err)
-// 	}
+	decryptedContent, err := os.ReadFile(decryptedFile)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
 
-// 	inputFile := "test_recursion_limit.bin"
-// 	outputFile := "test_recursion_out.txt"
-// 	defer os.Remove(inputFile)
-// 	defer os.Remove(outputFile)
+	if !bytes.Equal(originalContent, decryptedContent) {
+		t.Fatal("Streaming : Contenu déchiffré différent de l'original")
+	}
 
-// 	if err := os.WriteFile(inputFile, l0, 0644); err != nil {
-// 		t.Fatalf("WriteFile: %v", err)
-// 	}
-
-// 	err = Decrypt(inputFile, outputFile, password)
-// 	if err == nil {
-// 		t.Fatal("Le déchiffrement aurait dû échouer (Stack Overflow protection)")
-// 	}
-
-// 	t.Log("✅ Test réussi: limite de récursion respectée")
-// }
+	t.Log("✅ Test réussi: Streaming sur fichier > chunk size")
+}
 
 func TestProtocolSafety_Tripwire(t *testing.T) {
 	// --- ÉTAT CONNU (SNAPSHOT) ---
