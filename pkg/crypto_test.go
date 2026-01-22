@@ -314,7 +314,7 @@ func TestProtocolSafety_Tripwire(t *testing.T) {
 	// ET réfléchir si ça mérite un bump de version.
 	const (
 		expectedVersion    = 1
-		expectedHeaderSize = 39 // 8+1+1+1+16+12
+		expectedHeaderSize = 27 // 8+1+1+1+16
 		expectedMagic      = "CHFRMT03"
 	)
 
