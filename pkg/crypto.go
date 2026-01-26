@@ -40,7 +40,7 @@ const (
 	AlgoCascade = byte(3)
 )
 
-// --- Fonctions Helper ---
+// --- Fonctions Utilitaires ---
 
 // deriveKey génère une clé de 32 bytes via Argon2id.
 func deriveKey(password []byte, salt []byte) ([]byte, error) {
@@ -54,6 +54,8 @@ func deriveKey(password []byte, salt []byte) ([]byte, error) {
 	return key, nil
 }
 
+// deriveSubPassword utilise HKDF pour dériver deux sous-clés distinctes
+// à partir du mot de passe maître, pour le mode Cascade.
 func deriveSubPassword(masterPassword []byte) (innerPw, outerPw []byte) {
 	hash := sha256.New
 
@@ -68,6 +70,8 @@ func deriveSubPassword(masterPassword []byte) (innerPw, outerPw []byte) {
 	return innerPw, outerPw
 }
 
+// cascadeWriteCloser est un wrapper qui s'assure que les deux flux (Interne et Externe)
+// sont fermés correctement et dans le bon ordre lors de l'écriture.
 type cascadeWriteCloser struct {
 	inner io.WriteCloser
 	outer io.WriteCloser
@@ -130,7 +134,7 @@ func initCipherWriter(dst io.Writer, algoID byte, key, innerKey, outerKey []byte
 func initCipherReader(src io.Reader, algoID byte, key, innerKey, outerKey []byte) (io.Reader, error) {
 	switch algoID {
 	case AlgoCascade:
-		// 1. Outer Layer (ChaCha)
+		// 1. Couche Externe (ChaCha)
 		outerConfig := sio.Config{
 			Key:          outerKey,
 			CipherSuites: []byte{sio.CHACHA20_POLY1305},
@@ -140,7 +144,7 @@ func initCipherReader(src io.Reader, algoID byte, key, innerKey, outerKey []byte
 			return nil, fmt.Errorf("init déchiffrement externe: %w", err)
 		}
 
-		// 2. Inner Layer (AES)
+		// 2. Couche Interne (AES)
 		innerConfig := sio.Config{
 			Key:          innerKey,
 			CipherSuites: []byte{sio.AES_256_GCM},

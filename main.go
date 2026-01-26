@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"strings"
 )
 
 var version = "dev"
@@ -14,7 +15,6 @@ func main() {
 	showVersion := flag.Bool("version", false, "Afficher la version")
 	mode := flag.String("mode", "", "enc ou dec")
 	fileIn := flag.String("in", "", "Fichier d'entrée")
-	fileOut := flag.String("out", "", "Fichier de sortie")
 	password := flag.String("key", "", "Mot de passe")
 	compress := flag.Bool("comp", false, "Compresser les données avant chiffrement")
 	chacha := flag.Bool("chacha", false, "Utiliser ChaCha20-Poly1305 au lieu d'AES-GCM")
@@ -31,33 +31,31 @@ func main() {
 		os.Exit(1)
 	}
 
-	if *fileOut == "" {
-		if *mode == "enc" {
-			*fileOut = *fileIn + ".chto"
-		} else if *mode == "dec" {
-			if len(*fileIn) > 5 && (*fileIn)[len(*fileIn)-5:] == ".chto" {
-				*fileOut = (*fileIn)[:len(*fileIn)-5]
-			} else {
-				*fileOut = *fileIn + ".dec"
-			}
-		}
-		fmt.Println("Sortie par défaut :", *fileOut)
-
+	if *mode == "dec" && !strings.HasSuffix(*fileIn, ".chto") {
+		fmt.Println("Erreur : Le fichier à déchiffrer doit avoir l'extension .chto")
+		os.Exit(1)
 	}
+	var fileOut string
+	if *mode == "enc" {
+		fileOut = *fileIn + ".chto"
+	} else {
+		fileOut = strings.TrimSuffix(*fileIn, ".chto")
+	}
+	fmt.Println("Fichier de sortie :", fileOut)
 
 	var err error
 	switch *mode {
 	case "enc":
-		err = pkg.Encrypt(*fileIn, *fileOut, []byte(*password), *compress, *chacha, *parano)
+		err = pkg.Encrypt(*fileIn, fileOut, []byte(*password), *compress, *chacha, *parano)
 	case "dec":
-		err = pkg.Decrypt(*fileIn, *fileOut, []byte(*password))
+		err = pkg.Decrypt(*fileIn, fileOut, []byte(*password))
 	default:
-		fmt.Println("Erreur: mode inconnu, utiliser 'enc' ou 'dec'")
+		fmt.Println("Erreur : mode inconnu, utiliser 'enc' ou 'dec'")
 		os.Exit(1)
 	}
 
 	if err != nil {
-		fmt.Println("Erreur:", err)
+		fmt.Println("Erreur :", err)
 		os.Exit(1)
 	}
 
