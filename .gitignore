@@ -37,3 +37,4 @@ go.work.sum
 #Roamap
 ROADMAP.md
 .DS_Store
+dist/
