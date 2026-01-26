@@ -45,7 +45,7 @@ changelog:
 
 brews:
   - repository:
-      owner: valentinfiess
+      owner: ValMtp3
       name: homebrew-tap
       token: "{{ .Env.TAP_GITHUB_TOKEN }}"
 
