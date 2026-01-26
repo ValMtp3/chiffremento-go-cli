@@ -2,6 +2,7 @@ package pkg
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"testing"
 )
@@ -103,7 +104,9 @@ func TestDecryptWithWrongPassword(t *testing.T) {
 	defer os.Remove(encryptedFile)
 	defer os.Remove(decryptedFile)
 
-	os.WriteFile(inputFile, originalContent, 0644)
+	if err := os.WriteFile(inputFile, originalContent, 0644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
 
 	err := Encrypt(inputFile, encryptedFile, correctPassword, false, false, false)
 	if err != nil {
@@ -126,7 +129,9 @@ func TestDecryptInvalidFile(t *testing.T) {
 	defer os.Remove(invalidFile)
 	defer os.Remove(outputFile)
 
-	os.WriteFile(invalidFile, []byte("trop court"), 0644)
+	if err := os.WriteFile(invalidFile, []byte("trop court"), 0644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
 
 	err := Decrypt(invalidFile, outputFile, password)
 	if err == nil {
@@ -214,4 +219,116 @@ func TestEncryptDecryptParano(t *testing.T) {
 	}
 
 	t.Log("✅ Test réussi: chiffrement et déchiffrement en mode Parano (Cascade) fonctionnent")
+}
+
+func TestDeriveKey(t *testing.T) {
+	password := []byte("monSecret")
+	salt := make([]byte, 16) // Sel vide (tous zéros) pour la reproductibilité du test
+
+	// 1. Test de déterminisme : deux appels identiques doivent donner la même clé
+	key1, err := deriveKey(password, salt)
+	if err != nil {
+		t.Fatalf("deriveKey 1 failed: %v", err)
+	}
+	key2, err := deriveKey(password, salt)
+	if err != nil {
+		t.Fatalf("deriveKey 2 failed: %v", err)
+	}
+
+	if !bytes.Equal(key1, key2) {
+		t.Fatal("deriveKey n'est pas déterministe ! Les clés diffèrent pour les mêmes entrées.")
+	}
+
+	// 2. Test de sensibilité au sel : changer le sel doit changer la clé
+	salt2 := make([]byte, 16)
+	salt2[0] = 1 // On change un bit
+	key3, err := deriveKey(password, salt2)
+	if err != nil {
+		t.Fatalf("deriveKey 3 failed: %v", err)
+	}
+
+	if bytes.Equal(key1, key3) {
+		t.Fatal("deriveKey ignore le sel ! La clé est identique malgré un sel différent.")
+	}
+
+	t.Log("✅ Test réussi: deriveKey est robuste et déterministe")
+}
+
+func TestStreamingLargeFile(t *testing.T) {
+	// Test avec un fichier de 1 Mo pour s'assurer que le streaming (chunking) fonctionne
+	size := 1 * 1024 * 1024
+	originalContent := make([]byte, size)
+	for i := 0; i < size; i++ {
+		originalContent[i] = byte(i % 256)
+	}
+
+	password := []byte("streaming123")
+	inputFile := "test_stream_in.bin"
+	encryptedFile := "test_stream_enc.bin"
+	decryptedFile := "test_stream_out.bin"
+
+	defer os.Remove(inputFile)
+	defer os.Remove(encryptedFile)
+	defer os.Remove(decryptedFile)
+
+	if err := os.WriteFile(inputFile, originalContent, 0644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	// Encrypt (Standard AES)
+	if err := Encrypt(inputFile, encryptedFile, password, false, false, false); err != nil {
+		t.Fatalf("Encrypt: %v", err)
+	}
+
+	// Decrypt
+	if err := Decrypt(encryptedFile, decryptedFile, password); err != nil {
+		t.Fatalf("Decrypt: %v", err)
+	}
+
+	decryptedContent, err := os.ReadFile(decryptedFile)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+
+	if !bytes.Equal(originalContent, decryptedContent) {
+		t.Fatal("Streaming : Contenu déchiffré différent de l'original")
+	}
+
+	t.Log("✅ Test réussi: Streaming sur fichier > chunk size")
+}
+
+func TestProtocolSafety_Tripwire(t *testing.T) {
+	// --- ÉTAT CONNU (SNAPSHOT) ---
+	// Si tu modifies ces valeurs dans crypto.go, tu DOIS modifier ce test
+	// ET réfléchir si ça mérite un bump de version.
+	const (
+		expectedVersion    = 1
+		expectedHeaderSize = 27 // 8+1+1+1+16
+		expectedMagic      = "CHFRMT03"
+	)
+
+	// 1. Vérification que la version n'a pas régressé
+	if currentVersion < expectedVersion {
+		t.Fatalf("CRITIQUE: La version du protocole a reculé ! (Code: %d, Test attend: %d)", currentVersion, expectedVersion)
+	}
+
+	// 2. LE PIÈGE : Détection de changement de structure silencieux
+	structureChanged := false
+
+	if headerSize != expectedHeaderSize {
+		t.Logf("⚠️  La taille du header a changé (Avant: %d, Main: %d)", expectedHeaderSize, headerSize)
+		structureChanged = true
+	}
+
+	if magicNumber != expectedMagic {
+		t.Logf("⚠️  Le Magic Number a changé (Avant: %s, Main: %s)", expectedMagic, magicNumber)
+		structureChanged = true
+	}
+
+	// Si la structure a changé MAIS que la version est restée la même => ERREUR
+	if structureChanged && currentVersion == expectedVersion {
+		t.Fatal("🛑 STOP ! Tu as modifié la structure du fichier (Header/Magic) mais tu as oublié d'incrémenter 'currentVersion' dans crypto.go !\n" +
+			"-> Si c'est un changement compatible, mets à jour ce test.\n" +
+			"-> Sinon, passe currentVersion à " + fmt.Sprint(expectedVersion+1))
+	}
 }

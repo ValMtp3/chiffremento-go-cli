@@ -1,36 +1,34 @@
 package pkg
 
 import (
-	"bytes"
 	"compress/gzip"
-	"crypto/aes"
-	"crypto/cipher"
 	"crypto/rand"
 	"crypto/sha256"
 	"fmt"
 	"io"
 	"os"
 
+	"github.com/minio/sio"
 	"golang.org/x/crypto/argon2"
-	"golang.org/x/crypto/chacha20poly1305"
 	"golang.org/x/crypto/hkdf"
 )
 
 // Configuration Argon2 et format de fichier
 const (
 	argonTime    = 3
-	argonMemory  = 64 * 1024
+	argonMemory  = 32 * 1024
 	argonThreads = 4
 	argonKeyLen  = 32
 	saltSize     = 16
-	nonceSize    = 12
 
-	magicNumber = "CHFRMT03"
-	magicSize   = 8
-	versionSize = 1
-	flagsSize   = 1
-	algoIDSize  = 1
-	headerSize  = magicSize + versionSize + flagsSize + algoIDSize + saltSize + nonceSize
+	magicNumber       = "CHFRMT03"
+	magicSize         = len(magicNumber)
+	versionSize       = 1
+	flagsSize         = 1
+	algoIDSize        = 1
+	maxRecursionDepth = 2
+	chunkSize         = 64 * 1024
+	headerSize        = magicSize + versionSize + flagsSize + algoIDSize + saltSize
 
 	currentVersion = byte(1)
 
@@ -42,7 +40,7 @@ const (
 	AlgoCascade = byte(3)
 )
 
-// --- Fonctions Helper ---
+// --- Fonctions Utilitaires ---
 
 // deriveKey génère une clé de 32 bytes via Argon2id.
 func deriveKey(password []byte, salt []byte) ([]byte, error) {
@@ -56,82 +54,8 @@ func deriveKey(password []byte, salt []byte) ([]byte, error) {
 	return key, nil
 }
 
-// addPadding ajoute des octets aléatoires pour masquer la taille réelle du fichier.
-func addPadding(data []byte) ([]byte, error) {
-	b := make([]byte, 1)
-	if _, err := rand.Read(b); err != nil {
-		return nil, fmt.Errorf("taille padding: %w", err)
-	}
-	paddingSize := int(b[0])
-	if paddingSize == 0 {
-		paddingSize = 13
-	}
-	padding := make([]byte, paddingSize)
-	if _, err := rand.Read(padding); err != nil {
-		return nil, fmt.Errorf("contenu padding: %w", err)
-	}
-	padding[paddingSize-1] = byte(paddingSize)
-	return append(data, padding...), nil
-}
-
-// removePadding retire et valide le padding ajouté.
-func removePadding(data []byte) ([]byte, error) {
-	if len(data) == 0 {
-		return nil, fmt.Errorf("données vides")
-	}
-	paddingSize := int(data[len(data)-1])
-	if paddingSize > len(data) || paddingSize == 0 {
-		return nil, fmt.Errorf("padding invalide")
-	}
-	return data[:len(data)-paddingSize], nil
-}
-
-// Helpers GZIP
-func compress(data []byte) ([]byte, error) {
-	var buf bytes.Buffer
-	w, err := gzip.NewWriterLevel(&buf, gzip.BestCompression)
-	if err != nil {
-		return nil, err
-	}
-	if _, err := w.Write(data); err != nil {
-		return nil, err
-	}
-	if err := w.Close(); err != nil {
-		return nil, err
-	}
-	return buf.Bytes(), nil
-}
-
-func decompress(data []byte) ([]byte, error) {
-	r, err := gzip.NewReader(bytes.NewReader(data))
-	if err != nil {
-		return nil, err
-	}
-	defer r.Close()
-	return io.ReadAll(r)
-}
-
-// initCipher initialise le moteur de chiffrement (AES-GCM ou ChaCha20-Poly1305).
-func initCipher(algoID byte, key []byte) (cipher.AEAD, error) {
-	switch algoID {
-	case AlgoAES, AlgoCascade:
-		if algoID == AlgoCascade {
-			return chacha20poly1305.New(key)
-		}
-		block, err := aes.NewCipher(key)
-		if err != nil {
-			return nil, fmt.Errorf("création AES: %w", err)
-		}
-		return cipher.NewGCM(block)
-
-	case AlgoChaCha:
-		return chacha20poly1305.New(key)
-
-	default:
-		return nil, fmt.Errorf("algorithme inconnu: %d", algoID)
-	}
-}
-
+// deriveSubPassword utilise HKDF pour dériver deux sous-clés distinctes
+// à partir du mot de passe maître, pour le mode Cascade.
 func deriveSubPassword(masterPassword []byte) (innerPw, outerPw []byte) {
 	hash := sha256.New
 
@@ -146,198 +70,275 @@ func deriveSubPassword(masterPassword []byte) (innerPw, outerPw []byte) {
 	return innerPw, outerPw
 }
 
-// sealData gère le processus bas niveau : génération sel/nonce, dérivation clé, chiffrement et assemblage.
-func sealData(data []byte, password []byte, algoID byte, flags byte) ([]byte, error) {
-	salt := make([]byte, saltSize)
-	if _, err := rand.Read(salt); err != nil {
-		return nil, fmt.Errorf("salt: %w", err)
+// cascadeWriteCloser est un wrapper qui s'assure que les deux flux (Interne et Externe)
+// sont fermés correctement et dans le bon ordre lors de l'écriture.
+type cascadeWriteCloser struct {
+	inner io.WriteCloser
+	outer io.WriteCloser
+}
+
+func (c *cascadeWriteCloser) Write(p []byte) (n int, err error) {
+	return c.inner.Write(p)
+}
+
+func (c *cascadeWriteCloser) Close() error {
+	errInner := c.inner.Close()
+	errOuter := c.outer.Close()
+	if errInner != nil {
+		return errInner
 	}
+	return errOuter
+}
 
-	key, err := deriveKey(password, salt)
-	if err != nil {
-		return nil, fmt.Errorf("key: %w", err)
+func initCipherWriter(dst io.Writer, algoID byte, key, innerKey, outerKey []byte) (io.WriteCloser, error) {
+	switch algoID {
+	case AlgoCascade:
+		// Mode Cascade : ChaCha (Externe) et AES (Interne)
+		outerConfig := sio.Config{
+			Key:          outerKey,
+			CipherSuites: []byte{sio.CHACHA20_POLY1305},
+		}
+		outerWriter, err := sio.EncryptWriter(dst, outerConfig)
+		if err != nil {
+			return nil, fmt.Errorf("création flux externe: %w", err)
+		}
+
+		innerConfig := sio.Config{
+			Key:          innerKey,
+			CipherSuites: []byte{sio.AES_256_GCM},
+		}
+		innerWriter, err := sio.EncryptWriter(outerWriter, innerConfig)
+		if err != nil {
+			outerWriter.Close()
+			return nil, fmt.Errorf("création flux interne: %w", err)
+		}
+
+		return &cascadeWriteCloser{inner: innerWriter, outer: outerWriter}, nil
+
+	case AlgoChaCha:
+		config := sio.Config{
+			Key:          key,
+			CipherSuites: []byte{sio.CHACHA20_POLY1305},
+		}
+		return sio.EncryptWriter(dst, config)
+
+	default: // AlgoAES
+		config := sio.Config{
+			Key:          key,
+			CipherSuites: []byte{sio.AES_256_GCM},
+		}
+		return sio.EncryptWriter(dst, config)
 	}
+}
 
-	engineAlgo := algoID
-	if algoID == AlgoCascade {
-		engineAlgo = AlgoChaCha
+func initCipherReader(src io.Reader, algoID byte, key, innerKey, outerKey []byte) (io.Reader, error) {
+	switch algoID {
+	case AlgoCascade:
+		// 1. Couche Externe (ChaCha)
+		outerConfig := sio.Config{
+			Key:          outerKey,
+			CipherSuites: []byte{sio.CHACHA20_POLY1305},
+		}
+		outerReader, err := sio.DecryptReader(src, outerConfig)
+		if err != nil {
+			return nil, fmt.Errorf("init déchiffrement externe: %w", err)
+		}
+
+		// 2. Couche Interne (AES)
+		innerConfig := sio.Config{
+			Key:          innerKey,
+			CipherSuites: []byte{sio.AES_256_GCM},
+		}
+		return sio.DecryptReader(outerReader, innerConfig)
+
+	case AlgoChaCha:
+		config := sio.Config{
+			Key:          key,
+			CipherSuites: []byte{sio.CHACHA20_POLY1305},
+		}
+		return sio.DecryptReader(src, config)
+
+	default: // AlgoAES
+		config := sio.Config{
+			Key:          key,
+			CipherSuites: []byte{sio.AES_256_GCM},
+		}
+		return sio.DecryptReader(src, config)
 	}
-
-	aead, err := initCipher(engineAlgo, key)
-	if err != nil {
-		return nil, fmt.Errorf("cipher init: %w", err)
-	}
-
-	nonce := make([]byte, nonceSize)
-	if _, err := rand.Read(nonce); err != nil {
-		return nil, fmt.Errorf("nonce: %w", err)
-	}
-
-	ciphertext := aead.Seal(nil, nonce, data, nil)
-
-	// Construction du fichier final : [Magic][Version][Flags][Algo][Salt][Nonce][Ciphertext]
-	output := make([]byte, 0, headerSize+len(ciphertext))
-	output = append(output, []byte(magicNumber)...)
-	output = append(output, currentVersion)
-	output = append(output, flags)
-	output = append(output, algoID)
-	output = append(output, salt...)
-	output = append(output, nonce...)
-	output = append(output, ciphertext...)
-
-	return output, nil
 }
 
 // --- Fonctions Principales ---
 
-// Encrypt orchestre la lecture, la préparation (compression/padding) et le chiffrement (standard ou parano).
+// Encrypt
 func Encrypt(inputPath string, outputPath string, password []byte, compressData bool, useChaCha bool, useParano bool) error {
-	data, err := os.ReadFile(inputPath)
+	// A. OUVERTURE DES FICHIERS
+	inFile, err := os.Open(inputPath)
 	if err != nil {
 		return fmt.Errorf("lecture: %w", err)
 	}
+	defer inFile.Close()
 
-	// 1. Préparation des données (Compression + Padding)
-	currentFlags := byte(0)
-	if compressData {
-		data, err = compress(data)
-		if err != nil {
-			return fmt.Errorf("compression: %w", err)
-		}
-		currentFlags |= FlagCompressed
-	}
-
-	data, err = addPadding(data)
+	outFile, err := os.Create(outputPath)
 	if err != nil {
-		return fmt.Errorf("padding: %w", err)
+		return fmt.Errorf("écriture: %w", err)
+	}
+	defer outFile.Close()
+
+	// B. PRÉPARATION DU HEADER (SEL & CLÉ)
+	// 1. On génère le sel pour Argon2
+	salt := make([]byte, saltSize)
+	if _, err := rand.Read(salt); err != nil {
+		return fmt.Errorf("génération du sel: %w", err)
 	}
 
-	// 2. Chiffrement selon le mode
-	var finalOutput []byte
+	// 2. Préparation des clés
+	var key, innerKey, outerKey []byte
 
 	if useParano {
 		innerPw, outerPw := deriveSubPassword(password)
-
-		// Mode Cascade : Chiffrement AES (Interne) -> Chiffrement ChaCha (Externe)
-		layer1, err := sealData(data, innerPw, AlgoAES, currentFlags)
+		innerKey, err = deriveKey(innerPw, salt)
 		if err != nil {
-			return fmt.Errorf("layer1 aes: %w", err)
+			return fmt.Errorf("dérivation clé interne: %w", err)
 		}
-
-		finalOutput, err = sealData(layer1, outerPw, AlgoCascade, 0)
+		outerKey, err = deriveKey(outerPw, salt)
 		if err != nil {
-			return fmt.Errorf("layer2 cascade: %w", err)
+			return fmt.Errorf("dérivation clé externe: %w", err)
 		}
-
 	} else {
-		// Mode Standard (Simple couche)
-		algo := AlgoAES
-		if useChaCha {
-			algo = AlgoChaCha
-		}
-		finalOutput, err = sealData(data, password, algo, currentFlags)
+		key, err = deriveKey(password, salt)
 		if err != nil {
-			return fmt.Errorf("chiffrement: %w", err)
+			return fmt.Errorf("dérivation de clé: %w", err)
 		}
 	}
 
-	if err := os.WriteFile(outputPath, finalOutput, 0644); err != nil {
-		return fmt.Errorf("écriture: %w", err)
+	// C. ÉCRITURE DU HEADER
+
+	var currentFlags byte
+	if compressData {
+		currentFlags |= FlagCompressed
 	}
+
+	algoID := AlgoAES
+	if useChaCha {
+		algoID = AlgoChaCha
+	}
+	if useParano {
+		algoID = AlgoCascade
+	}
+
+	// Écritures
+	if _, err := outFile.Write([]byte(magicNumber)); err != nil {
+		return err
+	}
+	if _, err := outFile.Write([]byte{currentVersion}); err != nil {
+		return err
+	}
+	if _, err := outFile.Write([]byte{currentFlags}); err != nil {
+		return err
+	}
+	if _, err := outFile.Write([]byte{algoID}); err != nil {
+		return err
+	}
+	if _, err := outFile.Write(salt); err != nil {
+		return err
+	}
+
+	// D. Configuration SIO
+	var finalWriter io.Writer
+
+	encryptedWriter, err := initCipherWriter(outFile, algoID, key, innerKey, outerKey)
+	if err != nil {
+		return err
+	}
+	defer encryptedWriter.Close()
+	finalWriter = encryptedWriter
+
+	if compressData {
+		gzipWriter, err := gzip.NewWriterLevel(finalWriter, gzip.BestCompression)
+		if err != nil {
+			return fmt.Errorf("création du flux gzip: %w", err)
+		}
+		defer gzipWriter.Close()
+		finalWriter = gzipWriter
+	}
+
+	// G. La Copie finale (streaming)
+	if _, err := io.Copy(finalWriter, inFile); err != nil {
+		return fmt.Errorf("streaming copy: %w", err)
+	}
+
 	return nil
 }
 
-// Decrypt point d'entrée pour le déchiffrement.
+// Decrypt
 func Decrypt(inputPath string, outputPath string, password []byte) error {
-	data, err := os.ReadFile(inputPath)
+	// 1. OUVERTURE DES FICHIERS
+	inFile, err := os.Open(inputPath)
 	if err != nil {
 		return fmt.Errorf("lecture: %w", err)
 	}
+	defer inFile.Close()
 
-	plaintext, err := decryptBytes(data, password)
+	outFile, err := os.Create(outputPath)
+	if err != nil {
+		return fmt.Errorf("écriture: %w", err)
+	}
+	defer outFile.Close()
+
+	// 2. Lecture du header
+	header := make([]byte, headerSize)
+	if _, err := io.ReadFull(inFile, header); err != nil {
+		return fmt.Errorf("lecture du header: %w", err)
+	}
+
+	if string(header[:magicSize]) != magicNumber {
+		return fmt.Errorf("magic number invalide")
+	}
+
+	flags := header[magicSize+versionSize]
+	algoID := header[magicSize+versionSize+flagsSize]
+	saltOffset := magicSize + versionSize + flagsSize + algoIDSize
+	salt := header[saltOffset : saltOffset+saltSize]
+
+	// 3. Préparation des clés et déchiffrement
+	var key, innerKey, outerKey []byte
+	var finalReader io.Reader
+
+	if algoID == AlgoCascade {
+		innerPw, outerPw := deriveSubPassword(password)
+		innerKey, err = deriveKey(innerPw, salt)
+		if err != nil {
+			return fmt.Errorf("clé interne: %w", err)
+		}
+		outerKey, err = deriveKey(outerPw, salt)
+		if err != nil {
+			return fmt.Errorf("clé externe: %w", err)
+		}
+	} else {
+		key, err = deriveKey(password, salt)
+		if err != nil {
+			return fmt.Errorf("clé: %w", err)
+		}
+	}
+
+	finalReader, err = initCipherReader(inFile, algoID, key, innerKey, outerKey)
 	if err != nil {
 		return err
 	}
 
-	if err := os.WriteFile(outputPath, plaintext, 0644); err != nil {
-		return fmt.Errorf("écriture: %w", err)
-	}
-	return nil
-}
-
-// decryptBytes analyse l'en-tête, déchiffre et gère la récursivité (Mode Cascade).
-func decryptBytes(data []byte, password []byte) ([]byte, error) {
-	// 1. Validation de l'en-tête
-	if len(data) < headerSize {
-		return nil, fmt.Errorf("fichier trop petit pour être valide manque le header")
-	}
-	if string(data[:magicSize]) != magicNumber {
-		return nil, fmt.Errorf("magic number invalide")
-	}
-
-	flags := data[magicSize+versionSize]
-	algoID := data[magicSize+versionSize+flagsSize]
-
-	headerOffset := magicSize + versionSize + flagsSize + algoIDSize
-	salt := data[headerOffset : headerOffset+saltSize]
-	headerOffset += saltSize
-	nonce := data[headerOffset : headerOffset+nonceSize]
-	ciphertext := data[headerSize:]
-
-	var innerPw, outerPw []byte
-
-	if algoID == AlgoCascade {
-		innerPw, outerPw = deriveSubPassword(password)
-	}
-
-	// 2. Dérivation & Initialisation
-
-	var key []byte
-	var err error
-
-	if algoID == AlgoCascade {
-		key, err = deriveKey(outerPw, salt)
-	} else {
-		key, err = deriveKey(password, salt)
-	}
-
-	if err != nil {
-		return nil, err
-	}
-
-	engineAlgo := algoID
-	if algoID == AlgoCascade {
-		engineAlgo = AlgoChaCha
-	}
-
-	aead, err := initCipher(engineAlgo, key)
-	if err != nil {
-		return nil, err
-	}
-
-	// 3. Déchiffrement du payload
-	plaintext, err := aead.Open(nil, nonce, ciphertext, nil)
-	if err != nil {
-		return nil, fmt.Errorf("déchiffrement échoué: %w", err)
-	}
-
-	// 4. Gestion de la récursivité (Mode Parano/Cascade)
-	if algoID == AlgoCascade {
-		return decryptBytes(plaintext, innerPw)
-	}
-
-	// 5. Post-traitement (Padding + Décompression)
-	plaintext, err = removePadding(plaintext)
-	if err != nil {
-		return nil, fmt.Errorf("remove padding: %w", err)
-	}
-
 	if flags&FlagCompressed != 0 {
-		plaintext, err = decompress(plaintext)
+		gzipReader, err := gzip.NewReader(finalReader)
 		if err != nil {
-			return nil, fmt.Errorf("decompress: %w", err)
+			return fmt.Errorf("création du flux gzip: %w", err)
 		}
+		defer gzipReader.Close()
+		finalReader = gzipReader
 	}
 
-	return plaintext, nil
+	// G. La Copie finale (streaming)
+	if _, err := io.Copy(outFile, finalReader); err != nil {
+		return fmt.Errorf("streaming copy: %w", err)
+	}
+
+	return nil
 }
