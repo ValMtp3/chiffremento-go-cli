@@ -72,7 +72,7 @@ changelog:
       - "^docs:"
       - "^test:"
 
-brews:
+homebrews:
   - repository:
       owner: ValMtp3
       name: homebrew-tap
