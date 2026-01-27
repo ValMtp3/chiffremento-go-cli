@@ -18,12 +18,18 @@
 
 **Chiffremento CLI** est une application en ligne de commande moderne écrite en Go qui permet de chiffrer et déchiffrer des fichiers de manière sécurisée, rapide et simple.
 
-## ✨ Fonctionnalités
+## ✨ Nouveautés v1.1.0
+
+- **⚡ Mode Streaming** : Utilisation mémoire constante (quelques Mo), même pour des fichiers de 100 Go.
+- **📛 Extension Unique** : Tous les fichiers chiffrés portent désormais l'extension `.chto`.
+- **🚀 Simplicité** : Plus besoin de spécifier le nom du fichier de sortie (`-out` supprimé).
+
+## ✨ Fonctionnalités CORE
 
 - **🔐 Chiffrement Authentifié** : Utilise **AES-GCM** (par défaut) ou **ChaCha20-Poly1305**.
 - **🔑 Dérivation de Clé Robuste** : Utilise **Argon2id** pour transformer votre mot de passe en clé cryptographique inviolable.
 - **📦 Compression** : Support optionnel de la compression **GZIP** pour réduire la taille avant chiffrement.
-- **😱 Mode Parano** : Un mode "Cascade" unique qui double-chiffre les données (AES puis ChaCha20) pour une sécurité maximale.
+- **😱 Mode Parano** : Un mode "Cascade" unique qui double-chiffre les données (AES puis ChaCha20) avec des clés dérivées indépendamment (HKDF).
 - **🛡️ Format Sécurisé** : En-tête binaire personnalisé incluant Magic Number, versioning, et sel aléatoire unique par fichier.
 - **🕵️ Anti-Analyse** : Padding aléatoire pour masquer la taille réelle des fichiers.
 
@@ -39,48 +45,21 @@ Le plus simple est d'utiliser le script d'installation automatique fourni (fonct
 sh install.sh
 ```
 
-Cela rendra le programme exécutable, contournera les sécurités macOS (Gatekeeper), et l'installera dans votre système (`/usr/local/bin`). Vous pourrez ensuite utiliser la commande `chiffremento` n'importe où.
-
 ### Installation via Homebrew (macOS)
 
-Si vous préférez utiliser Homebrew :
-
 ```bash
-brew tap ValMtp3/tap
+brew tap ValMtp3/homebrew-tap
 brew install chiffremento
-```
-
-## 🛠 Compilation (Avancé)
-
-Si vous êtes développeur et souhaitez compiler le projet vous-même (nécessite Go 1.25+).
-
-### Option 1 : Via Makefile (Recommandé)
-
-```bash
-# Compiler pour le système actuel
-make build
-
-# Compiler pour toutes les plateformes (Linux, Mac, Windows)
-make build-all
-
-# Installer globalement
-make install
-```
-
-### Option 2 : Manuelle
-
-```bash
-go build -ldflags="-s -w" -o chiffremento main.go
 ```
 
 ## 🚀 Utilisation
 
-L'outil s'utilise via la ligne de commande.
+L'outil s'utilise via la ligne de commande. Il ajoute automatiquement l'extension `.chto` au chiffrement et la retire au déchiffrement.
 
 ### Syntaxe Générale
 
 ```bash
-chiffremento -mode <enc|dec> -in <fichier_entrée> -out <fichier_sortie> -key <mot_de_passe> [options]
+chiffremento -mode <enc|dec> -in <fichier_entrée> -key <mot_de_passe> [options]
 ```
 
 ### Flags Disponibles
@@ -89,7 +68,6 @@ chiffremento -mode <enc|dec> -in <fichier_entrée> -out <fichier_sortie> -key <m
 | :--- | :--- |
 | `-mode` | **Obligatoire.** Mode d'opération (`enc` pour chiffrer, `dec` pour déchiffrer). |
 | `-in` | **Obligatoire.** Chemin du fichier d'entrée. |
-| `-out` | **Obligatoire.** Chemin du fichier de sortie. |
 | `-key` | **Obligatoire.** Mot de passe. |
 | `-comp` | *(Chiffrement)* Active la compression GZIP. |
 | `-chacha`| *(Chiffrement)* Utilise ChaCha20-Poly1305 au lieu d'AES-GCM. |
@@ -98,44 +76,22 @@ chiffremento -mode <enc|dec> -in <fichier_entrée> -out <fichier_sortie> -key <m
 ### Exemples
 
 #### 1. Chiffrement Standard (AES-GCM)
+Crée `document.txt.chto` :
 ```bash
-chiffremento -mode enc -in document.txt -out document.enc -key "monSuperMotDePasse"
+chiffremento -mode enc -in document.txt -key "monSuperMotDePasse"
 ```
 
-#### 2. Chiffrement avec Compression et ChaCha20
+#### 2. Déchiffrement
+Lit `document.txt.chto` et recrée `document.txt` :
 ```bash
-chiffremento -mode enc -in image.bmp -out image.enc -key "password123" -comp -chacha
+chiffremento -mode dec -in document.txt.chto -key "monSuperMotDePasse"
 ```
+*Note : Le déchiffrement détecte automatiquement l'algo, la compression et le mode utilisé.*
 
-#### 3. Mode Parano (Double Chiffrement)
+#### 3. Mode Parano (Double Chiffrement + Compression)
+Crée `backup.db.chto` (sûr de chez sûr) :
 ```bash
-chiffremento -mode enc -in secrets.txt -out secrets.parano -key "topSecret" -parano
-```
-
-#### 4. Déchiffrement
-Le déchiffrement est **intelligent** : il détecte automatiquement l'algorithme, la compression et le mode utilisés grâce à l'en-tête du fichier.
-
-```bash
-chiffremento -mode dec -in document.enc -out document_clair.txt -key "monSuperMotDePasse"
-```
-
-## 🧠 Structure Technique
-
-### Format du Fichier Chiffré
-```
-[MagicNumber (8 bytes)] "CHFRMT03"
-[Version (1 byte)]
-[Flags (1 byte)] (Compression, etc.)
-[AlgoID (1 byte)] (1=AES, 2=ChaCha, 3=Cascade)
-[Salt (16 bytes)] (Aléatoire pour Argon2)
-[Nonce (12 bytes)] (Aléatoire pour le chiffrement)
-[Ciphertext (Variable)]
-```
-
-### Tests
-
-```bash
-go test -v ./pkg
+chiffremento -mode enc -in backup.db -key "topSecret" -parano -comp
 ```
 
 ---
@@ -147,12 +103,18 @@ go test -v ./pkg
 
 **Chiffremento CLI** is a modern command-line application written in Go that provides secure, fast, and simple file encryption and decryption.
 
-## ✨ Features
+## ✨ New in v1.1.0
+
+- **⚡ Streaming Mode**: Constant memory usage (a few MBs), even for 100GB files.
+- **📛 Unique Extension**: All encrypted files now enforce the `.chto` extension.
+- **🚀 Simplicity**: No need to specify output filename anymore (`-out` flag removed).
+
+## ✨ CORE Features
 
 - **🔐 Authenticated Encryption**: Uses **AES-GCM** (default) or **ChaCha20-Poly1305**.
 - **🔑 Robust Key Derivation**: Uses **Argon2id** to transform your password into an unbreakable cryptographic key.
 - **📦 Compression**: Optional **GZIP** compression support to reduce file size before encryption.
-- **😱 Parano Mode**: A unique "Cascade" mode that double-encrypts data (AES then ChaCha20) for maximum security.
+- **😱 Parano Mode**: A unique "Cascade" mode that double-encrypts data (AES then ChaCha20) with independently derived keys (HKDF).
 - **🛡️ Secure Format**: Custom binary header including Magic Number, versioning, and unique random salt per file.
 - **🕵️ Anti-Analysis**: Random padding to hide the actual file size.
 
@@ -168,48 +130,21 @@ The easiest way is to use the provided automatic installation script (works on m
 sh install.sh
 ```
 
-This will make the program executable, bypass macOS security checks (Gatekeeper), and install it on your system (`/usr/local/bin`). You can then use the `chiffremento` command anywhere.
-
 ### Installation via Homebrew (macOS)
 
-If you prefer using Homebrew:
-
 ```bash
-brew tap ValMtp3/tap
+brew tap ValMtp3/homebrew-tap
 brew install chiffremento
-```
-
-## 🛠 Compilation (Advanced)
-
-If you are a developer and want to build the project yourself (requires Go 1.25+).
-
-### Option 1: Via Makefile (Recommended)
-
-```bash
-# Build for current system
-make build
-
-# Build for all platforms (Linux, Mac, Windows)
-make build-all
-
-# Install globally
-make install
-```
-
-### Option 2: Manual
-
-```bash
-go build -ldflags="-s -w" -o chiffremento main.go
 ```
 
 ## 🚀 Usage
 
-The tool is used via the command line.
+The tool is used via the command line. It automatically appends the `.chto` extension for encryption and removes it for decryption.
 
 ### General Syntax
 
 ```bash
-chiffremento -mode <enc|dec> -in <input_file> -out <output_file> -key <password> [options]
+chiffremento -mode <enc|dec> -in <input_file> -key <password> [options]
 ```
 
 ### Available Flags
@@ -218,7 +153,6 @@ chiffremento -mode <enc|dec> -in <input_file> -out <output_file> -key <password>
 | :--- | :--- |
 | `-mode` | **Required.** Operation mode (`enc` to encrypt, `dec` to decrypt). |
 | `-in` | **Required.** Input file path. |
-| `-out` | **Required.** Output file path. |
 | `-key` | **Required.** Password. |
 | `-comp` | *(Encryption)* Enables GZIP compression. |
 | `-chacha`| *(Encryption)* Uses ChaCha20-Poly1305 instead of AES-GCM. |
@@ -227,42 +161,20 @@ chiffremento -mode <enc|dec> -in <input_file> -out <output_file> -key <password>
 ### Examples
 
 #### 1. Standard Encryption (AES-GCM)
+Creates `document.txt.chto`:
 ```bash
-chiffremento -mode enc -in document.txt -out document.enc -key "mySuperPassword"
+chiffremento -mode enc -in document.txt -key "mySuperPassword"
 ```
 
-#### 2. Encryption with Compression and ChaCha20
+#### 2. Decryption
+Reads `document.txt.chto` and recreates `document.txt`:
 ```bash
-chiffremento -mode enc -in image.bmp -out image.enc -key "password123" -comp -chacha
+chiffremento -mode dec -in document.txt.chto -key "mySuperPassword"
 ```
+*Note: Decryption automatically detects the algorithm, compression, and mode used.*
 
-#### 3. Parano Mode (Double Encryption)
+#### 3. Parano Mode (Double Encryption + Compression)
+Creates `backup.db.chto` (ultra secure):
 ```bash
-chiffremento -mode enc -in secrets.txt -out secrets.parano -key "topSecret" -parano
-```
-
-#### 4. Decryption
-Decryption is **smart**: it automatically detects the algorithm, compression, and mode used thanks to the file header.
-
-```bash
-chiffremento -mode dec -in document.enc -out clear_document.txt -key "mySuperPassword"
-```
-
-## 🧠 Technical Structure
-
-### Encrypted File Format
-```
-[MagicNumber (8 bytes)] "CHFRMT03"
-[Version (1 byte)]
-[Flags (1 byte)] (Compression, etc.)
-[AlgoID (1 byte)] (1=AES, 2=ChaCha, 3=Cascade)
-[Salt (16 bytes)] (Random for Argon2)
-[Nonce (12 bytes)] (Random for encryption)
-[Ciphertext (Variable)]
-```
-
-### Tests
-
-```bash
-go test -v ./pkg
+chiffremento -mode enc -in backup.db -key "topSecret" -parano -comp
 ```
