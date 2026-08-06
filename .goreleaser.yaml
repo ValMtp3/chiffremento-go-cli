@@ -6,32 +6,10 @@ before:
   hooks:
     - go mod tidy
 
-release:
-  header: |
-    # 🎉 v1.1.0 - Streaming & UX Automatisée
-
-    Cette version v1.1.0 apporte une refonte majeure du moteur d'entrées/sorties (Streaming SIO) et simplifie considérablement l'utilisation quotidienne (Extension `.chto` automatique).
-
-    ## 🚀 Nouveautés Principales
-
-    ### ⚡ Mode Streaming (Memoire Constante)
-    *   **Fini les limites de RAM :** Chiffremento n'utilise plus `os.ReadFile`. Il utilise désormais des flux (`io.Reader`/`io.Writer`) via la librairie sécurisée `minio/sio`.
-    *   **Performance :** Chiffrer un fichier de 10 Go ne consomme que quelques méga-octets de RAM.
-
-    ### 🎮 UX & Automatisaton
-    *   **Extension `.chto` imposée :** Plus d'erreur possible. Les fichiers chiffrés ont toujours l'extension `.chto`. Le déchiffrement refuse tout autre fichier.
-    *   **Suppression du flag `-out` :** Le nom de sortie est déduit automatiquement (ex: `doc.pdf` -> `doc.pdf.chto` -> `doc.pdf`).
-    *   **Fail Fast :** Validation immédiate des arguments et extensions.
-
-    ### 🛡️ Sécurité & Robustesse
-    *   **Anti-DoS Récursif :** Protection contre les fichiers malveillants imbriquant des headers en boucle infinie.
-    *   **Dérivation HKDF (Mode Parano) :** En mode cascade, les clés AES et ChaCha sont désormais dérivées indépendamment via HKDF.
-    *   **Tripwire :** Tests unitaires qui échouent si le protocole binaire change silencieusement.
-
-    ### 🇫🇷 Harmonisation
-    *   **100% Français :** Tous les logs, erreurs et commentaires techniques ont été standardisés en français.
-
-    ---
+# Pas de `header` figé ici : celui de la v1.1.0 était réaffiché tel quel sur
+# chaque nouvelle release. Le changelog ci-dessous est généré à partir des
+# commits ; pour un texte d'intro spécifique, utiliser les notes de la release
+# GitHub.
 
 builds:
   - env:
@@ -72,15 +50,33 @@ changelog:
       - "^docs:"
       - "^test:"
 
-brews:
-  - repository:
+# `brews` (formules) est déprécié depuis goreleaser v2.10 et sera supprimé en
+# v2.16. Le remplaçant est `homebrew_casks`.
+#
+# Deux conséquences à connaître :
+#   - un cask est spécifique à macOS, alors qu'une formule fonctionnait aussi
+#     sous Linux. Le README ne documentait de toute façon Homebrew que pour
+#     macOS, et install.sh couvre Linux ;
+#   - les binaires ne sont pas signés, donc Gatekeeper les met en quarantaine.
+#     Le hook post-install retire l'attribut, comme le faisait déjà install.sh.
+homebrew_casks:
+  - name: chiffremento
+    binaries:
+      - chiffremento
+
+    repository:
       owner: ValMtp3
       name: homebrew-tap
       token: "{{ .Env.TAP_GITHUB_TOKEN }}"
 
-    directory: Formula
-    homepage: "https://github.com/valentinfiess/chiffremento-go-cli"
-    description: "Outil de chiffrement CLI sécurisé et robuste en Go"
+    directory: Casks
+    homepage: "https://github.com/ValMtp3/chiffremento-go-cli"
+    description: "Outil de chiffrement de fichiers en ligne de commande"
     license: "MIT"
-    test: |
-      system "#{bin}/chiffremento -version"
+
+    hooks:
+      post:
+        install: |
+          if OS.mac?
+            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/chiffremento"]
+          end
