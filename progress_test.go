@@ -1,10 +1,13 @@
 package main
 
 import (
+	"io"
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 )
 
@@ -127,5 +130,36 @@ func TestAnimationNeDepassePasLeReel(t *testing.T) {
 
 	if r := m.displayRatio(); r != 0.3 {
 		t.Errorf("la barre affiche %.0f%% alors que seuls 30%% sont traités", r*100)
+	}
+}
+
+// TestDureeEcranReelle fait tourner le vrai runJob sans terminal et mesure sa
+// durée. Ce test a attrapé un blocage : quand le compteur d'octets n'atteint
+// pas exactement le total — au déchiffrement, l'en-tête est lu avant que le
+// compteur soit branché — l'écran ne se fermait jamais.
+func TestDureeEcranReelle(t *testing.T) {
+	teaOptions = []tea.ProgramOption{tea.WithInput(nil), tea.WithOutput(io.Discard)}
+	defer func() { teaOptions = nil }()
+
+	cases := map[string]func(p func(int64, int64)) error{
+		"compteur complet":   func(p func(int64, int64)) error { p(1000, 1000); return nil },
+		"compteur incomplet": func(p func(int64, int64)) error { p(1, 1000000); return nil },
+		"aucune progression": func(p func(int64, int64)) error { return nil },
+	}
+
+	for name, op := range cases {
+		t.Run(name, func(t *testing.T) {
+			start := time.Now()
+			if err := runJob(jobInfo{Action: "test", In: "/etc/hosts", Success: "ok"}, op); err != nil {
+				t.Fatal(err)
+			}
+			d := time.Since(start)
+			switch {
+			case d < minDuration:
+				t.Errorf("écran fermé en %v : l'animation n'aurait pas été visible", d)
+			case d > 3*minDuration:
+				t.Errorf("écran resté ouvert %v : blocage", d)
+			}
+		})
 	}
 }

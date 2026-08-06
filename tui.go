@@ -248,6 +248,10 @@ func tuiVerify(path string) error {
 	})
 }
 
+// teaOptions est vide en production. Les tests s'en servent pour faire
+// tourner l'écran sans terminal, et donc vérifier sa durée réelle.
+var teaOptions []tea.ProgramOption
+
 // runJob lance l'opération dans une goroutine et affiche l'écran animé.
 func runJob(info jobInfo, op func(progress func(done, total int64)) error) error {
 	if st, err := os.Stat(info.In); err == nil {
@@ -256,7 +260,7 @@ func runJob(info jobInfo, op func(progress func(done, total int64)) error) error
 
 	var done atomic.Int64
 	model := newProgressModel(info, &done)
-	prog := tea.NewProgram(model)
+	prog := tea.NewProgram(model, teaOptions...)
 
 	// L'erreur passe par un canal plutôt que par une variable partagée : elle
 	// est écrite par la goroutine de chiffrement et lue ici après coup.

@@ -81,10 +81,15 @@ type progressModel struct {
 func (m *progressModel) displayRatio() float64 {
 	real := 0.0
 	switch {
+	case m.opDone:
+		// L'opération terminée fait autorité, quoi que dise le compteur
+		// d'octets. Sans ce cas, l'écran ne se fermerait jamais dès que le
+		// compte n'atteint pas exactement le total : au déchiffrement, les
+		// 36 octets d'en-tête sont lus avant que le compteur soit branché,
+		// donc il plafonne à taille-36.
+		real = 1
 	case m.total > 0:
 		real = float64(m.done.Load()) / float64(m.total)
-	case m.opDone:
-		real = 1 // fichier vide : rien à compter
 	}
 	if real > 1 {
 		real = 1
@@ -133,7 +138,9 @@ func (m *progressModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.finished = true
 			return m, tea.Quit
 		}
-		return m, tick()
+		// Pas de tick() ici : la chaîne lancée par Init tourne toujours. En
+		// relancer une seconde doublerait le nombre de rendus par seconde.
+		return m, nil
 	case tea.KeyMsg:
 		// On n'interrompt pas une opération en cours : un .chto à moitié écrit
 		// n'aurait aucune valeur, et l'écriture atomique attend le commit.

@@ -417,7 +417,10 @@ func openDecrypted(inputPath string, password []byte, opts Options) (io.Reader, 
 	}
 	closers = append(closers, keys.wipe)
 
-	src, err := initCipherReader(withProgress(inFile, info.Size(), opts.Progress), h.Algo, keys)
+	// L'en-tête a déjà été consommé : le compteur ne verra que ce qui reste,
+	// il faut donc l'ôter du total pour que la progression atteigne 100 %.
+	restant := info.Size() - int64(len(h.Raw))
+	src, err := initCipherReader(withProgress(inFile, restant, opts.Progress), h.Algo, keys)
 	if err != nil {
 		return fail(err)
 	}
