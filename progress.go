@@ -32,7 +32,7 @@ const (
 	// tourne à pleine vitesse dans sa goroutine, et la barre ne dépasse jamais
 	// la progression réelle (voir displayRatio). Aucun effet en mode CLI, qui
 	// n'utilise pas cet écran.
-	minDuration = 2 * time.Second
+	minDuration = 4 * time.Second
 
 	appVersion = "v2.0"
 )
