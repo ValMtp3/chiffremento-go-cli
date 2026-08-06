@@ -38,3 +38,7 @@ go.work.sum
 ROADMAP.md
 .DS_Store
 dist/
+
+# Binaire compilé à la racine
+/chiffremento
+/chiffremento-cli

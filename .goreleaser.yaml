@@ -6,32 +6,10 @@ before:
   hooks:
     - go mod tidy
 
-release:
-  header: |
-    # 🎉 v1.1.0 - Streaming & UX Automatisée
-
-    Cette version v1.1.0 apporte une refonte majeure du moteur d'entrées/sorties (Streaming SIO) et simplifie considérablement l'utilisation quotidienne (Extension `.chto` automatique).
-
-    ## 🚀 Nouveautés Principales
-
-    ### ⚡ Mode Streaming (Memoire Constante)
-    *   **Fini les limites de RAM :** Chiffremento n'utilise plus `os.ReadFile`. Il utilise désormais des flux (`io.Reader`/`io.Writer`) via la librairie sécurisée `minio/sio`.
-    *   **Performance :** Chiffrer un fichier de 10 Go ne consomme que quelques méga-octets de RAM.
-
-    ### 🎮 UX & Automatisaton
-    *   **Extension `.chto` imposée :** Plus d'erreur possible. Les fichiers chiffrés ont toujours l'extension `.chto`. Le déchiffrement refuse tout autre fichier.
-    *   **Suppression du flag `-out` :** Le nom de sortie est déduit automatiquement (ex: `doc.pdf` -> `doc.pdf.chto` -> `doc.pdf`).
-    *   **Fail Fast :** Validation immédiate des arguments et extensions.
-
-    ### 🛡️ Sécurité & Robustesse
-    *   **Anti-DoS Récursif :** Protection contre les fichiers malveillants imbriquant des headers en boucle infinie.
-    *   **Dérivation HKDF (Mode Parano) :** En mode cascade, les clés AES et ChaCha sont désormais dérivées indépendamment via HKDF.
-    *   **Tripwire :** Tests unitaires qui échouent si le protocole binaire change silencieusement.
-
-    ### 🇫🇷 Harmonisation
-    *   **100% Français :** Tous les logs, erreurs et commentaires techniques ont été standardisés en français.
-
-    ---
+# Pas de `header` figé ici : celui de la v1.1.0 était réaffiché tel quel sur
+# chaque nouvelle release. Le changelog ci-dessous est généré à partir des
+# commits ; pour un texte d'intro spécifique, utiliser les notes de la release
+# GitHub.
 
 builds:
   - env:
