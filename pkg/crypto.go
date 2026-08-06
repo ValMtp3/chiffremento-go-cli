@@ -156,6 +156,12 @@ func (p *progressReader) Read(b []byte) (int, error) {
 
 // --- Flux de chiffrement -----------------------------------------------
 
+// Note sur sio.AES_GCM : la constante s'appelait AES_256_GCM jusqu'à la
+// v0.4.3, elle a été renommée en v0.5.0 parce que la suite accepte aussi des
+// clés de 128 bits. Ici les clés font toujours 32 octets, c'est donc bien de
+// l'AES-256-GCM. La valeur écrite dans le format n'a pas changé (0), les
+// fichiers restent interchangeables entre les deux versions de la librairie.
+
 // cascadeWriteCloser ferme les deux couches du mode cascade dans l'ordre et
 // remonte la première erreur rencontrée. Les deux Close() sont toujours
 // tentés, même si le premier échoue.
@@ -187,7 +193,7 @@ func initCipherWriter(dst io.Writer, algo byte, keys *keySet) (io.WriteCloser, e
 		}
 		innerWriter, err := sio.EncryptWriter(writerOnly{outerWriter}, sio.Config{
 			Key:          keys.Inner,
-			CipherSuites: []byte{sio.AES_256_GCM},
+			CipherSuites: []byte{sio.AES_GCM},
 		})
 		if err != nil {
 			outerWriter.Close()
@@ -204,7 +210,7 @@ func initCipherWriter(dst io.Writer, algo byte, keys *keySet) (io.WriteCloser, e
 	case AlgoAES:
 		return sio.EncryptWriter(dst, sio.Config{
 			Key:          keys.Key,
-			CipherSuites: []byte{sio.AES_256_GCM},
+			CipherSuites: []byte{sio.AES_GCM},
 		})
 
 	default:
@@ -224,7 +230,7 @@ func initCipherReader(src io.Reader, algo byte, keys *keySet) (io.Reader, error)
 		}
 		return sio.DecryptReader(outerReader, sio.Config{
 			Key:          keys.Inner,
-			CipherSuites: []byte{sio.AES_256_GCM},
+			CipherSuites: []byte{sio.AES_GCM},
 		})
 
 	case AlgoChaCha:
@@ -236,7 +242,7 @@ func initCipherReader(src io.Reader, algo byte, keys *keySet) (io.Reader, error)
 	case AlgoAES:
 		return sio.DecryptReader(src, sio.Config{
 			Key:          keys.Key,
-			CipherSuites: []byte{sio.AES_256_GCM},
+			CipherSuites: []byte{sio.AES_GCM},
 		})
 
 	default:
