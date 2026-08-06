@@ -57,8 +57,10 @@
 
 ```bash
 brew tap ValMtp3/homebrew-tap
-brew install chiffremento
+brew install --cask chiffremento
 ```
+
+> Depuis la v2.0.0, la distribution passe par un **cask** et non plus par une formule : GoReleaser a déprécié les formules. Si vous aviez installé la v1.x, désinstallez-la d'abord avec `brew uninstall chiffremento`. Les casks sont spécifiques à macOS ; sous Linux, utilisez le script d'installation ci-dessous.
 
 ### Script d'installation (macOS et Linux)
 
@@ -211,8 +213,10 @@ Le mode parano ne remplace pas un bon mot de passe : il protège contre la déco
 
 ```bash
 brew tap ValMtp3/homebrew-tap
-brew install chiffremento
+brew install --cask chiffremento
 ```
+
+> Since v2.0.0 distribution goes through a **cask** rather than a formula, as GoReleaser deprecated formulae. If you installed v1.x, uninstall it first with `brew uninstall chiffremento`. Casks are macOS-only; on Linux, use the install script below.
 
 ### Install script (macOS and Linux)
 

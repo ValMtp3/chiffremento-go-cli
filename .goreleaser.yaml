@@ -50,15 +50,33 @@ changelog:
       - "^docs:"
       - "^test:"
 
-brews:
-  - repository:
+# `brews` (formules) est déprécié depuis goreleaser v2.10 et sera supprimé en
+# v2.16. Le remplaçant est `homebrew_casks`.
+#
+# Deux conséquences à connaître :
+#   - un cask est spécifique à macOS, alors qu'une formule fonctionnait aussi
+#     sous Linux. Le README ne documentait de toute façon Homebrew que pour
+#     macOS, et install.sh couvre Linux ;
+#   - les binaires ne sont pas signés, donc Gatekeeper les met en quarantaine.
+#     Le hook post-install retire l'attribut, comme le faisait déjà install.sh.
+homebrew_casks:
+  - name: chiffremento
+    binaries:
+      - chiffremento
+
+    repository:
       owner: ValMtp3
       name: homebrew-tap
       token: "{{ .Env.TAP_GITHUB_TOKEN }}"
 
-    directory: Formula
-    homepage: "https://github.com/valentinfiess/chiffremento-go-cli"
-    description: "Outil de chiffrement CLI sécurisé et robuste en Go"
+    directory: Casks
+    homepage: "https://github.com/ValMtp3/chiffremento-go-cli"
+    description: "Outil de chiffrement de fichiers en ligne de commande"
     license: "MIT"
-    test: |
-      system "#{bin}/chiffremento -version"
+
+    hooks:
+      post:
+        install: |
+          if OS.mac?
+            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/chiffremento"]
+          end
