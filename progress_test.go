@@ -87,3 +87,45 @@ func TestHumanSize(t *testing.T) {
 		}
 	}
 }
+
+// TestAnimationVisible : sur un petit fichier, l'opération est finie avant la
+// première image. La barre doit malgré tout se dérouler sur minDuration, sans
+// jamais dépasser la progression réelle.
+func TestAnimationVisible(t *testing.T) {
+	var done atomic.Int64
+	total := int64(1000)
+	m := newProgressModel(jobInfo{Action: "chiffrement", Size: total}, &done)
+
+	// Opération instantanée : 100 % des octets traités dès le départ.
+	done.Store(total)
+	m.opDone = true
+
+	if r := m.displayRatio(); r > 0.2 {
+		t.Errorf("la barre est déjà à %.0f%% à t=0 : l'animation ne serait pas visible", r*100)
+	}
+
+	m.start = m.start.Add(-minDuration / 2)
+	if r := m.displayRatio(); r < 0.4 || r > 0.6 {
+		t.Errorf("à mi-durée la barre devrait être à ~50%%, elle est à %.0f%%", r*100)
+	}
+
+	m.start = m.start.Add(-minDuration)
+	if r := m.displayRatio(); r != 1 {
+		t.Errorf("après minDuration la barre devrait être pleine, elle est à %.0f%%", r*100)
+	}
+}
+
+// TestAnimationNeDepassePasLeReel : sur un gros fichier lent, c'est la
+// progression réelle qui pilote, jamais le minuteur.
+func TestAnimationNeDepassePasLeReel(t *testing.T) {
+	var done atomic.Int64
+	total := int64(1000)
+	m := newProgressModel(jobInfo{Size: total}, &done)
+
+	done.Store(300) // 30 % réellement traités
+	m.start = m.start.Add(-10 * minDuration)
+
+	if r := m.displayRatio(); r != 0.3 {
+		t.Errorf("la barre affiche %.0f%% alors que seuls 30%% sont traités", r*100)
+	}
+}

@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sync"
 
 	"github.com/minio/sio"
 )
@@ -43,6 +44,37 @@ type atomicFile struct {
 	committed bool
 }
 
+// Registre des temporaires en cours d'écriture. Un defer ne s'exécute pas
+// quand le processus reçoit SIGINT : sans ce registre, un Ctrl+C laisserait
+// un .chto-tmp-* orphelin dans le répertoire de l'utilisateur.
+var (
+	pendingMu sync.Mutex
+	pending   = map[string]struct{}{}
+)
+
+// CleanupTemporaries supprime les temporaires encore en cours d'écriture.
+// À appeler depuis un gestionnaire de signal.
+func CleanupTemporaries() {
+	pendingMu.Lock()
+	defer pendingMu.Unlock()
+	for p := range pending {
+		os.Remove(p)
+		delete(pending, p)
+	}
+}
+
+func trackTemp(p string) {
+	pendingMu.Lock()
+	pending[p] = struct{}{}
+	pendingMu.Unlock()
+}
+
+func untrackTemp(p string) {
+	pendingMu.Lock()
+	delete(pending, p)
+	pendingMu.Unlock()
+}
+
 func newAtomicFile(dest string) (*atomicFile, error) {
 	dir := filepath.Dir(dest)
 	f, err := os.CreateTemp(dir, ".chto-tmp-*")
@@ -56,6 +88,7 @@ func newAtomicFile(dest string) (*atomicFile, error) {
 		os.Remove(f.Name())
 		return nil, fmt.Errorf("permissions du fichier temporaire: %w", err)
 	}
+	trackTemp(f.Name())
 	return &atomicFile{f: f, dest: dest}, nil
 }
 
@@ -72,6 +105,17 @@ func (a *atomicFile) commit() error {
 		return fmt.Errorf("renommage vers %s: %w", a.dest, err)
 	}
 	a.committed = true
+	untrackTemp(a.f.Name())
+
+	// Le rename doit être rendu durable lui aussi : les données sont sur le
+	// disque après le Sync, mais l'entrée de répertoire ne l'est pas forcément.
+	// Une coupure de courant juste après pourrait laisser la destination
+	// absente. Best effort : tous les systèmes ne permettent pas d'ouvrir un
+	// répertoire (Windows), et l'échec ici n'invalide pas l'écriture.
+	if dir, err := os.Open(filepath.Dir(a.dest)); err == nil {
+		dir.Sync()
+		dir.Close()
+	}
 	return nil
 }
 
@@ -82,6 +126,7 @@ func (a *atomicFile) cleanup() {
 	}
 	a.f.Close()
 	os.Remove(a.f.Name())
+	untrackTemp(a.f.Name())
 }
 
 // writerOnly masque l'interface io.Closer du writer sous-jacent.
@@ -300,43 +345,13 @@ func Encrypt(inputPath, outputPath string, password []byte, opts Options) error 
 // et les paramètres Argon2 sont lus dans l'en-tête ; seul opts.Progress est
 // pris en compte ici.
 func Decrypt(inputPath, outputPath string, password []byte, opts Options) error {
-	inFile, err := os.Open(inputPath)
-	if err != nil {
-		return fmt.Errorf("lecture: %w", err)
-	}
-	defer inFile.Close()
-
-	info, err := inFile.Stat()
-	if err != nil {
-		return fmt.Errorf("taille du fichier d'entrée: %w", err)
-	}
-
-	h, err := readHeader(inFile)
+	// Le flux est monté avant que le fichier de sortie n'existe : un en-tête
+	// invalide ou un mauvais mot de passe échoue donc sans rien créer.
+	src, closeSrc, err := openDecrypted(inputPath, password, opts)
 	if err != nil {
 		return err
 	}
-
-	keys, err := deriveKeys(password, h)
-	if err != nil {
-		return err
-	}
-	defer keys.wipe()
-
-	var src io.Reader = withProgress(inFile, info.Size(), opts.Progress)
-
-	src, err = initCipherReader(src, h.Algo, keys)
-	if err != nil {
-		return err
-	}
-
-	if h.compressed() {
-		gzipReader, err := gzip.NewReader(src)
-		if err != nil {
-			return fmt.Errorf("création du flux gzip: %w", err)
-		}
-		defer gzipReader.Close()
-		src = gzipReader
-	}
+	defer closeSrc()
 
 	out, err := newAtomicFile(outputPath)
 	if err != nil {
@@ -349,6 +364,74 @@ func Decrypt(inputPath, outputPath string, password []byte, opts Options) error 
 	}
 
 	return out.commit()
+}
+
+// Verify contrôle qu'un fichier est intact et déchiffrable, sans rien écrire
+// sur le disque : tout part vers io.Discard. Utile pour vérifier une
+// sauvegarde sans avoir la place — ou l'envie — de l'extraire.
+func Verify(inputPath string, password []byte, opts Options) error {
+	src, closeSrc, err := openDecrypted(inputPath, password, opts)
+	if err != nil {
+		return err
+	}
+	defer closeSrc()
+
+	if _, err := io.Copy(io.Discard, src); err != nil {
+		return fmt.Errorf("vérification: %w", err)
+	}
+	return nil
+}
+
+// openDecrypted monte la chaîne de lecture (fichier → déchiffrement →
+// décompression) et renvoie de quoi la refermer. Partagé par Decrypt et
+// Verify pour qu'ils ne puissent pas diverger.
+func openDecrypted(inputPath string, password []byte, opts Options) (io.Reader, func(), error) {
+	inFile, err := os.Open(inputPath)
+	if err != nil {
+		return nil, nil, fmt.Errorf("lecture: %w", err)
+	}
+	closers := []func(){func() { inFile.Close() }}
+	closeAll := func() {
+		for i := len(closers) - 1; i >= 0; i-- {
+			closers[i]()
+		}
+	}
+	fail := func(err error) (io.Reader, func(), error) {
+		closeAll()
+		return nil, nil, err
+	}
+
+	info, err := inFile.Stat()
+	if err != nil {
+		return fail(fmt.Errorf("taille du fichier d'entrée: %w", err))
+	}
+
+	h, err := readHeader(inFile)
+	if err != nil {
+		return fail(err)
+	}
+
+	keys, err := deriveKeys(password, h)
+	if err != nil {
+		return fail(err)
+	}
+	closers = append(closers, keys.wipe)
+
+	src, err := initCipherReader(withProgress(inFile, info.Size(), opts.Progress), h.Algo, keys)
+	if err != nil {
+		return fail(err)
+	}
+
+	if h.compressed() {
+		gzipReader, err := gzip.NewReader(src)
+		if err != nil {
+			return fail(fmt.Errorf("création du flux gzip: %w", err))
+		}
+		closers = append(closers, func() { gzipReader.Close() })
+		src = gzipReader
+	}
+
+	return src, closeAll, nil
 }
 
 // Inspect lit l'en-tête d'un .chto sans le déchiffrer, pour que l'interface

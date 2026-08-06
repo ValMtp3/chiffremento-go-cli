@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"strings"
 	"sync/atomic"
@@ -31,10 +32,14 @@ func runTUI() error {
 	}
 	path = strings.TrimSpace(expandHome(path))
 
-	if action == "dec" {
+	switch action {
+	case "dec":
 		return tuiDecrypt(path)
+	case "verify":
+		return tuiVerify(path)
+	default:
+		return tuiEncrypt(path)
 	}
-	return tuiEncrypt(path)
 }
 
 // mainForm demande l'opération et le fichier. Extrait de runTUI pour être
@@ -48,6 +53,7 @@ func mainForm(action *string, path *string) *huh.Form {
 				Options(
 					huh.NewOption("chiffrer un fichier", "enc"),
 					huh.NewOption("déchiffrer un fichier", "dec"),
+					huh.NewOption("vérifier un fichier (sans rien écrire)", "verify"),
 				).
 				Value(action),
 
@@ -75,8 +81,8 @@ func validateTarget(s, action string) error {
 	if info.IsDir() {
 		return errors.New("c'est un répertoire")
 	}
-	if action == "dec" && !strings.HasSuffix(s, extension) {
-		return errors.New("un fichier à déchiffrer doit porter l'extension " + extension)
+	if (action == "dec" || action == "verify") && !strings.HasSuffix(s, extension) {
+		return errors.New("ce fichier doit porter l'extension " + extension)
 	}
 	if action == "enc" && strings.HasSuffix(s, extension) {
 		return errors.New("ce fichier est déjà chiffré")
@@ -111,7 +117,9 @@ func tuiEncrypt(path string) error {
 		huh.NewGroup(
 			huh.NewInput().
 				Title("mot de passe").
-				Description("jamais affiché, jamais visible dans ps ni dans l'historique").
+				// La description se recalcule à chaque frappe : l'utilisateur
+				// voit la robustesse de son mot de passe pendant qu'il le tape.
+				DescriptionFunc(func() string { return strengthHint(password) }, &password).
 				EchoMode(huh.EchoModePassword).
 				Value(&password).
 				Validate(validatePassword),
@@ -136,12 +144,13 @@ func tuiEncrypt(path string) error {
 
 	out := path + extension
 	info := jobInfo{
-		Action: "chiffrement",
-		In:     path,
-		Out:    out,
-		AEAD:   pkg.AlgoName(algo),
-		KDF:    pkg.DefaultKDFLabel(),
-		Salt:   "16 o aléatoires · en-tête lié à la clé",
+		Action:  "chiffrement",
+		In:      path,
+		Out:     out,
+		AEAD:    pkg.AlgoName(algo),
+		KDF:     pkg.DefaultKDFLabel(),
+		Salt:    "16 o aléatoires · en-tête lié à la clé",
+		Success: out,
 	}
 	return runJob(info, func(p func(int64, int64)) error {
 		return pkg.Encrypt(path, out, []byte(password), pkg.Options{
@@ -184,15 +193,58 @@ func tuiDecrypt(path string) error {
 
 	out := strings.TrimSuffix(path, extension)
 	info := jobInfo{
-		Action: "déchiffrement",
-		In:     path,
-		Out:    out,
-		AEAD:   algo,
-		KDF:    kdf,
-		Salt:   fmt.Sprintf("format v%d · lu dans l'en-tête", version),
+		Action:  "déchiffrement",
+		In:      path,
+		Out:     out,
+		AEAD:    algo,
+		KDF:     kdf,
+		Salt:    fmt.Sprintf("format v%d · lu dans l'en-tête", version),
+		Success: out,
 	}
 	return runJob(info, func(p func(int64, int64)) error {
 		return pkg.Decrypt(path, out, []byte(password), pkg.Options{Progress: p})
+	})
+}
+
+func tuiVerify(path string) error {
+	version, algo, kdf, compressed, err := pkg.Inspect(path)
+	if err != nil {
+		return err
+	}
+
+	details := fmt.Sprintf("format v%d · %s · %s", version, algo, kdf)
+	if compressed {
+		details += " · compressé"
+	}
+	details += "\nrien ne sera écrit sur le disque"
+
+	password := ""
+	form := huh.NewForm(
+		huh.NewGroup(
+			huh.NewNote().Title("fichier").Description(details),
+			huh.NewInput().
+				Title("mot de passe").
+				EchoMode(huh.EchoModePassword).
+				Value(&password).
+				Validate(validatePassword),
+		),
+	).WithTheme(formTheme()).WithShowHelp(true)
+
+	if err := form.Run(); err != nil {
+		return err
+	}
+
+	info := jobInfo{
+		Action:  "vérification",
+		In:      path,
+		Out:     "(rien, contrôle seul)",
+		AEAD:    algo,
+		KDF:     kdf,
+		Salt:    fmt.Sprintf("format v%d · lu dans l'en-tête", version),
+		Success: "fichier intact, déchiffrable, rien écrit sur le disque",
+	}
+	return runJob(info, func(p func(int64, int64)) error {
+		return pkg.Verify(path, []byte(password), pkg.Options{Progress: p})
 	})
 }
 
@@ -206,20 +258,23 @@ func runJob(info jobInfo, op func(progress func(done, total int64)) error) error
 	model := newProgressModel(info, &done)
 	prog := tea.NewProgram(model)
 
-	var opErr error
+	// L'erreur passe par un canal plutôt que par une variable partagée : elle
+	// est écrite par la goroutine de chiffrement et lue ici après coup.
+	errCh := make(chan error, 1)
 	go func() {
-		opErr = op(func(d, _ int64) { done.Store(d) })
-		prog.Send(doneMsg{err: opErr})
+		err := op(func(d, _ int64) { done.Store(d) })
+		errCh <- err
+		prog.Send(doneMsg{err: err})
 	}()
 
 	if _, err := prog.Run(); err != nil {
 		return err
 	}
-	if opErr != nil {
-		return opErr
+	if err := <-errCh; err != nil {
+		return err
 	}
 
-	fmt.Printf("  %s  %s\n\n", styleAccent.Render("✓"), styleText.Render(info.Out))
+	fmt.Printf("  %s  %s\n\n", styleAccent.Render("✓"), styleText.Render(info.Success))
 	return nil
 }
 
@@ -282,6 +337,63 @@ func validatePassword(s string) error {
 		return errors.New("le mot de passe ne peut pas être vide")
 	}
 	return nil
+}
+
+// passwordEntropy estime l'entropie en bits : taille du jeu de caractères
+// employé, élevée à la longueur.
+//
+// C'est volontairement grossier et plutôt optimiste — la mesure ne détecte ni
+// les mots du dictionnaire, ni « azerty123 », ni les répétitions. C'est un
+// repère pour l'utilisateur, pas une garantie, et rien ne bloque la saisie.
+func passwordEntropy(s string) float64 {
+	if s == "" {
+		return 0
+	}
+	var minuscules, majuscules, chiffres, autres bool
+	for _, r := range s {
+		switch {
+		case r >= 'a' && r <= 'z':
+			minuscules = true
+		case r >= 'A' && r <= 'Z':
+			majuscules = true
+		case r >= '0' && r <= '9':
+			chiffres = true
+		default:
+			autres = true
+		}
+	}
+	jeu := 0
+	if minuscules {
+		jeu += 26
+	}
+	if majuscules {
+		jeu += 26
+	}
+	if chiffres {
+		jeu += 10
+	}
+	if autres {
+		jeu += 33
+	}
+	return float64(len([]rune(s))) * math.Log2(float64(jeu))
+}
+
+// strengthHint traduit l'entropie en une ligne lisible. Les seuils sont
+// prudents : 60 bits d'entropie estimée résistent mal à un attaquant motivé
+// qui dispose du fichier et peut calculer hors ligne.
+func strengthHint(s string) string {
+	if s == "" {
+		return "jamais affiché, jamais visible dans ps ni dans l'historique"
+	}
+	bits := passwordEntropy(s)
+	switch {
+	case bits < 50:
+		return fmt.Sprintf("~%.0f bits — faible, une phrase de passe serait bien plus sûre", bits)
+	case bits < 80:
+		return fmt.Sprintf("~%.0f bits — correct", bits)
+	default:
+		return fmt.Sprintf("~%.0f bits — solide", bits)
+	}
 }
 
 func expandHome(p string) string {

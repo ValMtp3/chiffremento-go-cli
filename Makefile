@@ -33,9 +33,22 @@ clean:
 	rm -f $(BINARY_NAME)
 	rm -rf $(BUILD_DIR)
 
-# Installe dans le $GOPATH/bin local
+# Installe dans le $GOPATH/bin local.
+#
+# `go install` nommerait le binaire d'après le module (chiffremento-cli) et pas
+# d'après la commande. On passe donc par -o pour obtenir « chiffremento ».
+GOBIN_DIR := $(shell go env GOBIN)
+ifeq ($(GOBIN_DIR),)
+GOBIN_DIR := $(shell go env GOPATH)/bin
+endif
+
 install:
-	go install -ldflags="$(LDFLAGS)" .
+	@mkdir -p $(GOBIN_DIR)
+	go build -ldflags="$(LDFLAGS)" -o $(GOBIN_DIR)/$(BINARY_NAME) .
+	@echo "Installé : $(GOBIN_DIR)/$(BINARY_NAME)"
+	@command -v $(BINARY_NAME) >/dev/null 2>&1 && \
+		[ "$$(command -v $(BINARY_NAME))" != "$(GOBIN_DIR)/$(BINARY_NAME)" ] && \
+		echo "Attention : '$(BINARY_NAME)' résout vers $$(command -v $(BINARY_NAME)) — il passe avant dans le PATH." || true
 
 # Mêmes contrôles que la CI
 lint:

@@ -544,3 +544,70 @@ func TestProtocolSafety_Tripwire(t *testing.T) {
 		t.Error("les fichiers v1 de référence ont disparu de testdata/ : la compatibilité n'est plus testée")
 	}
 }
+
+// --- Vérification sans écriture -----------------------------------------
+
+func TestVerify(t *testing.T) {
+	dir := t.TempDir()
+	content := bytes.Repeat([]byte("données à contrôler. "), 200)
+	in := write(t, dir, "clair.txt", content)
+	enc := filepath.Join(dir, "clair.txt.chto")
+
+	if err := Encrypt(in, enc, []byte("pw"), Options{Compress: true}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := Verify(enc, []byte("pw"), Options{}); err != nil {
+		t.Fatalf("un fichier intact a été rejeté: %v", err)
+	}
+
+	// Verify ne doit produire aucun fichier : le répertoire contenait le clair
+	// et le chiffré, il ne doit rien contenir de plus.
+	entries, _ := os.ReadDir(dir)
+	if len(entries) != 2 {
+		var noms []string
+		for _, e := range entries {
+			noms = append(noms, e.Name())
+		}
+		t.Errorf("Verify a laissé des fichiers derrière lui: %v", noms)
+	}
+
+	if err := Verify(enc, []byte("mauvais"), Options{}); err == nil {
+		t.Error("un mauvais mot de passe a été accepté")
+	}
+
+	// Un octet retourné au milieu du corps chiffré doit être détecté.
+	raw, _ := os.ReadFile(enc)
+	raw[len(raw)/2] ^= 0xFF
+	corrompu := write(t, dir, "corrompu.chto", raw)
+	if err := Verify(corrompu, []byte("pw"), Options{}); err == nil {
+		t.Error("un fichier corrompu a été déclaré intact")
+	}
+}
+
+func TestVerifyFichierV1(t *testing.T) {
+	if err := Verify(filepath.Join("testdata", "v1_cascade.chto"), []byte("reference-v1-password"), Options{}); err != nil {
+		t.Errorf("un fichier v1 intact a été rejeté: %v", err)
+	}
+}
+
+// TestNettoyageTemporaires vérifie le filet de sécurité appelé par le
+// gestionnaire de signal : un Ctrl+C ne doit pas laisser de .chto-tmp-*.
+func TestNettoyageTemporaires(t *testing.T) {
+	dir := t.TempDir()
+	a, err := newAtomicFile(filepath.Join(dir, "cible"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tmp := a.f.Name()
+	if _, err := os.Stat(tmp); err != nil {
+		t.Fatalf("le temporaire devrait exister: %v", err)
+	}
+
+	CleanupTemporaries()
+
+	if _, err := os.Stat(tmp); !os.IsNotExist(err) {
+		t.Error("CleanupTemporaries n'a pas supprimé le temporaire en cours")
+	}
+	a.cleanup()
+}

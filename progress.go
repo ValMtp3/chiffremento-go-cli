@@ -20,9 +20,20 @@ import (
 // chaque frame. Elle ne peut donc jamais ralentir la copie.
 
 const (
-	frameRate  = 66 * time.Millisecond // ~15 images/seconde
-	scrambleN  = 14                    // nombre de groupes d'octets affichés
-	barWidth   = 30
+	frameRate = 66 * time.Millisecond // ~15 images/seconde
+	scrambleN = 14                    // nombre de groupes d'octets affichés
+	barWidth  = 30
+
+	// minDuration : durée minimale d'affichage de l'écran. Sur un petit
+	// fichier, le chiffrement est terminé avant la première image et
+	// l'animation clignoterait sans qu'on voie rien.
+	//
+	// C'est bien l'affichage qui est ralenti, pas le chiffrement : celui-ci
+	// tourne à pleine vitesse dans sa goroutine, et la barre ne dépasse jamais
+	// la progression réelle (voir displayRatio). Aucun effet en mode CLI, qui
+	// n'utilise pas cet écran.
+	minDuration = 2 * time.Second
+
 	appVersion = "v2.0"
 )
 
@@ -40,6 +51,8 @@ type jobInfo struct {
 	AEAD   string
 	KDF    string
 	Salt   string
+	// Success : la ligne affichée une fois l'opération réussie.
+	Success string
 }
 
 type progressModel struct {
@@ -49,11 +62,39 @@ type progressModel struct {
 	done  *atomic.Int64
 	total int64
 
-	start    time.Time
+	start time.Time
+	// opDone : le chiffrement est terminé. finished : l'écran a fini de
+	// dérouler son animation et peut se fermer.
+	opDone   bool
 	finished bool
 	err      error
 
 	rng *rand.Rand
+}
+
+// displayRatio est l'avancement *affiché*. Il ne dépasse jamais l'avancement
+// réel — on ne ment pas sur ce qui est fait — mais il ne va pas plus vite que
+// minDuration, pour que l'animation reste visible sur un petit fichier.
+//
+// Sur un gros fichier, elapsed/minDuration dépasse vite le réel et c'est donc
+// le réel qui pilote : le bridage disparaît de lui-même.
+func (m *progressModel) displayRatio() float64 {
+	real := 0.0
+	switch {
+	case m.total > 0:
+		real = float64(m.done.Load()) / float64(m.total)
+	case m.opDone:
+		real = 1 // fichier vide : rien à compter
+	}
+	if real > 1 {
+		real = 1
+	}
+
+	paced := float64(time.Since(m.start)) / float64(minDuration)
+	if paced < real {
+		return paced
+	}
+	return real
 }
 
 func newProgressModel(info jobInfo, done *atomic.Int64) *progressModel {
@@ -77,14 +118,22 @@ func tick() tea.Cmd {
 func (m *progressModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tickMsg:
-		if m.finished {
+		// On ne ferme l'écran que quand l'opération est finie *et* que la barre
+		// a fini de se remplir, sinon on n'aurait rien vu passer.
+		if m.opDone && m.displayRatio() >= 1 {
+			m.finished = true
 			return m, tea.Quit
 		}
 		return m, tick()
 	case doneMsg:
-		m.finished = true
+		m.opDone = true
 		m.err = msg.err
-		return m, tea.Quit
+		if m.err != nil {
+			// Une erreur n'a aucune raison d'attendre la fin de l'animation.
+			m.finished = true
+			return m, tea.Quit
+		}
+		return m, tick()
 	case tea.KeyMsg:
 		// On n'interrompt pas une opération en cours : un .chto à moitié écrit
 		// n'aurait aucune valeur, et l'écriture atomique attend le commit.
@@ -97,15 +146,7 @@ func (m *progressModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m *progressModel) View() string {
 	done := m.done.Load()
-	ratio := 0.0
-	if m.total > 0 {
-		ratio = float64(done) / float64(m.total)
-	} else if m.finished {
-		ratio = 1
-	}
-	if ratio > 1 {
-		ratio = 1
-	}
+	ratio := m.displayRatio()
 
 	var b strings.Builder
 
@@ -141,10 +182,9 @@ func (m *progressModel) scramble(ratio float64) string {
 		switch {
 		case i < cursor:
 			parts[i] = styleAccent.Render("██")
-		case i == cursor && !m.finished:
+		case i == cursor && ratio < 1:
+			// L'octet en cours de transformation, retiré au sort à chaque image.
 			parts[i] = styleAccent.Render(fmt.Sprintf("%02x", m.rng.Intn(256)))
-		case m.finished:
-			parts[i] = styleAccent.Render("██")
 		default:
 			parts[i] = styleFaint.Render(fmt.Sprintf("%02x", m.rng.Intn(256)))
 		}
@@ -154,21 +194,27 @@ func (m *progressModel) scramble(ratio float64) string {
 
 func (m *progressModel) bar(ratio float64, done int64) string {
 	filled := int(ratio * barWidth)
-	if m.finished {
+	if filled > barWidth {
 		filled = barWidth
-		ratio = 1
 	}
 	bar := styleAccent.Render(strings.Repeat("█", filled)) +
 		styleFaint.Render(strings.Repeat("░", barWidth-filled))
 
+	// Le débit est calculé sur les octets réellement traités, pas sur la barre
+	// bridée. Une fois l'opération finie il n'a plus de sens, on le remplace
+	// par la taille traitée.
 	elapsed := time.Since(m.start).Seconds()
-	rate := ""
-	if elapsed > 0.2 && done > 0 {
-		rate = humanSize(int64(float64(done)/elapsed)) + "/s"
+	right := ""
+	switch {
+	case m.opDone:
+		right = humanSize(m.total)
+	case elapsed > 0.2 && done > 0:
+		right = humanSize(int64(float64(done)/elapsed)) + "/s"
 	}
+
 	return fmt.Sprintf("%s %s %s", bar,
 		styleText.Render(rightAlign(fmt.Sprintf("%d%%", int(ratio*100)), 4)),
-		styleDim.Render(rate))
+		styleDim.Render(right))
 }
 
 func humanSize(n int64) string {

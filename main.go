@@ -5,8 +5,10 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strings"
+	"syscall"
 
 	"chiffremento-cli/pkg"
 )
@@ -16,6 +18,7 @@ var version = "dev"
 const extension = ".chto"
 
 func main() {
+	installSignalHandler()
 	if err := run(); err != nil {
 		fmt.Fprintln(os.Stderr, styleError.Render("erreur :"), err)
 		os.Exit(1)
@@ -24,7 +27,7 @@ func main() {
 
 func run() error {
 	showVersion := flag.Bool("version", false, "afficher la version")
-	mode := flag.String("mode", "", "enc (chiffrer), dec (déchiffrer) ou info (inspecter un .chto)")
+	mode := flag.String("mode", "", "enc (chiffrer), dec (déchiffrer), verify (contrôler) ou info (inspecter)")
 	fileIn := flag.String("in", "", "fichier d'entrée")
 	compress := flag.Bool("comp", false, "compresser les données avant chiffrement")
 	chacha := flag.Bool("chacha", false, "utiliser ChaCha20-Poly1305 au lieu d'AES-GCM")
@@ -68,11 +71,26 @@ func run() error {
 		return doEncrypt(*fileIn, algo, *compress)
 	case "dec":
 		return doDecrypt(*fileIn)
+	case "verify":
+		return doVerify(*fileIn)
 	case "info":
 		return doInfo(*fileIn)
 	default:
-		return fmt.Errorf("mode inconnu %q (attendu enc, dec ou info)", *mode)
+		return fmt.Errorf("mode inconnu %q (attendu enc, dec, verify ou info)", *mode)
 	}
+}
+
+// installSignalHandler évite qu'un Ctrl+C laisse un .chto-tmp-* orphelin :
+// les defer ne s'exécutent pas quand le processus est interrompu.
+func installSignalHandler() {
+	c := make(chan os.Signal, 1)
+	signal.Notify(c, os.Interrupt, syscall.SIGTERM)
+	go func() {
+		<-c
+		pkg.CleanupTemporaries()
+		fmt.Fprintln(os.Stderr, "\ninterrompu")
+		os.Exit(130)
+	}()
 }
 
 // chooseAlgo refuse les combinaisons contradictoires. La v1 laissait -parano
@@ -149,6 +167,34 @@ func doDecrypt(in string) error {
 	return nil
 }
 
+// doVerify contrôle qu'un fichier est intact et déchiffrable sans rien écrire
+// sur le disque. Pratique pour vérifier une sauvegarde sans l'extraire.
+func doVerify(in string) error {
+	if !strings.HasSuffix(in, extension) {
+		return fmt.Errorf("un fichier à vérifier doit porter l'extension %s", extension)
+	}
+
+	version, algo, kdf, compressed, err := pkg.Inspect(in)
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(os.Stderr, "%s format v%d · %s · %s%s\n", styleDim.Render("fichier      "),
+		version, algo, kdf, compressedSuffix(compressed))
+
+	password, err := readPassword(false)
+	if err != nil {
+		return err
+	}
+	defer zero(password)
+
+	if err := pkg.Verify(in, password, pkg.Options{}); err != nil {
+		return err
+	}
+	fmt.Fprintf(os.Stderr, "%s %s\n", styleAccent.Render("✓"),
+		styleText.Render("fichier intact, déchiffrable, rien écrit sur le disque"))
+	return nil
+}
+
 // doInfo affiche l'en-tête d'un .chto sans le déchiffrer : ni mot de passe, ni
 // écriture sur le disque.
 func doInfo(in string) error {
@@ -205,15 +251,16 @@ func zero(b []byte) {
 func usage() {
 	fmt.Fprintf(os.Stderr, `chiffremento %s — chiffrement de fichiers
 
-  chiffremento                      interface guidée
-  chiffremento -mode enc -in FICHIER [options]
-  chiffremento -mode dec -in FICHIER%s
-  chiffremento -mode info -in FICHIER%s
+  chiffremento                        interface guidée
+  chiffremento -mode enc    -in FICHIER [options]
+  chiffremento -mode dec    -in FICHIER%s
+  chiffremento -mode verify -in FICHIER%s   contrôle sans rien écrire
+  chiffremento -mode info   -in FICHIER%s   en-tête, sans mot de passe
 
 Le mot de passe n'est jamais passé en argument : il est demandé de façon
 masquée, ou lu sur l'entrée standard si celle-ci n'est pas un terminal.
 
 Options :
-`, version, extension, extension)
+`, version, extension, extension, extension)
 	flag.PrintDefaults()
 }

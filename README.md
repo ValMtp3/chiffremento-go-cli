@@ -90,14 +90,14 @@ chiffremento
 ### Ligne de commande
 
 ```bash
-chiffremento -mode <enc|dec|info> -in <fichier> [options]
+chiffremento -mode <enc|dec|verify|info> -in <fichier> [options]
 ```
 
 Le mot de passe **n'est jamais un argument**. Il est demandé de façon masquée, ou lu sur l'entrée standard si celle-ci n'est pas un terminal.
 
 | Flag | Description |
 | :--- | :--- |
-| `-mode` | **Obligatoire.** `enc` (chiffrer), `dec` (déchiffrer) ou `info` (inspecter). |
+| `-mode` | **Obligatoire.** `enc` (chiffrer), `dec` (déchiffrer), `verify` (contrôler sans rien écrire) ou `info` (inspecter l'en-tête). |
 | `-in` | **Obligatoire.** Chemin du fichier d'entrée. |
 | `-comp` | *(enc)* Active la compression gzip. |
 | `-chacha` | *(enc)* Utilise ChaCha20-Poly1305 au lieu d'AES-GCM. |
@@ -116,6 +116,12 @@ Déchiffrer (recrée `document.txt`) :
 
 ```bash
 chiffremento -mode dec -in document.txt.chto
+```
+
+Contrôler qu'une sauvegarde est intacte et déchiffrable, sans rien écrire sur le disque :
+
+```bash
+chiffremento -mode verify -in sauvegarde.tar.gz.chto
 ```
 
 Inspecter un fichier sans le déchiffrer ni saisir de mot de passe :
@@ -238,14 +244,14 @@ chiffremento
 ### Command line
 
 ```bash
-chiffremento -mode <enc|dec|info> -in <file> [options]
+chiffremento -mode <enc|dec|verify|info> -in <file> [options]
 ```
 
 The password is **never an argument**. It is prompted for with masked input, or read from standard input when that is not a terminal.
 
 | Flag | Description |
 | :--- | :--- |
-| `-mode` | **Required.** `enc` (encrypt), `dec` (decrypt) or `info` (inspect). |
+| `-mode` | **Required.** `enc` (encrypt), `dec` (decrypt), `verify` (check without writing anything) or `info` (inspect the header). |
 | `-in` | **Required.** Input file path. |
 | `-comp` | *(enc)* Enables gzip compression. |
 | `-chacha` | *(enc)* Uses ChaCha20-Poly1305 instead of AES-GCM. |
@@ -264,6 +270,12 @@ Decrypt (recreates `document.txt`):
 
 ```bash
 chiffremento -mode dec -in document.txt.chto
+```
+
+Check that a backup is intact and decryptable, without writing anything to disk:
+
+```bash
+chiffremento -mode verify -in backup.tar.gz.chto
 ```
 
 Inspect a file without decrypting it or entering a password:
