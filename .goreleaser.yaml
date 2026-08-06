@@ -11,6 +11,11 @@ before:
 # commits ; pour un texte d'intro spécifique, utiliser les notes de la release
 # GitHub.
 
+release:
+  # Rend une relance possible sur un tag déjà publié : sans ça, goreleaser
+  # échoue sur « asset already_exists » et s'arrête avant l'étape Homebrew.
+  replace_existing_artifacts: true
+
 builds:
   - env:
       - CGO_ENABLED=0
