@@ -4,6 +4,9 @@ on:
   push:
     tags:
       - '*'
+  # Permet de relancer une release à la main depuis un tag existant, sans
+  # avoir à supprimer puis repousser le tag.
+  workflow_dispatch:
 
 permissions:
   contents: write
