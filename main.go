@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+	"time"
 
 	"chiffremento-cli/pkg"
 )
@@ -30,8 +31,11 @@ func run() error {
 	mode := flag.String("mode", "", "enc (chiffrer), dec (déchiffrer), verify (contrôler) ou info (inspecter)")
 	fileIn := flag.String("in", "", "fichier d'entrée")
 	compress := flag.Bool("comp", false, "compresser les données avant chiffrement")
+	kdfProfile := flag.String("kdf", string(pkg.KDFStandard), "profil Argon2: standard, fort ou parano (enc)")
+	metadataMode := flag.String("meta", string(pkg.MetadataNone), "metadata: none (défaut) ou minimal (enc)")
 	chacha := flag.Bool("chacha", false, "utiliser ChaCha20-Poly1305 au lieu d'AES-GCM")
 	parano := flag.Bool("parano", false, "mode parano : double chiffrement en cascade (chacha20 + aes), plus lent")
+	parano2 := flag.Bool("parano2", false, "double chiffrement inverse (aes + chacha), plus lent")
 	flag.Usage = usage
 
 	// Sans le moindre argument, dans un vrai terminal : interface guidée.
@@ -52,31 +56,45 @@ func run() error {
 		return nil
 	}
 
-	if *mode == "" || *fileIn == "" {
+	if *mode == "" {
 		usage()
-		return errors.New("-mode et -in sont obligatoires")
+		return errors.New("-mode est obligatoire")
+	}
+	if *mode != "bench" && *fileIn == "" {
+		usage()
+		return errors.New("-in est obligatoire pour ce mode")
 	}
 
-	if *mode != "enc" && (*compress || *chacha || *parano) {
+	if *mode != "enc" && (*compress || *chacha || *parano || *parano2 || *kdfProfile != string(pkg.KDFStandard) || *metadataMode != string(pkg.MetadataNone)) {
 		fmt.Fprintln(os.Stderr, styleDim.Render(
-			"note : -comp, -chacha et -parano n'ont d'effet qu'en mode enc, ils sont ignorés ici"))
+			"note : -comp, -kdf, -meta, -chacha, -parano et -parano2 n'ont d'effet qu'en mode enc, ils sont ignorés ici"))
 	}
 
 	switch *mode {
 	case "enc":
-		algo, err := chooseAlgo(*chacha, *parano)
+		algo, err := chooseAlgo(*chacha, *parano, *parano2)
 		if err != nil {
 			return err
 		}
-		return doEncrypt(*fileIn, algo, *compress)
+		profile, err := pkg.ParseKDFProfile(*kdfProfile)
+		if err != nil {
+			return err
+		}
+		meta, err := pkg.ParseMetadataMode(*metadataMode)
+		if err != nil {
+			return err
+		}
+		return doEncrypt(*fileIn, algo, *compress, profile, meta)
 	case "dec":
 		return doDecrypt(*fileIn)
 	case "verify":
 		return doVerify(*fileIn)
 	case "info":
 		return doInfo(*fileIn)
+	case "bench":
+		return doBenchmark()
 	default:
-		return fmt.Errorf("mode inconnu %q (attendu enc, dec, verify ou info)", *mode)
+		return fmt.Errorf("mode inconnu %q (attendu enc, dec, verify, info ou bench)", *mode)
 	}
 }
 
@@ -95,12 +113,14 @@ func installSignalHandler() {
 
 // chooseAlgo refuse les combinaisons contradictoires. La v1 laissait -parano
 // écraser -chacha en silence.
-func chooseAlgo(chacha, parano bool) (byte, error) {
+func chooseAlgo(chacha, parano, parano2 bool) (byte, error) {
 	switch {
-	case chacha && parano:
-		return 0, errors.New("-chacha et -parano s'excluent : le mode parano utilise déjà chacha20 en couche externe")
+	case (btoi(chacha) + btoi(parano) + btoi(parano2)) > 1:
+		return 0, errors.New("-chacha, -parano et -parano2 s'excluent")
 	case parano:
 		return pkg.AlgoCascade, nil
+	case parano2:
+		return pkg.AlgoCascadeReverse, nil
 	case chacha:
 		return pkg.AlgoChaCha, nil
 	default:
@@ -108,7 +128,14 @@ func chooseAlgo(chacha, parano bool) (byte, error) {
 	}
 }
 
-func doEncrypt(in string, algo byte, compress bool) error {
+func btoi(v bool) int {
+	if v {
+		return 1
+	}
+	return 0
+}
+
+func doEncrypt(in string, algo byte, compress bool, profile pkg.KDFProfile, metadata pkg.MetadataMode) error {
 	if strings.HasSuffix(in, extension) {
 		return fmt.Errorf("%s porte déjà l'extension %s : il semble déjà chiffré", in, extension)
 	}
@@ -124,9 +151,12 @@ func doEncrypt(in string, algo byte, compress bool) error {
 	defer zero(password)
 
 	fmt.Fprintf(os.Stderr, "%s %s\n", styleDim.Render("chiffrement  "), pkg.AlgoName(algo))
-	fmt.Fprintf(os.Stderr, "%s %s\n", styleDim.Render("kdf          "), pkg.DefaultKDFLabel())
+	fmt.Fprintf(os.Stderr, "%s %s\n", styleDim.Render("kdf          "), pkg.KDFLabelForProfile(profile))
+	fmt.Fprintf(os.Stderr, "%s %s\n", styleDim.Render("metadata     "), metadata)
 
-	if err := pkg.Encrypt(in, out, password, pkg.Options{Algo: algo, Compress: compress}); err != nil {
+	if err := pkg.Encrypt(in, out, password, pkg.Options{
+		Algo: algo, Compress: compress, KDFProfile: profile, Metadata: metadata,
+	}); err != nil {
 		return err
 	}
 	fmt.Fprintf(os.Stderr, "%s %s\n", styleAccent.Render("✓"), out)
@@ -147,12 +177,13 @@ func doDecrypt(in string) error {
 
 	// L'en-tête est lisible sans mot de passe : autant annoncer les vrais
 	// paramètres du fichier avant de demander quoi que ce soit.
-	version, algo, kdf, compressed, err := pkg.Inspect(in)
+	version, algo, kdf, metadata, compressed, err := pkg.Inspect(in)
 	if err != nil {
 		return err
 	}
 	fmt.Fprintf(os.Stderr, "%s format v%d · %s · %s%s\n", styleDim.Render("fichier      "),
 		version, algo, kdf, compressedSuffix(compressed))
+	fmt.Fprintf(os.Stderr, "%s %s\n", styleDim.Render("metadata     "), metadata)
 
 	password, err := readPassword(false)
 	if err != nil {
@@ -174,12 +205,13 @@ func doVerify(in string) error {
 		return fmt.Errorf("un fichier à vérifier doit porter l'extension %s", extension)
 	}
 
-	version, algo, kdf, compressed, err := pkg.Inspect(in)
+	version, algo, kdf, metadata, compressed, err := pkg.Inspect(in)
 	if err != nil {
 		return err
 	}
 	fmt.Fprintf(os.Stderr, "%s format v%d · %s · %s%s\n", styleDim.Render("fichier      "),
 		version, algo, kdf, compressedSuffix(compressed))
+	fmt.Fprintf(os.Stderr, "%s %s\n", styleDim.Render("metadata     "), metadata)
 
 	password, err := readPassword(false)
 	if err != nil {
@@ -198,7 +230,7 @@ func doVerify(in string) error {
 // doInfo affiche l'en-tête d'un .chto sans le déchiffrer : ni mot de passe, ni
 // écriture sur le disque.
 func doInfo(in string) error {
-	version, algo, kdf, compressed, err := pkg.Inspect(in)
+	version, algo, kdf, metadata, compressed, err := pkg.Inspect(in)
 	if err != nil {
 		return err
 	}
@@ -215,6 +247,7 @@ func doInfo(in string) error {
 	line("format", fmt.Sprintf("v%d", version))
 	line("aead", algo)
 	line("kdf", kdf)
+	line("metadata", metadata)
 	line("gzip", map[bool]string{true: "oui", false: "non"}[compressed])
 	if version == 1 {
 		fmt.Println(styleDim.Render("  produit par une version 1.x : lecture seule, les nouveaux fichiers sont en v2"))
@@ -256,6 +289,7 @@ func usage() {
   chiffremento -mode dec    -in FICHIER%s
   chiffremento -mode verify -in FICHIER%s   contrôle sans rien écrire
   chiffremento -mode info   -in FICHIER%s   en-tête, sans mot de passe
+  chiffremento -mode bench                 benchmark KDF local
 
 Le mot de passe n'est jamais passé en argument : il est demandé de façon
 masquée, ou lu sur l'entrée standard si celle-ci n'est pas un terminal.
@@ -263,4 +297,18 @@ masquée, ou lu sur l'entrée standard si celle-ci n'est pas un terminal.
 Options :
 `, version, extension, extension, extension)
 	flag.PrintDefaults()
+}
+
+func doBenchmark() error {
+fmt.Fprintln(os.Stderr, styleDim.Render("benchmark"), "argon2id (standard/fort/parano)")
+report := pkg.BenchmarkKDF([]byte("chiffremento-benchmark"))
+for _, r := range report.Results {
+	if r.Err != nil {
+		fmt.Fprintf(os.Stderr, "  - %-8s %s -> erreur: %v\n", r.Profile, r.KDFLabel, r.Err)
+		continue
+	}
+	fmt.Fprintf(os.Stderr, "  - %-8s %s -> %s\n", r.Profile, r.KDFLabel, r.Duration.Round(10*time.Millisecond))
+}
+fmt.Fprintf(os.Stderr, "%s recommande -kdf %s\n", styleAccent.Render("✓"), report.Recommended)
+return nil
 }

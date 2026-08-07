@@ -80,7 +80,7 @@ func deriveKeysV2(password []byte, h *header) (*keySet, error) {
 	}
 	defer wipe(master)
 
-	if h.Algo == AlgoCascade {
+	if h.Algo == AlgoCascade || h.Algo == AlgoCascadeReverse {
 		out, err := hkdf.Expand(sha256.New, master, infoCascadeV2+string(h.Raw), 64)
 		if err != nil {
 			return nil, fmt.Errorf("dérivation des sous-clés: %w", err)

@@ -47,14 +47,16 @@ const (
 // binaire n'interprète un fichier récent de travers.
 const (
 	FlagCompressed = byte(1 << 0)
-	knownFlags     = FlagCompressed
+	FlagMetaMin    = byte(1 << 1)
+	knownFlags     = FlagCompressed | FlagMetaMin
 )
 
 // Identifiants d'algorithme.
 const (
-	AlgoAES     = byte(1)
-	AlgoChaCha  = byte(2)
-	AlgoCascade = byte(3)
+	AlgoAES            = byte(1)
+	AlgoChaCha         = byte(2)
+	AlgoCascade        = byte(3)
+	AlgoCascadeReverse = byte(4)
 )
 
 // Paramètres Argon2id des nouveaux fichiers. ~144 ms par dérivation sur une
@@ -137,6 +139,7 @@ type header struct {
 }
 
 func (h *header) compressed() bool { return h.Flags&FlagCompressed != 0 }
+func (h *header) metadataMinimal() bool { return h.Flags&FlagMetaMin != 0 }
 
 // AlgoName rend un identifiant d'algorithme lisible pour l'interface.
 func AlgoName(algo byte) string {
@@ -147,6 +150,8 @@ func AlgoName(algo byte) string {
 		return "chacha20-poly1305"
 	case AlgoCascade:
 		return "cascade chacha20 + aes-256-gcm"
+	case AlgoCascadeReverse:
+		return "cascade aes-256-gcm + chacha20"
 	default:
 		return "inconnu"
 	}
@@ -154,7 +159,7 @@ func AlgoName(algo byte) string {
 
 func validateAlgo(algo byte) error {
 	switch algo {
-	case AlgoAES, AlgoChaCha, AlgoCascade:
+	case AlgoAES, AlgoChaCha, AlgoCascade, AlgoCascadeReverse:
 		return nil
 	default:
 		return fmt.Errorf("algorithme inconnu dans le header : %d", algo)

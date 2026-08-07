@@ -45,10 +45,12 @@
 ## ✨ Fonctionnalités
 
 - **🔐 Chiffrement authentifié** : **AES-256-GCM** (par défaut) ou **ChaCha20-Poly1305**, en streaming via [`minio/sio`](https://github.com/minio/sio) (format DARE).
-- **🔑 Dérivation de clé** : **Argon2id**, avec des paramètres inscrits dans le fichier pour pouvoir être renforcés plus tard sans casser les anciens fichiers.
+- **🔑 Dérivation de clé** : **Argon2id** avec profils `standard`, `fort` ou `parano`.
 - **⚡ Mémoire constante** : chiffrer un fichier de 100 Go ne consomme que quelques mégaoctets de RAM.
 - **📦 Compression** : **gzip** optionnel avant chiffrement.
-- **😱 Mode parano** : double chiffrement en cascade (ChaCha20 à l'extérieur, AES à l'intérieur), avec deux clés dérivées indépendamment par HKDF.
+- **😱 Modes parano** : double chiffrement en cascade (`chacha→aes` ou `aes→chacha`), avec deux clés dérivées indépendamment par HKDF.
+- **🧾 Metadata optionnelles** : mode `minimal` pour embarquer nom de base + timestamp (tronqué à la minute), chiffrés dans le flux.
+- **🏎️ Benchmark intégré** : commande `-mode bench` pour recommander un profil KDF adapté à la machine.
 - **🔗 En-tête lié à la clé** : version, drapeaux, algorithme, paramètres Argon2 et sel entrent tous dans la dérivation. Modifier un seul octet de l'en-tête fait échouer le déchiffrement.
 
 ## 📥 Installation
@@ -92,18 +94,21 @@ chiffremento
 ### Ligne de commande
 
 ```bash
-chiffremento -mode <enc|dec|verify|info> -in <fichier> [options]
+chiffremento -mode <enc|dec|verify|info|bench> [-in <fichier>] [options]
 ```
 
 Le mot de passe **n'est jamais un argument**. Il est demandé de façon masquée, ou lu sur l'entrée standard si celle-ci n'est pas un terminal.
 
 | Flag | Description |
 | :--- | :--- |
-| `-mode` | **Obligatoire.** `enc` (chiffrer), `dec` (déchiffrer), `verify` (contrôler sans rien écrire) ou `info` (inspecter l'en-tête). |
-| `-in` | **Obligatoire.** Chemin du fichier d'entrée. |
+| `-mode` | **Obligatoire.** `enc` (chiffrer), `dec` (déchiffrer), `verify` (contrôler sans rien écrire), `info` (inspecter l'en-tête) ou `bench` (mesurer/recommander le KDF). |
+| `-in` | **Obligatoire** sauf en mode `bench`. Chemin du fichier d'entrée. |
 | `-comp` | *(enc)* Active la compression gzip. |
+| `-kdf` | *(enc)* Profil Argon2id : `standard`, `fort`, `parano`. |
+| `-meta` | *(enc)* Metadata : `none` (défaut) ou `minimal` (nom + timestamp chiffrés). |
 | `-chacha` | *(enc)* Utilise ChaCha20-Poly1305 au lieu d'AES-GCM. |
-| `-parano` | *(enc)* Double chiffrement en cascade. S'exclut avec `-chacha`. |
+| `-parano` | *(enc)* Double chiffrement `chacha→aes`. S'exclut avec `-chacha` et `-parano2`. |
+| `-parano2` | *(enc)* Double chiffrement `aes→chacha`. S'exclut avec `-chacha` et `-parano`. |
 | `-version` | Affiche la version. |
 
 ### Exemples
@@ -136,6 +141,12 @@ Mode parano avec compression :
 
 ```bash
 chiffremento -mode enc -in backup.db -parano -comp
+```
+
+Benchmark KDF local :
+
+```bash
+chiffremento -mode bench
 ```
 
 Depuis un script, le mot de passe se fournit sur l'entrée standard :
@@ -172,7 +183,7 @@ Ce que l'outil **ne** protège **pas** :
 
 - le **nom du fichier** : `secret.pdf.chto` annonce son contenu ;
 - la **taille** : elle suit celle du fichier d'origine, à quelques dizaines d'octets près ;
-- les **métadonnées** : dates et permissions d'origine ne sont pas conservées ;
+- les **métadonnées** : par défaut elles ne sont pas conservées ; avec `-meta minimal`, un nom de base et un timestamp minimisé sont stockés (chiffrés) ;
 - avec `-comp`, la **compressibilité** du contenu fuit à travers la taille finale ;
 - une **machine compromise** : keylogger, mémoire lue par un autre processus, fichier d'origine encore présent sur le disque après chiffrement.
 
@@ -201,10 +212,12 @@ Le mode parano ne remplace pas un bon mot de passe : il protège contre la déco
 ## ✨ Features
 
 - **🔐 Authenticated encryption**: **AES-256-GCM** (default) or **ChaCha20-Poly1305**, streamed through [`minio/sio`](https://github.com/minio/sio) (DARE format).
-- **🔑 Key derivation**: **Argon2id**, with parameters written into the file so they can be strengthened later without breaking old files.
+- **🔑 Key derivation**: **Argon2id** with selectable `standard`, `strong`, or `paranoid` profiles.
 - **⚡ Constant memory**: encrypting a 100 GB file uses only a few megabytes of RAM.
 - **📦 Compression**: optional **gzip** before encryption.
-- **😱 Parano mode**: cascaded double encryption (ChaCha20 outside, AES inside) with two independently derived keys via HKDF.
+- **😱 Parano modes**: cascaded double encryption (`chacha→aes` or `aes→chacha`) with two independently derived keys via HKDF.
+- **🧾 Optional metadata**: `minimal` mode stores basename + timestamp (minute precision), encrypted in the payload.
+- **🏎️ Built-in benchmark**: `-mode bench` recommends a KDF profile for the current machine.
 - **🔗 Key-bound header**: version, flags, algorithm, Argon2 parameters and salt all feed the key derivation. Changing a single header byte makes decryption fail.
 
 ## 📥 Installation
@@ -248,18 +261,21 @@ chiffremento
 ### Command line
 
 ```bash
-chiffremento -mode <enc|dec|verify|info> -in <file> [options]
+chiffremento -mode <enc|dec|verify|info|bench> [-in <file>] [options]
 ```
 
 The password is **never an argument**. It is prompted for with masked input, or read from standard input when that is not a terminal.
 
 | Flag | Description |
 | :--- | :--- |
-| `-mode` | **Required.** `enc` (encrypt), `dec` (decrypt), `verify` (check without writing anything) or `info` (inspect the header). |
-| `-in` | **Required.** Input file path. |
+| `-mode` | **Required.** `enc` (encrypt), `dec` (decrypt), `verify` (check without writing anything), `info` (inspect the header), or `bench` (measure/recommend KDF). |
+| `-in` | **Required** except for `bench`. Input file path. |
 | `-comp` | *(enc)* Enables gzip compression. |
+| `-kdf` | *(enc)* Argon2id profile: `standard`, `fort`, `parano`. |
+| `-meta` | *(enc)* Metadata mode: `none` (default) or `minimal` (encrypted basename + timestamp). |
 | `-chacha` | *(enc)* Uses ChaCha20-Poly1305 instead of AES-GCM. |
-| `-parano` | *(enc)* Cascaded double encryption. Mutually exclusive with `-chacha`. |
+| `-parano` | *(enc)* Cascaded `chacha→aes` encryption. Mutually exclusive with `-chacha` and `-parano2`. |
+| `-parano2` | *(enc)* Cascaded `aes→chacha` encryption. Mutually exclusive with `-chacha` and `-parano`. |
 | `-version` | Prints the version. |
 
 ### Examples
@@ -292,6 +308,12 @@ Parano mode with compression:
 
 ```bash
 chiffremento -mode enc -in backup.db -parano -comp
+```
+
+Local KDF benchmark:
+
+```bash
+chiffremento -mode bench
 ```
 
 From a script, supply the password on standard input:
@@ -328,7 +350,7 @@ What it does **not** protect:
 
 - the **filename**: `secret.pdf.chto` advertises its own contents;
 - the **size**: it tracks the original file's size within a few dozen bytes;
-- **metadata**: original timestamps and permissions are not preserved;
+- **metadata**: by default they are not preserved; with `-meta minimal`, encrypted basename + minimized timestamp are embedded;
 - with `-comp`, the content's **compressibility** leaks through the final size;
 - a **compromised machine**: keyloggers, memory read by another process, or the original file still sitting on disk after encryption.
 

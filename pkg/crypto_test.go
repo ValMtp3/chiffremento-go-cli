@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // write crée un fichier de test et renvoie son chemin.
@@ -31,6 +32,8 @@ func TestRoundTrip(t *testing.T) {
 		{"chacha+gzip", Options{Algo: AlgoChaCha, Compress: true}},
 		{"cascade", Options{Algo: AlgoCascade}},
 		{"cascade+gzip", Options{Algo: AlgoCascade, Compress: true}},
+		{"cascade-reverse", Options{Algo: AlgoCascadeReverse}},
+		{"cascade-reverse+gzip", Options{Algo: AlgoCascadeReverse, Compress: true}},
 		{"algo par défaut", Options{}},
 	}
 
@@ -450,7 +453,7 @@ func TestCompatibiliteV1(t *testing.T) {
 	for name, attendu := range cases {
 		t.Run(name, func(t *testing.T) {
 			src := filepath.Join("testdata", name)
-			version, algo, kdf, _, err := Inspect(src)
+			version, algo, kdf, _, _, err := Inspect(src)
 			if err != nil {
 				t.Fatalf("inspection: %v", err)
 			}
@@ -481,7 +484,57 @@ func TestEncryptEcritToujoursDuV2(t *testing.T) {
 	if err := Encrypt(in, enc, []byte("pw"), Options{}); err != nil {
 		t.Fatal(err)
 	}
-	version, _, kdf, _, err := Inspect(enc)
+
+	func TestKDFProfileDansHeader(t *testing.T) {
+		dir := t.TempDir()
+		in := write(t, dir, "clair.txt", []byte("x"))
+		enc := filepath.Join(dir, "out.chto")
+		if err := Encrypt(in, enc, []byte("pw"), Options{KDFProfile: KDFParano}); err != nil {
+			t.Fatal(err)
+		}
+		_, _, kdf, _, _, err := Inspect(enc)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(kdf, "m=512MiB t=5 p=4") {
+			t.Errorf("profil KDF inattendu: %s", kdf)
+		}
+	}
+
+	func TestMetadataMinimales(t *testing.T) {
+		dir := t.TempDir()
+		in := write(t, dir, "rapport-secret.txt", []byte("payload"))
+		mtime := time.Unix(1717171717, 0)
+		if err := os.Chtimes(in, mtime, mtime); err != nil {
+			t.Fatal(err)
+		}
+		enc := filepath.Join(dir, "out.chto")
+		dec := filepath.Join(dir, "out.txt")
+
+		if err := Encrypt(in, enc, []byte("pw"), Options{Metadata: MetadataMinimal}); err != nil {
+			t.Fatal(err)
+		}
+		_, _, _, metadata, _, err := Inspect(enc)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if metadata != string(MetadataMinimal) {
+			t.Fatalf("metadata attendue %q, obtenue %q", MetadataMinimal, metadata)
+		}
+		if err := Decrypt(enc, dec, []byte("pw"), Options{}); err != nil {
+			t.Fatal(err)
+		}
+		info, err := os.Stat(dec)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got := info.ModTime().UTC().Unix()
+		want := mtime.UTC().Truncate(time.Minute).Unix()
+		if got != want {
+			t.Fatalf("mtime restauré %d, attendu %d", got, want)
+		}
+	}
+	version, _, kdf, _, _, err := Inspect(enc)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -504,7 +557,7 @@ func TestProtocolSafety_Tripwire(t *testing.T) {
 		expectedHeaderV1   = 27 // 8+1+1+1+16
 		expectedHeaderV2   = 36 // 8+1+1+1+4+4+1+16
 		expectedMagic      = "CHFRMT03"
-		expectedKnownFlags = FlagCompressed
+		expectedKnownFlags = FlagCompressed | FlagMetaMin
 	)
 
 	if currentVersion < expectedVersion {

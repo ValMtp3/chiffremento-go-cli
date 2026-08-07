@@ -58,23 +58,27 @@ func TestValidateTarget(t *testing.T) {
 }
 
 func TestChooseAlgo(t *testing.T) {
-	if _, err := chooseAlgo(true, true); err == nil {
+	if _, err := chooseAlgo(true, true, false); err == nil {
 		t.Error("-chacha et -parano combinés devraient être refusés")
 	}
+	if _, err := chooseAlgo(false, true, true); err == nil {
+		t.Error("-parano et -parano2 combinés devraient être refusés")
+	}
 	for _, c := range []struct {
-		chacha, parano bool
-		want           byte
+		chacha, parano, parano2 bool
+		want                     byte
 	}{
-		{false, false, 1}, // aes
-		{true, false, 2},  // chacha
-		{false, true, 3},  // cascade
+		{false, false, false, 1}, // aes
+		{true, false, false, 2},  // chacha
+		{false, true, false, 3},  // cascade
+		{false, false, true, 4},  // cascade inversée
 	} {
-		got, err := chooseAlgo(c.chacha, c.parano)
+		got, err := chooseAlgo(c.chacha, c.parano, c.parano2)
 		if err != nil {
 			t.Fatal(err)
 		}
 		if got != c.want {
-			t.Errorf("chooseAlgo(%v, %v) = %d, attendu %d", c.chacha, c.parano, got, c.want)
+			t.Errorf("chooseAlgo(%v, %v, %v) = %d, attendu %d", c.chacha, c.parano, c.parano2, got, c.want)
 		}
 	}
 }

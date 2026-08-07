@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 
 	"github.com/minio/sio"
 )
@@ -22,6 +23,14 @@ type Options struct {
 
 	// Compress active gzip avant chiffrement. Ignoré au déchiffrement.
 	Compress bool
+
+	// KDFProfile sélectionne le profil Argon2 utilisé au chiffrement.
+	// Valeurs: standard, fort, parano. Vide => standard.
+	KDFProfile KDFProfile
+
+	// Metadata contrôle les metadata optionnelles stockées dans le flux chiffré.
+	// Valeurs: none (défaut), minimal.
+	Metadata MetadataMode
 
 	// Progress, si non nil, est appelé au fil de la copie avec le nombre
 	// d'octets d'entrée déjà traités et la taille totale de l'entrée.
@@ -201,6 +210,24 @@ func initCipherWriter(dst io.Writer, algo byte, keys *keySet) (io.WriteCloser, e
 		}
 		return &cascadeWriteCloser{inner: innerWriter, outer: outerWriter}, nil
 
+	case AlgoCascadeReverse:
+		outerWriter, err := sio.EncryptWriter(dst, sio.Config{
+			Key:          keys.Outer,
+			CipherSuites: []byte{sio.AES_GCM},
+		})
+		if err != nil {
+			return nil, fmt.Errorf("création du flux externe: %w", err)
+		}
+		innerWriter, err := sio.EncryptWriter(writerOnly{outerWriter}, sio.Config{
+			Key:          keys.Inner,
+			CipherSuites: []byte{sio.CHACHA20_POLY1305},
+		})
+		if err != nil {
+			outerWriter.Close()
+			return nil, fmt.Errorf("création du flux interne: %w", err)
+		}
+		return &cascadeWriteCloser{inner: innerWriter, outer: outerWriter}, nil
+
 	case AlgoChaCha:
 		return sio.EncryptWriter(dst, sio.Config{
 			Key:          keys.Key,
@@ -233,6 +260,19 @@ func initCipherReader(src io.Reader, algo byte, keys *keySet) (io.Reader, error)
 			CipherSuites: []byte{sio.AES_GCM},
 		})
 
+	case AlgoCascadeReverse:
+		outerReader, err := sio.DecryptReader(src, sio.Config{
+			Key:          keys.Outer,
+			CipherSuites: []byte{sio.AES_GCM},
+		})
+		if err != nil {
+			return nil, fmt.Errorf("init du déchiffrement externe: %w", err)
+		}
+		return sio.DecryptReader(outerReader, sio.Config{
+			Key:          keys.Inner,
+			CipherSuites: []byte{sio.CHACHA20_POLY1305},
+		})
+
 	case AlgoChaCha:
 		return sio.DecryptReader(src, sio.Config{
 			Key:          keys.Key,
@@ -260,6 +300,14 @@ func Encrypt(inputPath, outputPath string, password []byte, opts Options) error 
 		algo = AlgoAES
 	}
 	if err := validateAlgo(algo); err != nil {
+		return err
+	}
+	profile, err := ParseKDFProfile(string(opts.KDFProfile))
+	if err != nil {
+		return err
+	}
+	metaMode, err := ParseMetadataMode(string(opts.Metadata))
+	if err != nil {
 		return err
 	}
 
@@ -291,11 +339,14 @@ func Encrypt(inputPath, outputPath string, password []byte, opts Options) error 
 	h := &header{
 		Version: currentVersion,
 		Algo:    algo,
-		Argon:   defaultArgonParams(),
+		Argon:   profile.argonParams(),
 		Salt:    salt,
 	}
 	if opts.Compress {
 		h.Flags |= FlagCompressed
+	}
+	if metaMode == MetadataMinimal {
+		h.Flags |= FlagMetaMin
 	}
 	if _, err := out.f.Write(h.marshal()); err != nil {
 		return fmt.Errorf("écriture du header: %w", err)
@@ -325,6 +376,18 @@ func Encrypt(inputPath, outputPath string, password []byte, opts Options) error 
 
 	src := withProgress(inFile, info.Size(), opts.Progress)
 
+	if metaMode == MetadataMinimal {
+		metaBlob, err := marshalMinimalMetadata(metadataForInput(inputPath, info.ModTime()))
+		if err != nil {
+			cipherWriter.Close()
+			return err
+		}
+		if _, err := dst.Write(metaBlob); err != nil {
+			cipherWriter.Close()
+			return fmt.Errorf("écriture des metadata: %w", err)
+		}
+	}
+
 	if _, err := io.Copy(dst, src); err != nil {
 		cipherWriter.Close()
 		return fmt.Errorf("chiffrement: %w", err)
@@ -353,7 +416,7 @@ func Encrypt(inputPath, outputPath string, password []byte, opts Options) error 
 func Decrypt(inputPath, outputPath string, password []byte, opts Options) error {
 	// Le flux est monté avant que le fichier de sortie n'existe : un en-tête
 	// invalide ou un mauvais mot de passe échoue donc sans rien créer.
-	src, closeSrc, err := openDecrypted(inputPath, password, opts)
+	src, meta, closeSrc, err := openDecrypted(inputPath, password, opts)
 	if err != nil {
 		return err
 	}
@@ -368,15 +431,21 @@ func Decrypt(inputPath, outputPath string, password []byte, opts Options) error 
 	if _, err := io.Copy(out.f, src); err != nil {
 		return fmt.Errorf("déchiffrement: %w", err)
 	}
-
-	return out.commit()
+	if err := out.commit(); err != nil {
+		return err
+	}
+	if meta != nil && meta.ModTimeSec > 0 {
+		t := time.Unix(meta.ModTimeSec, 0)
+		_ = os.Chtimes(outputPath, t, t)
+	}
+	return nil
 }
 
 // Verify contrôle qu'un fichier est intact et déchiffrable, sans rien écrire
 // sur le disque : tout part vers io.Discard. Utile pour vérifier une
 // sauvegarde sans avoir la place — ou l'envie — de l'extraire.
 func Verify(inputPath string, password []byte, opts Options) error {
-	src, closeSrc, err := openDecrypted(inputPath, password, opts)
+	src, _, closeSrc, err := openDecrypted(inputPath, password, opts)
 	if err != nil {
 		return err
 	}
@@ -391,10 +460,10 @@ func Verify(inputPath string, password []byte, opts Options) error {
 // openDecrypted monte la chaîne de lecture (fichier → déchiffrement →
 // décompression) et renvoie de quoi la refermer. Partagé par Decrypt et
 // Verify pour qu'ils ne puissent pas diverger.
-func openDecrypted(inputPath string, password []byte, opts Options) (io.Reader, func(), error) {
+func openDecrypted(inputPath string, password []byte, opts Options) (io.Reader, *fileMetadata, func(), error) {
 	inFile, err := os.Open(inputPath)
 	if err != nil {
-		return nil, nil, fmt.Errorf("lecture: %w", err)
+		return nil, nil, nil, fmt.Errorf("lecture: %w", err)
 	}
 	closers := []func(){func() { inFile.Close() }}
 	closeAll := func() {
@@ -402,9 +471,9 @@ func openDecrypted(inputPath string, password []byte, opts Options) (io.Reader, 
 			closers[i]()
 		}
 	}
-	fail := func(err error) (io.Reader, func(), error) {
+	fail := func(err error) (io.Reader, *fileMetadata, func(), error) {
 		closeAll()
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 
 	info, err := inFile.Stat()
@@ -439,31 +508,41 @@ func openDecrypted(inputPath string, password []byte, opts Options) (io.Reader, 
 		closers = append(closers, func() { gzipReader.Close() })
 		src = gzipReader
 	}
-
-	return src, closeAll, nil
+	var meta *fileMetadata
+	if h.metadataMinimal() {
+		meta, err = unmarshalMinimalMetadata(src)
+		if err != nil {
+			return fail(err)
+		}
+	}
+	return src, meta, closeAll, nil
 }
 
 // Inspect lit l'en-tête d'un .chto sans le déchiffrer, pour que l'interface
 // puisse annoncer les paramètres réels du fichier avant de demander le mot de
 // passe.
-func Inspect(path string) (version byte, algo string, kdf string, compressed bool, err error) {
+func Inspect(path string) (version byte, algo string, kdf string, metadata string, compressed bool, err error) {
 	f, err := os.Open(path)
 	if err != nil {
-		return 0, "", "", false, fmt.Errorf("lecture: %w", err)
+		return 0, "", "", "", false, fmt.Errorf("lecture: %w", err)
 	}
 	defer f.Close()
 
 	h, err := readHeader(f)
 	if err != nil {
-		return 0, "", "", false, err
+		return 0, "", "", "", false, err
 	}
-	return h.Version, AlgoName(h.Algo), "argon2id  " + h.Argon.String(), h.compressed(), nil
+	meta := string(MetadataNone)
+	if h.metadataMinimal() {
+		meta = string(MetadataMinimal)
+	}
+	return h.Version, AlgoName(h.Algo), "argon2id  " + h.Argon.String(), meta, h.compressed(), nil
 }
 
 // DefaultKDFLabel décrit les paramètres Argon2 utilisés pour les nouveaux
 // fichiers, à afficher dans l'interface.
 func DefaultKDFLabel() string {
-	return "argon2id  " + defaultArgonParams().String()
+	return KDFLabelForProfile(KDFStandard)
 }
 
 func withProgress(r io.Reader, total int64, fn func(done, total int64)) io.Reader {

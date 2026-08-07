@@ -93,6 +93,8 @@ func validateTarget(s, action string) error {
 func tuiEncrypt(path string) error {
 	algo := pkg.AlgoAES
 	compress := false
+	kdf := pkg.KDFStandard
+	metadata := pkg.MetadataNone
 	password, confirm := "", ""
 
 	form := huh.NewForm(
@@ -104,8 +106,18 @@ func tuiEncrypt(path string) error {
 					huh.NewOption("aes-256-gcm  (défaut)", pkg.AlgoAES),
 					huh.NewOption("chacha20-poly1305", pkg.AlgoChaCha),
 					huh.NewOption("cascade  chacha20 + aes  (parano)", pkg.AlgoCascade),
+					huh.NewOption("cascade  aes + chacha  (parano2)", pkg.AlgoCascadeReverse),
 				).
 				Value(&algo),
+
+			huh.NewSelect[pkg.KDFProfile]().
+				Title("profil KDF").
+				Options(
+					huh.NewOption("standard  (rapide)", pkg.KDFStandard),
+					huh.NewOption("fort", pkg.KDFFort),
+					huh.NewOption("parano  (plus lent)", pkg.KDFParano),
+				).
+				Value(&kdf),
 
 			huh.NewConfirm().
 				Title("compresser avant chiffrement").
@@ -113,6 +125,15 @@ func tuiEncrypt(path string) error {
 				Affirmative("oui").
 				Negative("non").
 				Value(&compress),
+
+			huh.NewSelect[pkg.MetadataMode]().
+				Title("metadata").
+				Description("none: rien stocker, minimal: nom de base + timestamp (chiffrés)").
+				Options(
+					huh.NewOption("none", pkg.MetadataNone),
+					huh.NewOption("minimal", pkg.MetadataMinimal),
+				).
+				Value(&metadata),
 		),
 		huh.NewGroup(
 			huh.NewInput().
@@ -148,13 +169,13 @@ func tuiEncrypt(path string) error {
 		In:      path,
 		Out:     out,
 		AEAD:    pkg.AlgoName(algo),
-		KDF:     pkg.DefaultKDFLabel(),
+		KDF:     pkg.KDFLabelForProfile(kdf),
 		Salt:    "16 o aléatoires · en-tête lié à la clé",
 		Success: out,
 	}
 	return runJob(info, func(p func(int64, int64)) error {
 		return pkg.Encrypt(path, out, []byte(password), pkg.Options{
-			Algo: algo, Compress: compress, Progress: p,
+			Algo: algo, Compress: compress, KDFProfile: kdf, Metadata: metadata, Progress: p,
 		})
 	})
 }
@@ -162,7 +183,7 @@ func tuiEncrypt(path string) error {
 func tuiDecrypt(path string) error {
 	// L'en-tête est lisible sans mot de passe : on affiche les vrais
 	// paramètres du fichier avant de demander quoi que ce soit.
-	version, algo, kdf, compressed, err := pkg.Inspect(path)
+	version, algo, kdf, metadata, compressed, err := pkg.Inspect(path)
 	if err != nil {
 		return err
 	}
@@ -171,6 +192,7 @@ func tuiDecrypt(path string) error {
 	if compressed {
 		details += " · compressé"
 	}
+	details += " · metadata " + metadata
 	if version == 1 {
 		details += "\nfichier produit par une version 1.x : lecture seule, il sera relu tel quel"
 	}
@@ -207,7 +229,7 @@ func tuiDecrypt(path string) error {
 }
 
 func tuiVerify(path string) error {
-	version, algo, kdf, compressed, err := pkg.Inspect(path)
+	version, algo, kdf, metadata, compressed, err := pkg.Inspect(path)
 	if err != nil {
 		return err
 	}
@@ -216,6 +238,7 @@ func tuiVerify(path string) error {
 	if compressed {
 		details += " · compressé"
 	}
+	details += " · metadata " + metadata
 	details += "\nrien ne sera écrit sur le disque"
 
 	password := ""
