@@ -60,7 +60,7 @@ func mainForm(action *string, path *string) *huh.Form {
 			huh.NewInput().
 				Key("path").
 				Title("fichier").
-				Placeholder("chemin du fichier").
+				Placeholder("chemin du fichier ou glisser deposer le fichier/dossier").
 				Value(path).
 				Validate(func(s string) error { return validateTarget(s, *action) }),
 		),
