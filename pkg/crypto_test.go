@@ -26,12 +26,13 @@ func TestRoundTrip(t *testing.T) {
 		opts Options
 	}{
 		{"aes", Options{Algo: AlgoAES}},
-		{"aes+gzip", Options{Algo: AlgoAES, Compress: true}},
+		{"aes+zstd", Options{Algo: AlgoAES, Comp: CompZstd}},
 		{"chacha", Options{Algo: AlgoChaCha}},
-		{"chacha+gzip", Options{Algo: AlgoChaCha, Compress: true}},
+		{"chacha+zstd", Options{Algo: AlgoChaCha, Comp: CompZstd}},
 		{"cascade", Options{Algo: AlgoCascade}},
-		{"cascade+gzip", Options{Algo: AlgoCascade, Compress: true}},
+		{"cascade+zstd", Options{Algo: AlgoCascade, Comp: CompZstd}},
 		{"algo par défaut", Options{}},
+		{"remplissage", Options{Algo: AlgoAES, Pad: true}},
 	}
 
 	content := bytes.Repeat([]byte("Donnée répétitive, compressible et accentuée. "), 50)
@@ -169,7 +170,9 @@ func TestHeaderFalsifie(t *testing.T) {
 		{"argon time falsifié", magicSize + 3, 9},
 		{"argon memory falsifiée", magicSize + 7, 9},
 		{"argon parallelism falsifié", magicSize + 11, 9},
-		{"sel falsifié", magicSize + 12, 0xFF},
+		{"algo de compression inconnu", magicSize + 12, 0xFF},
+		{"algo de compression substitué", magicSize + 12, CompGzip},
+		{"sel falsifié", magicSize + 13, 0xFF},
 	}
 
 	for _, c := range cases {
@@ -450,14 +453,14 @@ func TestCompatibiliteV1(t *testing.T) {
 	for name, attendu := range cases {
 		t.Run(name, func(t *testing.T) {
 			src := filepath.Join("testdata", name)
-			version, algo, kdf, _, err := Inspect(src)
+			d, err := Inspect(src)
 			if err != nil {
 				t.Fatalf("inspection: %v", err)
 			}
-			if version != versionV1 {
-				t.Fatalf("version %d, attendu %d", version, versionV1)
+			if d.Version != versionV1 {
+				t.Fatalf("version %d, attendu %d", d.Version, versionV1)
 			}
-			t.Logf("%s : %s, %s", name, algo, kdf)
+			t.Logf("%s : %s, %s", name, d.Algo, d.KDF)
 
 			out := filepath.Join(t.TempDir(), "out.txt")
 			if err := Decrypt(src, out, []byte(password), Options{}); err != nil {
@@ -474,22 +477,22 @@ func TestCompatibiliteV1(t *testing.T) {
 	}
 }
 
-func TestEncryptEcritToujoursDuV2(t *testing.T) {
+func TestEncryptEcritDuV3AvecArgonRenforce(t *testing.T) {
 	dir := t.TempDir()
 	in := write(t, dir, "clair.txt", []byte("x"))
 	enc := filepath.Join(dir, "out.chto")
 	if err := Encrypt(in, enc, []byte("pw"), Options{}); err != nil {
 		t.Fatal(err)
 	}
-	version, _, kdf, _, err := Inspect(enc)
+	d, err := Inspect(enc)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if version != versionV2 {
-		t.Errorf("version écrite %d, attendu %d", version, versionV2)
+	if d.Version != versionV3 {
+		t.Errorf("version écrite %d, attendu %d", d.Version, versionV3)
 	}
-	if !strings.Contains(kdf, "m=256MiB") {
-		t.Errorf("paramètres Argon2 inattendus dans le header: %s", kdf)
+	if !strings.Contains(d.KDF, "m=256MiB") {
+		t.Errorf("paramètres Argon2 inattendus dans le header: %s", d.KDF)
 	}
 }
 
@@ -500,11 +503,15 @@ func TestEncryptEcritToujoursDuV2(t *testing.T) {
 // mérite un bump de version.
 func TestProtocolSafety_Tripwire(t *testing.T) {
 	const (
-		expectedVersion    = 2
-		expectedHeaderV1   = 27 // 8+1+1+1+16
-		expectedHeaderV2   = 36 // 8+1+1+1+4+4+1+16
-		expectedMagic      = "CHFRMT03"
-		expectedKnownFlags = FlagCompressed
+		expectedVersion  = 3
+		expectedHeaderV1 = 27 // 8+1+1+1+16
+		expectedHeaderV2 = 36 // 8+1+1+1+4+4+1+16
+		expectedHeaderV3 = 37 // 8+1+1+1+4+4+1+1+16
+		expectedMagic    = "CHFRMT03"
+		// FlagArchive (bit1, dossiers) et FlagPadded (bit2, taille masquée). Un
+		// binaire antérieur refuse un bit inconnu au lieu de mal interpréter le
+		// fichier, et ce binaire relit tous les .chto v1, v2 et v3.
+		expectedKnownFlags = FlagCompressed | FlagArchive | FlagPadded
 	)
 
 	if currentVersion < expectedVersion {
@@ -518,6 +525,10 @@ func TestProtocolSafety_Tripwire(t *testing.T) {
 	}
 	if headerSizeV2 != expectedHeaderV2 {
 		t.Logf("⚠️  la taille du header v2 a changé (avant: %d, maintenant: %d)", expectedHeaderV2, headerSizeV2)
+		structureChanged = true
+	}
+	if headerSizeV3 != expectedHeaderV3 {
+		t.Logf("⚠️  la taille du header v3 a changé (avant: %d, maintenant: %d)", expectedHeaderV3, headerSizeV3)
 		structureChanged = true
 	}
 	if magicNumber != expectedMagic {
@@ -540,8 +551,13 @@ func TestProtocolSafety_Tripwire(t *testing.T) {
 	if versionV1 != 1 {
 		t.Error("l'identifiant de la version 1 ne doit pas changer")
 	}
-	if _, err := os.Stat(filepath.Join("testdata", "v1_aes.chto")); err != nil {
-		t.Error("les fichiers v1 de référence ont disparu de testdata/ : la compatibilité n'est plus testée")
+	if versionV2 != 2 {
+		t.Error("l'identifiant de la version 2 ne doit pas changer")
+	}
+	for _, ref := range []string{"v1_aes.chto", "v2_aes.chto"} {
+		if _, err := os.Stat(filepath.Join("testdata", ref)); err != nil {
+			t.Errorf("%s a disparu de testdata/ : la compatibilité n'est plus testée", ref)
+		}
 	}
 }
 
@@ -553,7 +569,7 @@ func TestVerify(t *testing.T) {
 	in := write(t, dir, "clair.txt", content)
 	enc := filepath.Join(dir, "clair.txt.chto")
 
-	if err := Encrypt(in, enc, []byte("pw"), Options{Compress: true}); err != nil {
+	if err := Encrypt(in, enc, []byte("pw"), Options{Comp: CompZstd}); err != nil {
 		t.Fatal(err)
 	}
 

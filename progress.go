@@ -33,8 +33,6 @@ const (
 	// la progression réelle (voir displayRatio). Aucun effet en mode CLI, qui
 	// n'utilise pas cet écran.
 	minDuration = 4 * time.Second
-
-	appVersion = "v2.0"
 )
 
 type tickMsg time.Time
@@ -174,7 +172,7 @@ func (m *progressModel) View() string {
 	title := styleDim.Render("chiffremento ") + styleAccent.Render(m.info.Action)
 	box := styleBox.Width(contentWidth).Render(b.String())
 	return "\n" + lipgloss.JoinVertical(lipgloss.Left,
-		"  "+title+styleFaint.Render("  "+appVersion),
+		"  "+title+styleFaint.Render("  "+version),
 		box,
 	) + "\n"
 }

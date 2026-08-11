@@ -38,3 +38,19 @@ jobs:
       # l'animation de progression.
       - name: Tests
         run: go test -race ./...
+
+      # Les deux fonctions qui lisent des octets venus de l'extérieur. Une
+      # courte passe à chaque CI : le corpus s'accumule dans le cache du
+      # runner, et une régression de validation se voit tout de suite.
+      # -parallel borne les workers : à 10, l'arrêt du fuzzer part parfois en
+      # « context deadline exceeded » sans qu'aucun cas ne soit trouvé.
+      - name: Fuzzing de l'en-tête
+        run: go test ./pkg -run '^$' -fuzz FuzzReadHeader -fuzztime 30s -parallel 4
+
+      - name: Fuzzing des chemins d'archive
+        run: go test ./pkg -run '^$' -fuzz FuzzSafeArchivePath -fuzztime 30s -parallel 4
+
+      # Une seule itération : on ne mesure pas une performance fiable sur un
+      # runner partagé, on vérifie que les benchmarks compilent et tournent.
+      - name: Benchmarks (fumée)
+        run: go test ./pkg -run '^$' -bench . -benchtime 1x

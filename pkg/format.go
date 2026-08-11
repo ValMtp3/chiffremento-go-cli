@@ -10,45 +10,113 @@ import (
 // Format de fichier .chto
 //
 //	magic       8   "CHFRMT03"
-//	version     1   1 (legacy) ou 2 (courant)
-//	flags       1   bit0 = compressé
+//	version     1   1 et 2 (anciens), 3 (courant)
+//	flags       1   bit0 = compressé (v1/v2), bit1 = archive tar, bit2 = rempli
 //	algoID      1   1=AES-GCM, 2=ChaCha20-Poly1305, 3=Cascade
-//	--- v2 uniquement ---------------------------------------
+//	--- v2 et v3 --------------------------------------------
 //	argonTime   4   uint32 big-endian
 //	argonMemory 4   uint32 big-endian, en KiB
 //	argonPar    1   uint8
+//	--- v3 uniquement ---------------------------------------
+//	compAlgo    1   0=aucune, 1=gzip (lecture seule), 2=zstd
 //	---------------------------------------------------------
 //	salt       16
 //
-// Le magic est resté identique entre v1 et v2 : c'est l'octet de version qui
-// aiguille la lecture. Changer le magic aurait fait échouer les fichiers v1
-// avant même qu'on puisse lire leur version.
+// Le magic est resté identique d'une version à l'autre : c'est l'octet de
+// version qui aiguille la lecture. Changer le magic aurait fait échouer les
+// anciens fichiers avant même qu'on puisse lire leur version.
+//
+// La v3 remplace le drapeau de compression par un champ : un booléen sur un bit
+// ne pouvait pas distinguer gzip de zstd, et empiler un bit par algorithme
+// rendait possibles des états contradictoires. En v1 et v2, bit0 signifiait
+// gzip — c'est le seul sens qu'il ait jamais eu, donc la relecture est directe.
 const (
 	magicNumber = "CHFRMT03"
 	magicSize   = len(magicNumber)
 
-	versionSize = 1
-	flagsSize   = 1
-	algoIDSize  = 1
-	saltSize    = 16
+	versionSize  = 1
+	flagsSize    = 1
+	algoIDSize   = 1
+	compAlgoSize = 1
+	saltSize     = 16
 
 	argonParamsSize = 4 + 4 + 1
 
 	headerSizeV1 = magicSize + versionSize + flagsSize + algoIDSize + saltSize // 27
 	headerSizeV2 = headerSizeV1 + argonParamsSize                              // 36
+	headerSizeV3 = headerSizeV2 + compAlgoSize                                 // 37
 
 	versionV1      = byte(1)
 	versionV2      = byte(2)
-	currentVersion = versionV2
+	versionV3      = byte(3)
+	currentVersion = versionV3
 )
 
 // Drapeaux du header. Tout bit non listé dans knownFlags est refusé à la
 // lecture : ça garde la place libre pour de futures options sans qu'un vieux
 // binaire n'interprète un fichier récent de travers.
 const (
+	// FlagCompressed n'est plus écrit depuis la v3, où compAlgo fait foi. Il
+	// reste lu pour les fichiers v1 et v2, où il signifie gzip.
 	FlagCompressed = byte(1 << 0)
-	knownFlags     = FlagCompressed
+	// FlagArchive : la charge utile est un tar, produit à partir d'un dossier.
+	// Un binaire antérieur refusera le fichier au lieu d'écrire un tar brut
+	// sous un nom de dossier, puisque tout bit inconnu est rejeté.
+	FlagArchive = byte(1 << 1)
+	// FlagPadded : la charge utile commence par un en-tête de remplissage
+	// (voir pad.go), destiné à masquer la taille réelle du clair.
+	FlagPadded = byte(1 << 2)
+	knownFlags = FlagCompressed | FlagArchive | FlagPadded
 )
+
+// Algorithmes de compression, tels qu'inscrits dans le champ compAlgo de la v3.
+//
+// CompGzip est en lecture seule : il n'est plus produit depuis que zstd le
+// remplace — mesuré ~8× plus rapide à ratio comparable — mais il reste lu, sans
+// quoi les .chto v1 et v2 compressés deviendraient illisibles. L'identifiant
+// n'est pas réattribué : un fichier v3 annonçant gzip, produit par une version
+// intermédiaire, doit continuer de se relire.
+const (
+	CompNone = byte(0)
+	CompGzip = byte(1)
+	CompZstd = byte(2)
+)
+
+// CompName rend un algorithme de compression lisible pour l'interface.
+func CompName(c byte) string {
+	switch c {
+	case CompNone:
+		return "aucune"
+	case CompGzip:
+		return "gzip (ancien format, lecture seule)"
+	case CompZstd:
+		return "zstd"
+	default:
+		return "inconnue"
+	}
+}
+
+// validateComp accepte tout ce qui est lisible, gzip compris.
+func validateComp(c byte) error {
+	switch c {
+	case CompNone, CompGzip, CompZstd:
+		return nil
+	default:
+		return fmt.Errorf("algorithme de compression inconnu : %d", c)
+	}
+}
+
+// validateCompWrite est plus strict : il n'accepte que ce qu'on produit encore.
+func validateCompWrite(c byte) error {
+	switch c {
+	case CompNone, CompZstd:
+		return nil
+	case CompGzip:
+		return errors.New("gzip n'est plus produit : zstd le remplace, environ huit fois plus rapide à taille comparable (les anciens fichiers gzip restent déchiffrables)")
+	default:
+		return fmt.Errorf("algorithme de compression inconnu : %d", c)
+	}
+}
 
 // Identifiants d'algorithme.
 const (
@@ -132,11 +200,16 @@ type header struct {
 	Flags   byte
 	Algo    byte
 	Argon   argonParams
-	Salt    []byte
-	Raw     []byte
+	// Comp est l'algorithme de compression. En v1 et v2 il est déduit de
+	// FlagCompressed, en v3 il est lu dans le champ compAlgo.
+	Comp byte
+	Salt []byte
+	Raw  []byte
 }
 
-func (h *header) compressed() bool { return h.Flags&FlagCompressed != 0 }
+func (h *header) compressed() bool { return h.Comp != CompNone }
+func (h *header) archive() bool    { return h.Flags&FlagArchive != 0 }
+func (h *header) padded() bool     { return h.Flags&FlagPadded != 0 }
 
 // AlgoName rend un identifiant d'algorithme lisible pour l'interface.
 func AlgoName(algo byte) string {
@@ -163,13 +236,16 @@ func validateAlgo(algo byte) error {
 
 // marshal sérialise l'en-tête et mémorise le résultat dans h.Raw.
 func (h *header) marshal() []byte {
-	buf := make([]byte, 0, headerSizeV2)
+	buf := make([]byte, 0, headerSizeV3)
 	buf = append(buf, magicNumber...)
 	buf = append(buf, h.Version, h.Flags, h.Algo)
 	if h.Version >= versionV2 {
 		buf = binary.BigEndian.AppendUint32(buf, h.Argon.Time)
 		buf = binary.BigEndian.AppendUint32(buf, h.Argon.Memory)
 		buf = append(buf, h.Argon.Threads)
+	}
+	if h.Version >= versionV3 {
+		buf = append(buf, h.Comp)
 	}
 	buf = append(buf, h.Salt...)
 	h.Raw = buf
@@ -204,9 +280,11 @@ func readHeader(r io.Reader) (*header, error) {
 		remaining = saltSize
 	case versionV2:
 		remaining = argonParamsSize + saltSize
+	case versionV3:
+		remaining = argonParamsSize + compAlgoSize + saltSize
 	default:
-		return nil, fmt.Errorf("version de format non supportée : %d (ce binaire lit les versions %d et %d)",
-			h.Version, versionV1, versionV2)
+		return nil, fmt.Errorf("version de format non supportée : %d (ce binaire lit les versions %d à %d)",
+			h.Version, versionV1, versionV3)
 	}
 
 	rest := make([]byte, remaining)
@@ -222,6 +300,13 @@ func readHeader(r io.Reader) (*header, error) {
 			Memory:  binary.BigEndian.Uint32(rest[4:8]),
 			Threads: rest[8],
 		}
+	}
+
+	// Avant la v3, la compression était un unique bit et signifiait gzip.
+	if h.Version >= versionV3 {
+		h.Comp = rest[argonParamsSize]
+	} else if h.Flags&FlagCompressed != 0 {
+		h.Comp = CompGzip
 	}
 	h.Salt = rest[remaining-saltSize:]
 	h.Raw = append(prefix, rest...)
@@ -249,6 +334,21 @@ func (h *header) finalize() error {
 	}
 	if h.Flags&^knownFlags != 0 {
 		return fmt.Errorf("drapeaux inconnus dans le header : 0x%02x", h.Flags&^knownFlags)
+	}
+	if err := validateComp(h.Comp); err != nil {
+		return err
+	}
+	// En v3, la compression est décrite par compAlgo seul. Un fichier qui porte
+	// les deux est contradictoire : soit il a été bricolé, soit il vient d'un
+	// producteur bogué. Dans les deux cas on refuse plutôt que de choisir.
+	if h.Version >= versionV3 && h.Flags&FlagCompressed != 0 {
+		return errors.New("header incohérent : drapeau de compression v1/v2 sur un fichier v3")
+	}
+	// Le remplissage n'existe pas avant la v3 : un vieux fichier qui l'annonce
+	// serait relu de travers, ses premiers octets pris pour un en-tête de
+	// remplissage.
+	if h.Version < versionV3 && h.padded() {
+		return fmt.Errorf("header incohérent : drapeau de remplissage sur un fichier v%d", h.Version)
 	}
 	return h.Argon.validate()
 }
