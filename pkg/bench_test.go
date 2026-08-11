@@ -11,9 +11,11 @@ import (
 
 // Benchmarks de débit.
 //
-// Ils servent deux choses : démontrer le gain de zstd sur gzip au lieu de le
-// supposer, et attraper une régression de vitesse avant qu'elle n'arrive chez
-// l'utilisateur.
+// Ils servent à attraper une régression de vitesse avant qu'elle n'arrive chez
+// l'utilisateur. C'est aussi ce qui a justifié d'abandonner gzip en écriture :
+// mesuré ici, zstd tenait ~750 Mo/s contre ~90 Mo/s pour gzip, à taille
+// comparable. gzip n'apparaît plus dans ces mesures puisqu'il n'est plus
+// produit — seulement relu.
 //
 //	go test ./pkg -run '^$' -bench . -benchtime 3x
 //
@@ -52,7 +54,7 @@ func benchData(size int) []byte {
 const benchSize = 8 << 20 // 8 Mio : assez pour sortir du bruit, assez court pour la CI
 
 // BenchmarkPipeline isole la chaîne compression + chiffrement en fournissant
-// des clés déjà dérivées : c'est le seul moyen de comparer gzip et zstd sans
+// des clés déjà dérivées : c'est le seul moyen de comparer les algorithmes sans
 // que les ~175 ms d'Argon2 noient l'écart.
 func BenchmarkPipeline(b *testing.B) {
 	data := benchData(benchSize)
@@ -69,7 +71,6 @@ func BenchmarkPipeline(b *testing.B) {
 		{"aes", AlgoAES, CompNone},
 		{"chacha", AlgoChaCha, CompNone},
 		{"cascade", AlgoCascade, CompNone},
-		{"aes+gzip", AlgoAES, CompGzip},
 		{"aes+zstd", AlgoAES, CompZstd},
 	}
 
@@ -116,7 +117,6 @@ func BenchmarkEncryptStream(b *testing.B) {
 		{"aes", Options{Algo: AlgoAES}},
 		{"chacha", Options{Algo: AlgoChaCha}},
 		{"cascade", Options{Algo: AlgoCascade}},
-		{"aes+gzip", Options{Algo: AlgoAES, Comp: CompGzip}},
 		{"aes+zstd", Options{Algo: AlgoAES, Comp: CompZstd}},
 		{"aes+remplissage", Options{Algo: AlgoAES, Pad: true}},
 	}
@@ -142,7 +142,6 @@ func BenchmarkDecryptStream(b *testing.B) {
 		opts Options
 	}{
 		{"aes", Options{Algo: AlgoAES}},
-		{"aes+gzip", Options{Algo: AlgoAES, Comp: CompGzip}},
 		{"aes+zstd", Options{Algo: AlgoAES, Comp: CompZstd}},
 	} {
 		var chiffre bytes.Buffer

@@ -441,7 +441,7 @@ func TestDoVerifyEtDoInfo(t *testing.T) {
 	chto := filepath.Join(dir, "archive.chto")
 
 	avecMotDePasse(t, motDePasseTest)
-	if err := doEncrypt(src, chto, pkg.AlgoCascade, pkg.CompGzip, false); err != nil {
+	if err := doEncrypt(src, chto, pkg.AlgoCascade, pkg.CompZstd, false); err != nil {
 		t.Fatal(err)
 	}
 
@@ -464,7 +464,7 @@ func TestDoVerifyEtDoInfo(t *testing.T) {
 		t.Fatal(err)
 	}
 	affiche := string(brut)
-	for _, attendu := range []string{"format", "v3", "cascade", "gzip", "dossier", "remplissage", "argon2id"} {
+	for _, attendu := range []string{"format", "v3", "cascade", "zstd", "dossier", "remplissage", "argon2id"} {
 		if !strings.Contains(affiche, attendu) {
 			t.Errorf("la sortie de info ne mentionne pas %q :\n%s", attendu, affiche)
 		}
@@ -503,29 +503,34 @@ func TestDoInfoAncienFormat(t *testing.T) {
 
 // --- Fonctions de décision ----------------------------------------------
 
+// TestChooseComp : -comp signifie zstd, et il n'y a plus d'autre choix. gzip
+// n'est plus produit, uniquement relu.
 func TestChooseComp(t *testing.T) {
-	cases := []struct {
-		compress bool
-		algo     string
-		want     byte
-		wantErr  bool
-	}{
-		{false, "zstd", pkg.CompNone, false},
-		{false, "n'importe quoi", pkg.CompNone, false}, // sans -comp, l'algo est sans effet
-		{true, "zstd", pkg.CompZstd, false},
-		{true, "gzip", pkg.CompGzip, false},
-		{true, "bzip2", 0, true},
-		{true, "", 0, true},
+	if got := chooseComp(false); got != pkg.CompNone {
+		t.Errorf("chooseComp(false) = %d, attendu CompNone", got)
 	}
-	for _, c := range cases {
-		got, err := chooseComp(c.compress, c.algo)
-		if (err != nil) != c.wantErr {
-			t.Errorf("chooseComp(%v, %q) erreur = %v, attendue: %v", c.compress, c.algo, err, c.wantErr)
-			continue
-		}
-		if err == nil && got != c.want {
-			t.Errorf("chooseComp(%v, %q) = %d, attendu %d", c.compress, c.algo, got, c.want)
-		}
+	if got := chooseComp(true); got != pkg.CompZstd {
+		t.Errorf("chooseComp(true) = %d, attendu CompZstd", got)
+	}
+}
+
+// TestGzipRefuseALEcriture : le paquet doit refuser de produire du gzip, avec un
+// message qui dit pourquoi et rassure sur les anciens fichiers.
+func TestGzipRefuseALEcriture(t *testing.T) {
+	dir := t.TempDir()
+	in := ecrire(t, filepath.Join(dir, "doc.txt"), []byte("contenu"))
+	out := filepath.Join(dir, "doc.chto")
+
+	avecMotDePasse(t, motDePasseTest)
+	err := doEncrypt(in, out, pkg.AlgoAES, pkg.CompGzip, false)
+	if err == nil {
+		t.Fatal("le chiffrement en gzip a été accepté")
+	}
+	if !strings.Contains(err.Error(), "zstd") {
+		t.Errorf("l'erreur n'indique pas le remplaçant : %v", err)
+	}
+	if _, err := os.Stat(out); err == nil {
+		t.Error("un fichier a été créé malgré le refus")
 	}
 }
 

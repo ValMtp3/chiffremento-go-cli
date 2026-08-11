@@ -2,6 +2,7 @@ package pkg
 
 import (
 	"bytes"
+	"compress/gzip"
 	"io"
 	"os"
 	"path/filepath"
@@ -40,8 +41,8 @@ func TestCompatibiliteV2(t *testing.T) {
 			if strings.Contains(name, "gzip") {
 				wantComp = "gzip"
 			}
-			if d.Comp != wantComp {
-				t.Errorf("compression lue %q, attendu %q", d.Comp, wantComp)
+			if !strings.HasPrefix(d.Comp, wantComp) {
+				t.Errorf("compression lue %q, attendu qu'elle commence par %q", d.Comp, wantComp)
 			}
 
 			out := filepath.Join(t.TempDir(), "out.txt")
@@ -67,7 +68,7 @@ func TestCompatibiliteV2Dossier(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if d.Version != versionV2 || !d.Archive || d.Comp != "gzip" {
+	if d.Version != versionV2 || !d.Archive || !strings.HasPrefix(d.Comp, "gzip") {
 		t.Fatalf("en-tête inattendu : v%d archive=%v comp=%s", d.Version, d.Archive, d.Comp)
 	}
 
@@ -324,7 +325,6 @@ func TestFluxAllerRetour(t *testing.T) {
 	}{
 		{"sans compression", Options{}},
 		{"zstd", Options{Comp: CompZstd}},
-		{"gzip", Options{Comp: CompGzip}},
 		{"cascade+zstd", Options{Algo: AlgoCascade, Comp: CompZstd}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
@@ -624,6 +624,7 @@ func TestOptionsValidate(t *testing.T) {
 		{"zstd", Options{Comp: CompZstd}, false},
 		{"remplissage seul", Options{Pad: true}, false},
 		{"compression inconnue", Options{Comp: 99}, true},
+		{"gzip seul", Options{Comp: CompGzip}, true}, // plus produit, seulement relu
 		{"remplissage et gzip", Options{Pad: true, Comp: CompGzip}, true},
 		{"remplissage et zstd", Options{Pad: true, Comp: CompZstd}, true},
 	}
@@ -654,5 +655,94 @@ func TestRemplissageAvecCompressionEnLecture(t *testing.T) {
 	path := write(t, dir, "les_deux.chto", raw)
 	if err := Decrypt(path, filepath.Join(dir, "out"), []byte("pw"), Options{}); err == nil {
 		t.Error("un fichier annonçant compression et remplissage a été déchiffré")
+	}
+}
+
+// --- gzip en lecture seule ----------------------------------------------
+
+// TestGzipRefuseALEcriture : l'API publique ne produit plus de gzip.
+func TestGzipRefuseALEcriture(t *testing.T) {
+	dir := t.TempDir()
+	in := write(t, dir, "clair.txt", []byte("contenu"))
+	enc := filepath.Join(dir, "out.chto")
+
+	err := Encrypt(in, enc, []byte("pw"), Options{Comp: CompGzip})
+	if err == nil {
+		t.Fatal("le chiffrement en gzip a été accepté")
+	}
+	if !strings.Contains(err.Error(), "zstd") {
+		t.Errorf("l'erreur ne nomme pas le remplaçant : %v", err)
+	}
+	if _, err := os.Stat(enc); err == nil {
+		t.Error("un fichier a été créé malgré le refus")
+	}
+}
+
+// TestGzipResteLisibleEnV3 fabrique à la main un .chto v3 annonçant gzip, comme
+// en aurait produit une version intermédiaire de ce format, et vérifie qu'il se
+// relit. Retirer la lecture de gzip casserait ces fichiers *et* tous les v1/v2
+// compressés.
+func TestGzipResteLisibleEnV3(t *testing.T) {
+	clair := bytes.Repeat([]byte("contenu compressible en gzip. "), 200)
+	password := []byte("pw")
+
+	// Écriture, en contournant volontairement Options.validate : c'est le seul
+	// moyen de produire ce que l'API refuse désormais.
+	var chiffre bytes.Buffer
+	h := &header{
+		Version: versionV3,
+		Algo:    AlgoAES,
+		Argon:   defaultArgonParams(),
+		Comp:    CompGzip,
+		Salt:    bytes.Repeat([]byte{0x11}, saltSize),
+	}
+	if _, err := chiffre.Write(h.marshal()); err != nil {
+		t.Fatal(err)
+	}
+	keys, err := deriveKeys(password, h)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer keys.wipe()
+
+	cw, err := initCipherWriter(writerOnly{&chiffre}, h.Algo, keys)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gz := gzip.NewWriter(cw)
+	if _, err := gz.Write(clair); err != nil {
+		t.Fatal(err)
+	}
+	if err := gz.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := cw.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Lecture par le chemin normal.
+	dir := t.TempDir()
+	path := write(t, dir, "v3_gzip.chto", chiffre.Bytes())
+	d, err := Inspect(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d.Version != versionV3 || !d.Compressed {
+		t.Fatalf("en-tête inattendu : v%d compressé=%v", d.Version, d.Compressed)
+	}
+	if !strings.Contains(d.Comp, "gzip") {
+		t.Errorf("compression annoncée %q, attendu qu'elle nomme gzip", d.Comp)
+	}
+
+	out := filepath.Join(dir, "relu.txt")
+	if err := Decrypt(path, out, password, Options{}); err != nil {
+		t.Fatalf("un fichier v3 en gzip doit rester lisible: %v", err)
+	}
+	got, err := os.ReadFile(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(clair, got) {
+		t.Error("le contenu relu diffère de l'original")
 	}
 }

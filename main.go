@@ -31,8 +31,7 @@ func run() error {
 	mode := flag.String("mode", "", "enc (chiffrer), dec (déchiffrer), verify (contrôler) ou info (inspecter)")
 	fileIn := flag.String("in", "", "fichier ou dossier d'entrée, ou - pour l'entrée standard (dossier en mode enc uniquement)")
 	fileOut := flag.String("out", "", "destination (défaut : entrée + "+extension+" en enc, entrée sans l'extension en dec) ; - pour la sortie standard")
-	compress := flag.Bool("comp", false, "compresser les données avant chiffrement")
-	compAlgo := flag.String("comp-algo", "zstd", "algorithme de compression avec -comp : zstd (rapide) ou gzip (compatible v2)")
+	compress := flag.Bool("comp", false, "compresser les données en zstd avant chiffrement")
 	pad := flag.Bool("pad", false, "masquer la taille réelle en ajoutant du remplissage ; s'exclut avec -comp")
 	chacha := flag.Bool("chacha", false, "utiliser ChaCha20-Poly1305 au lieu d'AES-GCM")
 	parano := flag.Bool("parano", false, "mode parano : double chiffrement en cascade (chacha20 + aes), plus lent")
@@ -61,13 +60,9 @@ func run() error {
 		return errors.New("-mode et -in sont obligatoires")
 	}
 
-	if *mode != "enc" && (*compress || *chacha || *parano || *pad || estFourni("comp-algo")) {
+	if *mode != "enc" && (*compress || *chacha || *parano || *pad) {
 		fmt.Fprintln(os.Stderr, styleDim.Render(
-			"note : -comp, -comp-algo, -pad, -chacha et -parano n'ont d'effet qu'en mode enc, ils sont ignorés ici"))
-	}
-	if *mode == "enc" && !*compress && estFourni("comp-algo") {
-		fmt.Fprintln(os.Stderr, styleDim.Render(
-			"note : -comp-algo sans -comp ne compresse rien, il est ignoré"))
+			"note : -comp, -pad, -chacha et -parano n'ont d'effet qu'en mode enc, ils sont ignorés ici"))
 	}
 	if *mode == "info" && *fileOut != "" {
 		fmt.Fprintln(os.Stderr, styleDim.Render("note : -out n'a pas d'effet en mode info, il est ignoré"))
@@ -79,11 +74,7 @@ func run() error {
 		if err != nil {
 			return err
 		}
-		comp, err := chooseComp(*compress, *compAlgo)
-		if err != nil {
-			return err
-		}
-		return doEncrypt(*fileIn, *fileOut, algo, comp, *pad)
+		return doEncrypt(*fileIn, *fileOut, algo, chooseComp(*compress), *pad)
 	case "dec":
 		return doDecrypt(*fileIn, *fileOut)
 	case "verify":
@@ -123,32 +114,17 @@ func chooseAlgo(chacha, parano bool) (byte, error) {
 	}
 }
 
-// chooseComp traduit -comp et -comp-algo en identifiant de compression.
-func chooseComp(compress bool, algo string) (byte, error) {
-	if !compress {
-		return pkg.CompNone, nil
+// chooseComp traduit -comp en identifiant de compression.
+//
+// Il n'y a plus de choix d'algorithme : zstd remplace gzip partout, environ huit
+// fois plus rapide à taille comparable. gzip reste lu pour les anciens fichiers,
+// jamais écrit — un drapeau pour le produire n'aurait servi qu'à fabriquer des
+// fichiers plus lents.
+func chooseComp(compress bool) byte {
+	if compress {
+		return pkg.CompZstd
 	}
-	switch algo {
-	case "zstd":
-		return pkg.CompZstd, nil
-	case "gzip":
-		return pkg.CompGzip, nil
-	default:
-		return 0, fmt.Errorf("algorithme de compression inconnu %q (attendu zstd ou gzip)", algo)
-	}
-}
-
-// estFourni dit si un drapeau a été écrit sur la ligne de commande. Sa valeur
-// par défaut ne permet pas de le savoir : -comp-algo vaut « zstd » qu'on l'ait
-// tapé ou non, donc sans ça on ne pourrait pas signaler un réglage sans effet.
-func estFourni(nom string) bool {
-	fourni := false
-	flag.Visit(func(f *flag.Flag) {
-		if f.Name == nom {
-			fourni = true
-		}
-	})
-	return fourni
+	return pkg.CompNone
 }
 
 // isStream reconnaît le tiret conventionnel des flux standard.

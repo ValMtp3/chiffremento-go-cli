@@ -117,7 +117,6 @@ func TestRoundTripDossier(t *testing.T) {
 		opts Options
 	}{
 		{"aes", Options{Algo: AlgoAES}},
-		{"aes+gzip", Options{Algo: AlgoAES, Comp: CompGzip}},
 		{"aes+zstd", Options{Algo: AlgoAES, Comp: CompZstd}},
 		{"aes+remplissage", Options{Algo: AlgoAES, Pad: true}},
 		{"cascade+zstd", Options{Algo: AlgoCascade, Comp: CompZstd}},

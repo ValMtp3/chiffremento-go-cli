@@ -23,8 +23,9 @@ type Options struct {
 	// Ignoré au déchiffrement : l'algorithme est lu dans l'en-tête du fichier.
 	Algo byte
 
-	// Comp vaut CompNone, CompGzip ou CompZstd. Ignoré au déchiffrement :
-	// l'algorithme est lu dans l'en-tête du fichier.
+	// Comp vaut CompNone ou CompZstd. CompGzip est refusé : il n'est plus
+	// produit, seulement relu. Ignoré au déchiffrement, où l'algorithme est lu
+	// dans l'en-tête du fichier.
 	Comp byte
 
 	// Pad masque la taille réelle du clair en insérant du remplissage jusqu'au
@@ -41,7 +42,7 @@ type Options struct {
 
 // validate attrape les combinaisons impossibles avant d'écrire quoi que ce soit.
 func (o Options) validate() error {
-	if err := validateComp(o.Comp); err != nil {
+	if err := validateCompWrite(o.Comp); err != nil {
 		return err
 	}
 	if o.Pad && o.Comp != CompNone {
@@ -333,12 +334,6 @@ func initCompressWriter(dst io.Writer, comp byte) (io.WriteCloser, error) {
 	switch comp {
 	case CompNone:
 		return nil, nil
-	case CompGzip:
-		w, err := gzip.NewWriterLevel(dst, gzip.BestCompression)
-		if err != nil {
-			return nil, fmt.Errorf("création du flux gzip: %w", err)
-		}
-		return w, nil
 	case CompZstd:
 		// writerOnly : l'encodeur zstd ne doit pas refermer la couche de
 		// chiffrement sous lui, c'est nous qui ordonnons les Close().
@@ -348,7 +343,8 @@ func initCompressWriter(dst io.Writer, comp byte) (io.WriteCloser, error) {
 		}
 		return w, nil
 	default:
-		return nil, validateComp(comp)
+		// gzip tombe ici : il est lu mais plus jamais écrit.
+		return nil, validateCompWrite(comp)
 	}
 }
 

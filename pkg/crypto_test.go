@@ -26,12 +26,10 @@ func TestRoundTrip(t *testing.T) {
 		opts Options
 	}{
 		{"aes", Options{Algo: AlgoAES}},
-		{"aes+gzip", Options{Algo: AlgoAES, Comp: CompGzip}},
 		{"aes+zstd", Options{Algo: AlgoAES, Comp: CompZstd}},
 		{"chacha", Options{Algo: AlgoChaCha}},
 		{"chacha+zstd", Options{Algo: AlgoChaCha, Comp: CompZstd}},
 		{"cascade", Options{Algo: AlgoCascade}},
-		{"cascade+gzip", Options{Algo: AlgoCascade, Comp: CompGzip}},
 		{"cascade+zstd", Options{Algo: AlgoCascade, Comp: CompZstd}},
 		{"algo par défaut", Options{}},
 		{"remplissage", Options{Algo: AlgoAES, Pad: true}},

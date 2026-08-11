@@ -18,7 +18,7 @@ import (
 //	argonMemory 4   uint32 big-endian, en KiB
 //	argonPar    1   uint8
 //	--- v3 uniquement ---------------------------------------
-//	compAlgo    1   0=aucune, 1=gzip, 2=zstd
+//	compAlgo    1   0=aucune, 1=gzip (lecture seule), 2=zstd
 //	---------------------------------------------------------
 //	salt       16
 //
@@ -70,6 +70,12 @@ const (
 )
 
 // Algorithmes de compression, tels qu'inscrits dans le champ compAlgo de la v3.
+//
+// CompGzip est en lecture seule : il n'est plus produit depuis que zstd le
+// remplace — mesuré ~8× plus rapide à ratio comparable — mais il reste lu, sans
+// quoi les .chto v1 et v2 compressés deviendraient illisibles. L'identifiant
+// n'est pas réattribué : un fichier v3 annonçant gzip, produit par une version
+// intermédiaire, doit continuer de se relire.
 const (
 	CompNone = byte(0)
 	CompGzip = byte(1)
@@ -82,7 +88,7 @@ func CompName(c byte) string {
 	case CompNone:
 		return "aucune"
 	case CompGzip:
-		return "gzip"
+		return "gzip (ancien format, lecture seule)"
 	case CompZstd:
 		return "zstd"
 	default:
@@ -90,10 +96,23 @@ func CompName(c byte) string {
 	}
 }
 
+// validateComp accepte tout ce qui est lisible, gzip compris.
 func validateComp(c byte) error {
 	switch c {
 	case CompNone, CompGzip, CompZstd:
 		return nil
+	default:
+		return fmt.Errorf("algorithme de compression inconnu : %d", c)
+	}
+}
+
+// validateCompWrite est plus strict : il n'accepte que ce qu'on produit encore.
+func validateCompWrite(c byte) error {
+	switch c {
+	case CompNone, CompZstd:
+		return nil
+	case CompGzip:
+		return errors.New("gzip n'est plus produit : zstd le remplace, environ huit fois plus rapide à taille comparable (les anciens fichiers gzip restent déchiffrables)")
 	default:
 		return fmt.Errorf("algorithme de compression inconnu : %d", c)
 	}

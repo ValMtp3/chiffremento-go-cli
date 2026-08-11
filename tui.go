@@ -212,10 +212,10 @@ func tuiEncrypt(path string) error {
 	if st, err := os.Stat(path); err == nil {
 		estDossier = st.IsDir()
 	}
-	comp := pkg.CompNone
-	if estDossier {
-		comp = pkg.CompZstd
-	}
+	// zstd est le seul algorithme proposé : gzip n'est plus produit, seulement
+	// relu pour les anciens fichiers. La question se réduit donc à « compresser
+	// ou pas ».
+	compresser := estDossier
 	pad := false
 	password, confirm := "", ""
 
@@ -231,15 +231,12 @@ func tuiEncrypt(path string) error {
 				).
 				Value(&algo),
 
-			huh.NewSelect[byte]().
-				Title("compresser avant chiffrement").
+			huh.NewConfirm().
+				Title("compresser avant chiffrement  (zstd)").
 				Description(compressHint(estDossier)).
-				Options(
-					huh.NewOption("aucune", pkg.CompNone),
-					huh.NewOption("zstd  (rapide, recommandé)", pkg.CompZstd),
-					huh.NewOption("gzip  (relisible par les versions 2.x)", pkg.CompGzip),
-				).
-				Value(&comp),
+				Affirmative("oui").
+				Negative("non").
+				Value(&compresser),
 		),
 
 		// Le masquage de taille vit dans son propre groupe, escamoté dès qu'une
@@ -254,7 +251,7 @@ func tuiEncrypt(path string) error {
 				Affirmative("oui").
 				Negative("non").
 				Value(&pad),
-		).WithHideFunc(func() bool { return comp != pkg.CompNone }),
+		).WithHideFunc(func() bool { return compresser }),
 
 		huh.NewGroup(
 			huh.NewInput().
@@ -307,7 +304,7 @@ func tuiEncrypt(path string) error {
 	}
 	return runJob(info, func(p func(int64, int64)) error {
 		return pkg.Encrypt(path, out, []byte(password), pkg.Options{
-			Algo: algo, Comp: comp, Pad: pad, Progress: p,
+			Algo: algo, Comp: compEncodee(compresser), Pad: pad, Progress: p,
 		})
 	})
 }
@@ -659,9 +656,17 @@ func verifySucces(archive bool) string {
 	return "fichier intact, déchiffrable, rien écrit sur le disque"
 }
 
+// compEncodee traduit la réponse de l'interface en identifiant de compression.
+func compEncodee(compresser bool) byte {
+	if compresser {
+		return pkg.CompZstd
+	}
+	return pkg.CompNone
+}
+
 func compressHint(dossier bool) string {
 	if dossier {
-		return "zstd par défaut sur un dossier · laisse fuiter la compressibilité du contenu"
+		return "proposée active sur un dossier · laisse fuiter la compressibilité du contenu"
 	}
 	return "réduit la taille, mais laisse fuiter la compressibilité du contenu"
 }

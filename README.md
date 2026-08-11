@@ -36,7 +36,7 @@
 ## ✨ Nouveautés v3.0
 
 - **📁 Dossiers** : chiffrer un dossier entier, empaqueté en tar au fil du chiffrement et recréé à l'identique au déchiffrement.
-- **🗜️ zstd** : nouvelle compression par défaut, mesurée ~8× plus rapide que gzip à ratio comparable. La compression est décrite par un champ de l'en-tête, plus par un simple bit — les `.chto` v1 et v2 restent lisibles.
+- **🗜️ zstd** : remplace gzip, mesuré ~8× plus rapide à ratio comparable. gzip n'est plus produit, seulement relu : les `.chto` v1 et v2 compressés restent déchiffrables. La compression est désormais décrite par un champ de l'en-tête plutôt que par un simple bit.
 - **📏 `-pad`** : masque la taille réelle du contenu en arrondissant au palier supérieur.
 - **🔗 `-out`, `-in -`, `-out -`** : destination choisie, et flux standard pour composer avec d'autres outils.
 - **🗂️ Explorateur de fichiers** dans l'interface guidée, en alternative à la saisie du chemin.
@@ -57,7 +57,7 @@
 - **🔑 Dérivation de clé** : **Argon2id**, avec des paramètres inscrits dans le fichier pour pouvoir être renforcés plus tard sans casser les anciens fichiers.
 - **⚡ Mémoire constante** : chiffrer un fichier de 100 Go ne consomme que quelques mégaoctets de RAM.
 - **📁 Fichiers et dossiers** : un dossier est empaqueté en **tar** au fil du chiffrement — sans archive intermédiaire sur le disque — et recréé tel quel au déchiffrement. Les liens symboliques sont refusés, et une archive ne peut rien écrire hors du dossier de destination.
-- **📦 Compression** : **zstd** (défaut) ou **gzip**, optionnelle avant chiffrement et proposée active pour un dossier. zstd mesuré ~8× plus rapide que gzip pour un ratio équivalent.
+- **📦 Compression** : **zstd**, optionnelle avant chiffrement et proposée active pour un dossier. Elle remplace gzip, mesurée ~8× plus rapide pour un ratio équivalent ; les anciens fichiers gzip restent déchiffrables mais ne sont plus produits.
 - **📏 Taille masquée** : option `-pad`, qui arrondit la taille au palier supérieur ([schéma Padmé](https://petsymposium.org/2019/files/papers/issue4/popets-2019-0056.pdf)) pour qu'un `.chto` ne trahisse plus la taille exacte de son contenu.
 - **🔗 Composable** : `-in -` et `-out -` lisent et écrivent sur les flux standard.
 - **📊 Indicateur de force réaliste** : la robustesse du mot de passe est évaluée par [`zxcvbn`](https://github.com/trustelem/zxcvbn), qui reconnaît les mots de dictionnaire, les prénoms, les dates et les suites de touches. `azerty123` est annoncé à ~13 bits, pas à ~60.
@@ -117,8 +117,7 @@ Le mot de passe **n'est jamais un argument**. Il est demandé de façon masquée
 | `-mode` | **Obligatoire.** `enc` (chiffrer), `dec` (déchiffrer), `verify` (contrôler sans rien écrire) ou `info` (inspecter l'en-tête). |
 | `-in` | **Obligatoire.** Fichier ou dossier d'entrée, ou `-` pour l'entrée standard. |
 | `-out` | Destination. Par défaut, l'entrée suivie de `.chto` en `enc`, l'entrée sans l'extension en `dec`. `-` écrit sur la sortie standard. |
-| `-comp` | *(enc)* Active la compression. |
-| `-comp-algo` | *(enc)* `zstd` (défaut) ou `gzip`. `gzip` reste relisible par les versions 2.x. |
+| `-comp` | *(enc)* Active la compression zstd. |
 | `-pad` | *(enc)* Masque la taille réelle. S'exclut avec `-comp`. |
 | `-chacha` | *(enc)* Utilise ChaCha20-Poly1305 au lieu d'AES-GCM. |
 | `-parano` | *(enc)* Double chiffrement en cascade. S'exclut avec `-chacha`. |
@@ -204,7 +203,7 @@ algo        1 o   1 = AES-GCM, 2 = ChaCha20-Poly1305, 3 = cascade
 argonTime   4 o   uint32 big-endian        ┐
 argonMemory 4 o   uint32 big-endian (KiB)  ├ v2 et v3
 argonPar    1 o   uint8                    ┘
-compAlgo    1 o   0 = aucune, 1 = gzip, 2 = zstd    ─ v3 uniquement
+compAlgo    1 o   0 = aucune, 1 = gzip (lu, plus écrit), 2 = zstd  ─ v3
 salt       16 o
 ```
 
@@ -245,7 +244,7 @@ Le mode parano ne remplace pas un bon mot de passe : il protège contre la déco
 ## ✨ New in v3.0
 
 - **📁 Folders**: encrypt a whole folder, packed into a tar stream as it is encrypted and recreated as-is on decryption.
-- **🗜️ zstd**: the new default compression, measured ~8× faster than gzip at a comparable ratio. Compression is now described by a header field rather than a single bit — v1 and v2 `.chto` files remain readable.
+- **🗜️ zstd**: replaces gzip, measured ~8× faster at a comparable ratio. gzip is no longer produced, only read back: compressed v1 and v2 `.chto` files stay decryptable. Compression is now described by a header field rather than a single bit.
 - **📏 `-pad`**: masks the real size of the contents by rounding up to the next bucket.
 - **🔗 `-out`, `-in -`, `-out -`**: choose the destination, and use the standard streams to compose with other tools.
 - **🗂️ File browser** in the guided interface, as an alternative to typing the path.
@@ -266,7 +265,7 @@ Le mode parano ne remplace pas un bon mot de passe : il protège contre la déco
 - **🔑 Key derivation**: **Argon2id**, with parameters written into the file so they can be strengthened later without breaking old files.
 - **⚡ Constant memory**: encrypting a 100 GB file uses only a few megabytes of RAM.
 - **📁 Files and folders**: a folder is packed into a **tar** stream as it is encrypted — no intermediate archive on disk — and recreated as-is on decryption. Symlinks are rejected, and an archive can never write outside the destination folder.
-- **📦 Compression**: **zstd** (default) or **gzip**, optional before encryption and offered pre-enabled for folders. zstd measured ~8× faster than gzip at a comparable ratio.
+- **📦 Compression**: **zstd**, optional before encryption and offered pre-enabled for folders. It replaces gzip, measured ~8× faster at a comparable ratio; existing gzip files stay decryptable but are no longer produced.
 - **📏 Size masking**: the `-pad` option rounds the size up to the next bucket ([Padmé scheme](https://petsymposium.org/2019/files/papers/issue4/popets-2019-0056.pdf)), so a `.chto` no longer betrays the exact size of its contents.
 - **🔗 Composable**: `-in -` and `-out -` read from and write to the standard streams.
 - **📊 Realistic strength meter**: password strength is scored by [`zxcvbn`](https://github.com/trustelem/zxcvbn), which recognises dictionary words, names, dates and keyboard patterns. `azerty123` is reported at ~13 bits, not ~60.
@@ -326,8 +325,7 @@ The password is **never an argument**. It is prompted for with masked input, or 
 | `-mode` | **Required.** `enc` (encrypt), `dec` (decrypt), `verify` (check without writing anything) or `info` (inspect the header). |
 | `-in` | **Required.** Input file or folder, or `-` for standard input. |
 | `-out` | Destination. Defaults to the input plus `.chto` for `enc`, the input without the extension for `dec`. `-` writes to standard output. |
-| `-comp` | *(enc)* Enables compression. |
-| `-comp-algo` | *(enc)* `zstd` (default) or `gzip`. `gzip` stays readable by 2.x versions. |
+| `-comp` | *(enc)* Enables zstd compression. |
 | `-pad` | *(enc)* Masks the real size. Mutually exclusive with `-comp`. |
 | `-chacha` | *(enc)* Uses ChaCha20-Poly1305 instead of AES-GCM. |
 | `-parano` | *(enc)* Cascaded double encryption. Mutually exclusive with `-chacha`. |
@@ -413,7 +411,7 @@ algo        1 B   1 = AES-GCM, 2 = ChaCha20-Poly1305, 3 = cascade
 argonTime   4 B   uint32 big-endian        ┐
 argonMemory 4 B   uint32 big-endian (KiB)  ├ v2 and v3
 argonPar    1 B   uint8                    ┘
-compAlgo    1 B   0 = none, 1 = gzip, 2 = zstd      ─ v3 only
+compAlgo    1 B   0 = none, 1 = gzip (read-only), 2 = zstd  ─ v3
 salt       16 B
 ```
 

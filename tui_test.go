@@ -8,6 +8,8 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/huh"
+
+	"chiffremento-cli/pkg"
 )
 
 // formulaire et huhForm ne servent qu'à porter le formulaire d'un appel à
@@ -334,5 +336,16 @@ func TestCibleFormExplorateurListeAssezDEntrees(t *testing.T) {
 	if len(manquants) > 0 {
 		t.Errorf("%d entrées sur %d ne sont pas listées (%v) — la liste est probablement réduite à une ligne:\n%s",
 			len(manquants), len(noms), manquants, vue)
+	}
+}
+
+// TestCompEncodee : l'interface ne propose plus qu'un booléen, qui doit se
+// traduire en zstd et jamais en gzip.
+func TestCompEncodee(t *testing.T) {
+	if got := compEncodee(true); got != pkg.CompZstd {
+		t.Errorf("compEncodee(true) = %d, attendu CompZstd", got)
+	}
+	if got := compEncodee(false); got != pkg.CompNone {
+		t.Errorf("compEncodee(false) = %d, attendu CompNone", got)
 	}
 }
