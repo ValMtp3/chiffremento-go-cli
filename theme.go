@@ -32,6 +32,13 @@ var (
 	// donc exactement au même endroit.
 	styleLabel = lipgloss.NewStyle().Foreground(dimColor).Width(labelWidth)
 
+	// styleInfoLabel est le même principe pour la sortie de `info`, qui n'est
+	// pas contrainte par la largeur du cadre de progression et peut donc se
+	// permettre des libellés entiers comme « compression » ou « remplissage ».
+	// Sans ça, un libellé de plus de labelWidth caractères passerait à la ligne
+	// au milieu du mot.
+	styleInfoLabel = lipgloss.NewStyle().Foreground(dimColor).Width(infoLabelWidth)
+
 	styleBox = lipgloss.NewStyle().
 			Border(lipgloss.NormalBorder()).
 			BorderForeground(faintColor).
@@ -47,6 +54,8 @@ const (
 	contentWidth = 52
 	innerWidth   = contentWidth - 4
 	labelWidth   = 10
+
+	infoLabelWidth = 14
 )
 
 // formTheme applique la DA aux formulaires huh.

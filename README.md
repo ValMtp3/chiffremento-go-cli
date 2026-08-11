@@ -47,7 +47,11 @@
 - **🔐 Chiffrement authentifié** : **AES-256-GCM** (par défaut) ou **ChaCha20-Poly1305**, en streaming via [`minio/sio`](https://github.com/minio/sio) (format DARE).
 - **🔑 Dérivation de clé** : **Argon2id**, avec des paramètres inscrits dans le fichier pour pouvoir être renforcés plus tard sans casser les anciens fichiers.
 - **⚡ Mémoire constante** : chiffrer un fichier de 100 Go ne consomme que quelques mégaoctets de RAM.
-- **📦 Compression** : **gzip** optionnel avant chiffrement.
+- **📁 Fichiers et dossiers** : un dossier est empaqueté en **tar** au fil du chiffrement — sans archive intermédiaire sur le disque — et recréé tel quel au déchiffrement. Les liens symboliques sont refusés, et une archive ne peut rien écrire hors du dossier de destination.
+- **📦 Compression** : **zstd** (défaut) ou **gzip**, optionnelle avant chiffrement et proposée active pour un dossier. zstd mesuré ~8× plus rapide que gzip pour un ratio équivalent.
+- **📏 Taille masquée** : option `-pad`, qui arrondit la taille au palier supérieur ([schéma Padmé](https://petsymposium.org/2019/files/papers/issue4/popets-2019-0056.pdf)) pour qu'un `.chto` ne trahisse plus la taille exacte de son contenu.
+- **🔗 Composable** : `-in -` et `-out -` lisent et écrivent sur les flux standard.
+- **📊 Indicateur de force réaliste** : la robustesse du mot de passe est évaluée par [`zxcvbn`](https://github.com/trustelem/zxcvbn), qui reconnaît les mots de dictionnaire, les prénoms, les dates et les suites de touches. `azerty123` est annoncé à ~13 bits, pas à ~60.
 - **😱 Mode parano** : double chiffrement en cascade (ChaCha20 à l'extérieur, AES à l'intérieur), avec deux clés dérivées indépendamment par HKDF.
 - **🔗 En-tête lié à la clé** : version, drapeaux, algorithme, paramètres Argon2 et sel entrent tous dans la dérivation. Modifier un seul octet de l'en-tête fait échouer le déchiffrement.
 
@@ -100,8 +104,11 @@ Le mot de passe **n'est jamais un argument**. Il est demandé de façon masquée
 | Flag | Description |
 | :--- | :--- |
 | `-mode` | **Obligatoire.** `enc` (chiffrer), `dec` (déchiffrer), `verify` (contrôler sans rien écrire) ou `info` (inspecter l'en-tête). |
-| `-in` | **Obligatoire.** Chemin du fichier d'entrée. |
-| `-comp` | *(enc)* Active la compression gzip. |
+| `-in` | **Obligatoire.** Fichier ou dossier d'entrée, ou `-` pour l'entrée standard. |
+| `-out` | Destination. Par défaut, l'entrée suivie de `.chto` en `enc`, l'entrée sans l'extension en `dec`. `-` écrit sur la sortie standard. |
+| `-comp` | *(enc)* Active la compression. |
+| `-comp-algo` | *(enc)* `zstd` (défaut) ou `gzip`. `gzip` reste relisible par les versions 2.x. |
+| `-pad` | *(enc)* Masque la taille réelle. S'exclut avec `-comp`. |
 | `-chacha` | *(enc)* Utilise ChaCha20-Poly1305 au lieu d'AES-GCM. |
 | `-parano` | *(enc)* Double chiffrement en cascade. S'exclut avec `-chacha`. |
 | `-version` | Affiche la version. |
@@ -118,6 +125,18 @@ Déchiffrer (recrée `document.txt`) :
 
 ```bash
 chiffremento -mode dec -in document.txt.chto
+```
+
+Chiffrer un dossier (crée `photos.chto`, qui contient toute l'arborescence) :
+
+```bash
+chiffremento -mode enc -in photos
+```
+
+Le déchiffrer recrée le dossier `photos`, qui ne doit pas déjà exister :
+
+```bash
+chiffremento -mode dec -in photos.chto
 ```
 
 Contrôler qu'une sauvegarde est intacte et déchiffrable, sans rien écrire sur le disque :
@@ -138,28 +157,51 @@ Mode parano avec compression :
 chiffremento -mode enc -in backup.db -parano -comp
 ```
 
+Écrire ailleurs que dans le dossier de la source :
+
+```bash
+chiffremento -mode enc -in photos -out /volumes/sauvegarde/photos.chto
+```
+
+Masquer la taille réelle du fichier :
+
+```bash
+chiffremento -mode enc -in contrat.pdf -pad
+```
+
+Lister une sauvegarde de dossier sans l'extraire, en passant le tar à `tar` :
+
+```bash
+chiffremento -mode dec -in photos.chto -out - | tar tf -
+```
+
 Depuis un script, le mot de passe se fournit sur l'entrée standard :
 
 ```bash
 echo "$MOT_DE_PASSE" | chiffremento -mode enc -in backup.db
 ```
 
+> Avec `-in -`, l'entrée standard porte les données : le mot de passe est alors demandé sur le terminal (`/dev/tty`). Sans terminal, l'outil refuse plutôt que de lire la première ligne des données comme mot de passe.
+
 ## 🗂️ Format de fichier
 
 ```
 magic       8 o   "CHFRMT03"
-version     1 o   1 (ancien) ou 2 (courant)
-flags       1 o   bit 0 = compressé
+version     1 o   1 et 2 (anciens), 3 (courant)
+flags       1 o   bit 0 = compressé (v1/v2), bit 1 = archive tar, bit 2 = rempli
 algo        1 o   1 = AES-GCM, 2 = ChaCha20-Poly1305, 3 = cascade
 argonTime   4 o   uint32 big-endian        ┐
-argonMemory 4 o   uint32 big-endian (KiB)  ├ v2 uniquement
+argonMemory 4 o   uint32 big-endian (KiB)  ├ v2 et v3
 argonPar    1 o   uint8                    ┘
+compAlgo    1 o   0 = aucune, 1 = gzip, 2 = zstd    ─ v3 uniquement
 salt       16 o
 ```
 
 La clé est dérivée en deux temps : `Argon2id(mot de passe, sel, paramètres)` puis `HKDF-Expand` avec **l'en-tête complet en info**. C'est ce qui lie l'en-tête à la clé sans champ d'authentification supplémentaire.
 
-Les fichiers en version 1 sont relus avec leur dérivation d'origine. Les nouveaux fichiers sont toujours écrits en version 2.
+Les fichiers en version 1 et 2 sont relus avec leur dérivation d'origine. Les nouveaux fichiers sont toujours écrits en version 3.
+
+La v3 remplace le drapeau de compression par un champ : un bit ne pouvait pas distinguer gzip de zstd, et empiler un bit par algorithme rendait possibles des états contradictoires. En v1 et v2, le bit 0 signifiait gzip — c'est le seul sens qu'il ait jamais eu, donc la relecture est directe. Un binaire plus ancien refuse un fichier v3 au lieu de l'interpréter de travers.
 
 ## ⚠️ Modèle de menace
 
@@ -203,7 +245,11 @@ Le mode parano ne remplace pas un bon mot de passe : il protège contre la déco
 - **🔐 Authenticated encryption**: **AES-256-GCM** (default) or **ChaCha20-Poly1305**, streamed through [`minio/sio`](https://github.com/minio/sio) (DARE format).
 - **🔑 Key derivation**: **Argon2id**, with parameters written into the file so they can be strengthened later without breaking old files.
 - **⚡ Constant memory**: encrypting a 100 GB file uses only a few megabytes of RAM.
-- **📦 Compression**: optional **gzip** before encryption.
+- **📁 Files and folders**: a folder is packed into a **tar** stream as it is encrypted — no intermediate archive on disk — and recreated as-is on decryption. Symlinks are rejected, and an archive can never write outside the destination folder.
+- **📦 Compression**: **zstd** (default) or **gzip**, optional before encryption and offered pre-enabled for folders. zstd measured ~8× faster than gzip at a comparable ratio.
+- **📏 Size masking**: the `-pad` option rounds the size up to the next bucket ([Padmé scheme](https://petsymposium.org/2019/files/papers/issue4/popets-2019-0056.pdf)), so a `.chto` no longer betrays the exact size of its contents.
+- **🔗 Composable**: `-in -` and `-out -` read from and write to the standard streams.
+- **📊 Realistic strength meter**: password strength is scored by [`zxcvbn`](https://github.com/trustelem/zxcvbn), which recognises dictionary words, names, dates and keyboard patterns. `azerty123` is reported at ~13 bits, not ~60.
 - **😱 Parano mode**: cascaded double encryption (ChaCha20 outside, AES inside) with two independently derived keys via HKDF.
 - **🔗 Key-bound header**: version, flags, algorithm, Argon2 parameters and salt all feed the key derivation. Changing a single header byte makes decryption fail.
 
@@ -256,8 +302,11 @@ The password is **never an argument**. It is prompted for with masked input, or 
 | Flag | Description |
 | :--- | :--- |
 | `-mode` | **Required.** `enc` (encrypt), `dec` (decrypt), `verify` (check without writing anything) or `info` (inspect the header). |
-| `-in` | **Required.** Input file path. |
-| `-comp` | *(enc)* Enables gzip compression. |
+| `-in` | **Required.** Input file or folder, or `-` for standard input. |
+| `-out` | Destination. Defaults to the input plus `.chto` for `enc`, the input without the extension for `dec`. `-` writes to standard output. |
+| `-comp` | *(enc)* Enables compression. |
+| `-comp-algo` | *(enc)* `zstd` (default) or `gzip`. `gzip` stays readable by 2.x versions. |
+| `-pad` | *(enc)* Masks the real size. Mutually exclusive with `-comp`. |
 | `-chacha` | *(enc)* Uses ChaCha20-Poly1305 instead of AES-GCM. |
 | `-parano` | *(enc)* Cascaded double encryption. Mutually exclusive with `-chacha`. |
 | `-version` | Prints the version. |
@@ -274,6 +323,18 @@ Decrypt (recreates `document.txt`):
 
 ```bash
 chiffremento -mode dec -in document.txt.chto
+```
+
+Encrypt a folder (creates `photos.chto`, holding the whole tree):
+
+```bash
+chiffremento -mode enc -in photos
+```
+
+Decrypting it recreates the `photos` folder, which must not already exist:
+
+```bash
+chiffremento -mode dec -in photos.chto
 ```
 
 Check that a backup is intact and decryptable, without writing anything to disk:
@@ -294,22 +355,43 @@ Parano mode with compression:
 chiffremento -mode enc -in backup.db -parano -comp
 ```
 
+Write somewhere other than next to the source:
+
+```bash
+chiffremento -mode enc -in photos -out /volumes/backup/photos.chto
+```
+
+Mask the real file size:
+
+```bash
+chiffremento -mode enc -in contract.pdf -pad
+```
+
+List a folder backup without extracting it, by piping the tar into `tar`:
+
+```bash
+chiffremento -mode dec -in photos.chto -out - | tar tf -
+```
+
 From a script, supply the password on standard input:
 
 ```bash
 echo "$PASSWORD" | chiffremento -mode enc -in backup.db
 ```
 
+> With `-in -`, standard input carries the data, so the password is asked for on the terminal (`/dev/tty`). With no terminal available, the tool refuses rather than reading the first line of your data as the password.
+
 ## 🗂️ File format
 
 ```
 magic       8 B   "CHFRMT03"
-version     1 B   1 (legacy) or 2 (current)
-flags       1 B   bit 0 = compressed
+version     1 B   1 and 2 (legacy), 3 (current)
+flags       1 B   bit 0 = compressed (v1/v2), bit 1 = tar archive, bit 2 = padded
 algo        1 B   1 = AES-GCM, 2 = ChaCha20-Poly1305, 3 = cascade
 argonTime   4 B   uint32 big-endian        ┐
-argonMemory 4 B   uint32 big-endian (KiB)  ├ v2 only
+argonMemory 4 B   uint32 big-endian (KiB)  ├ v2 and v3
 argonPar    1 B   uint8                    ┘
+compAlgo    1 B   0 = none, 1 = gzip, 2 = zstd      ─ v3 only
 salt       16 B
 ```
 

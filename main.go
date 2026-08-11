@@ -4,6 +4,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -28,8 +29,11 @@ func main() {
 func run() error {
 	showVersion := flag.Bool("version", false, "afficher la version")
 	mode := flag.String("mode", "", "enc (chiffrer), dec (déchiffrer), verify (contrôler) ou info (inspecter)")
-	fileIn := flag.String("in", "", "fichier d'entrée")
+	fileIn := flag.String("in", "", "fichier ou dossier d'entrée, ou - pour l'entrée standard (dossier en mode enc uniquement)")
+	fileOut := flag.String("out", "", "destination (défaut : entrée + "+extension+" en enc, entrée sans l'extension en dec) ; - pour la sortie standard")
 	compress := flag.Bool("comp", false, "compresser les données avant chiffrement")
+	compAlgo := flag.String("comp-algo", "zstd", "algorithme de compression avec -comp : zstd (rapide) ou gzip (compatible v2)")
+	pad := flag.Bool("pad", false, "masquer la taille réelle en ajoutant du remplissage ; s'exclut avec -comp")
 	chacha := flag.Bool("chacha", false, "utiliser ChaCha20-Poly1305 au lieu d'AES-GCM")
 	parano := flag.Bool("parano", false, "mode parano : double chiffrement en cascade (chacha20 + aes), plus lent")
 	flag.Usage = usage
@@ -57,9 +61,12 @@ func run() error {
 		return errors.New("-mode et -in sont obligatoires")
 	}
 
-	if *mode != "enc" && (*compress || *chacha || *parano) {
+	if *mode != "enc" && (*compress || *chacha || *parano || *pad) {
 		fmt.Fprintln(os.Stderr, styleDim.Render(
-			"note : -comp, -chacha et -parano n'ont d'effet qu'en mode enc, ils sont ignorés ici"))
+			"note : -comp, -pad, -chacha et -parano n'ont d'effet qu'en mode enc, ils sont ignorés ici"))
+	}
+	if *mode == "info" && *fileOut != "" {
+		fmt.Fprintln(os.Stderr, styleDim.Render("note : -out n'a pas d'effet en mode info, il est ignoré"))
 	}
 
 	switch *mode {
@@ -68,9 +75,13 @@ func run() error {
 		if err != nil {
 			return err
 		}
-		return doEncrypt(*fileIn, algo, *compress)
+		comp, err := chooseComp(*compress, *compAlgo)
+		if err != nil {
+			return err
+		}
+		return doEncrypt(*fileIn, *fileOut, algo, comp, *pad)
 	case "dec":
-		return doDecrypt(*fileIn)
+		return doDecrypt(*fileIn, *fileOut)
 	case "verify":
 		return doVerify(*fileIn)
 	case "info":
@@ -108,16 +119,49 @@ func chooseAlgo(chacha, parano bool) (byte, error) {
 	}
 }
 
-func doEncrypt(in string, algo byte, compress bool) error {
-	if strings.HasSuffix(in, extension) {
-		return fmt.Errorf("%s porte déjà l'extension %s : il semble déjà chiffré", in, extension)
+// chooseComp traduit -comp et -comp-algo en identifiant de compression.
+func chooseComp(compress bool, algo string) (byte, error) {
+	if !compress {
+		return pkg.CompNone, nil
 	}
-	out := in + extension
-	if err := checkPaths(in, out); err != nil {
-		return err
+	switch algo {
+	case "zstd":
+		return pkg.CompZstd, nil
+	case "gzip":
+		return pkg.CompGzip, nil
+	default:
+		return 0, fmt.Errorf("algorithme de compression inconnu %q (attendu zstd ou gzip)", algo)
+	}
+}
+
+// isStream reconnaît le tiret conventionnel des flux standard.
+func isStream(p string) bool { return p == "-" }
+
+func doEncrypt(in, out string, algo, comp byte, pad bool) error {
+	opts := pkg.Options{Algo: algo, Comp: comp, Pad: pad}
+
+	// Un dossier glissé dans le terminal ou complété par le shell arrive
+	// souvent avec un séparateur final : sans ce nettoyage, la sortie
+	// s'appellerait « photos/.chto ».
+	if !isStream(in) {
+		in = trimTrailingSeparator(in)
+		if strings.HasSuffix(in, extension) {
+			return fmt.Errorf("%s porte déjà l'extension %s : il semble déjà chiffré", in, extension)
+		}
+	}
+	if out == "" {
+		if isStream(in) {
+			return errors.New("-out est obligatoire quand l'entrée est l'entrée standard")
+		}
+		out = in + extension
+	}
+	if !isStream(in) && !isStream(out) {
+		if err := checkPaths(in, out); err != nil {
+			return err
+		}
 	}
 
-	password, err := readPassword(true)
+	password, err := readPassword(true, isStream(in))
 	if err != nil {
 		return err
 	}
@@ -125,69 +169,157 @@ func doEncrypt(in string, algo byte, compress bool) error {
 
 	fmt.Fprintf(os.Stderr, "%s %s\n", styleDim.Render("chiffrement  "), pkg.AlgoName(algo))
 	fmt.Fprintf(os.Stderr, "%s %s\n", styleDim.Render("kdf          "), pkg.DefaultKDFLabel())
+	if comp != pkg.CompNone {
+		fmt.Fprintf(os.Stderr, "%s %s\n", styleDim.Render("compression  "), pkg.CompName(comp))
+	}
+	if pad {
+		fmt.Fprintf(os.Stderr, "%s %s\n", styleDim.Render("remplissage  "), "taille arrondie au palier supérieur")
+	}
+	if !isStream(in) {
+		if st, err := os.Stat(in); err == nil && st.IsDir() {
+			fmt.Fprintf(os.Stderr, "%s %s\n", styleDim.Render("contenu      "),
+				"dossier, empaqueté en tar au fil du chiffrement")
+		}
+	}
 
-	if err := pkg.Encrypt(in, out, password, pkg.Options{Algo: algo, Compress: compress}); err != nil {
+	if err := encryptTo(in, out, password, opts); err != nil {
 		return err
 	}
-	fmt.Fprintf(os.Stderr, "%s %s\n", styleAccent.Render("✓"), out)
+	fmt.Fprintf(os.Stderr, "%s %s\n", styleAccent.Render("✓"), describeDest(out))
 	return nil
 }
 
-func doDecrypt(in string) error {
-	if !strings.HasSuffix(in, extension) {
-		return fmt.Errorf("un fichier à déchiffrer doit porter l'extension %s", extension)
-	}
-	out := strings.TrimSuffix(in, extension)
-	if filepath.Base(out) == "" || filepath.Base(in) == extension {
-		return fmt.Errorf("%s ne donne aucun nom de sortie exploitable", in)
-	}
-	if err := checkPaths(in, out); err != nil {
-		return err
+// encryptTo aiguille entre l'écriture atomique sur disque et les flux standard.
+// Le chemin « fichier vers fichier » reste celui de pkg.Encrypt, qui seul offre
+// l'écriture atomique.
+func encryptTo(in, out string, password []byte, opts pkg.Options) error {
+	if !isStream(in) && !isStream(out) {
+		return pkg.Encrypt(in, out, password, opts)
 	}
 
-	// L'en-tête est lisible sans mot de passe : autant annoncer les vrais
-	// paramètres du fichier avant de demander quoi que ce soit.
-	version, algo, kdf, compressed, err := pkg.Inspect(in)
+	src, size, closeSrc, err := openSource(in)
 	if err != nil {
 		return err
 	}
-	fmt.Fprintf(os.Stderr, "%s format v%d · %s · %s%s\n", styleDim.Render("fichier      "),
-		version, algo, kdf, compressedSuffix(compressed))
+	defer closeSrc()
 
-	password, err := readPassword(false)
+	dst, closeDst, err := openDest(out)
+	if err != nil {
+		return err
+	}
+	defer closeDst()
+
+	if err := pkg.EncryptStream(dst, src, size, password, opts); err != nil {
+		return err
+	}
+	return closeDst()
+}
+
+func doDecrypt(in, out string) error {
+	if !isStream(in) && !strings.HasSuffix(in, extension) {
+		return fmt.Errorf("un fichier à déchiffrer doit porter l'extension %s", extension)
+	}
+	if out == "" {
+		if isStream(in) {
+			return errors.New("-out est obligatoire quand l'entrée est l'entrée standard")
+		}
+		out = strings.TrimSuffix(in, extension)
+		if filepath.Base(out) == "" || filepath.Base(in) == extension {
+			return fmt.Errorf("%s ne donne aucun nom de sortie exploitable", in)
+		}
+	}
+	if !isStream(in) && !isStream(out) {
+		if err := checkPaths(in, out); err != nil {
+			return err
+		}
+	}
+
+	// L'en-tête est lisible sans mot de passe : autant annoncer les vrais
+	// paramètres du fichier avant de demander quoi que ce soit. Sur un flux,
+	// c'est impossible sans consommer les octets, donc on s'en passe.
+	if !isStream(in) {
+		d, err := pkg.Inspect(in)
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(os.Stderr, "%s format v%d · %s · %s%s\n", styleDim.Render("fichier      "),
+			d.Version, d.Algo, d.KDF, detailsSuffix(d))
+		if d.Archive {
+			if isStream(out) {
+				fmt.Fprintf(os.Stderr, "%s %s\n", styleDim.Render("sortie       "),
+					"flux tar sur la sortie standard (à passer à tar)")
+			} else {
+				fmt.Fprintf(os.Stderr, "%s %s\n", styleDim.Render("sortie       "),
+					out+string(os.PathSeparator)+" (dossier, doit ne pas exister)")
+			}
+		}
+	}
+
+	password, err := readPassword(false, isStream(in))
 	if err != nil {
 		return err
 	}
 	defer zero(password)
 
-	if err := pkg.Decrypt(in, out, password, pkg.Options{}); err != nil {
+	if err := decryptTo(in, out, password); err != nil {
 		return err
 	}
-	fmt.Fprintf(os.Stderr, "%s %s\n", styleAccent.Render("✓"), out)
+	fmt.Fprintf(os.Stderr, "%s %s\n", styleAccent.Render("✓"), describeDest(out))
 	return nil
+}
+
+// decryptTo aiguille comme encryptTo. Sur la sortie standard, une archive sort
+// telle quelle, en tar : il n'y a rien à extraire dans un tube.
+func decryptTo(in, out string, password []byte) error {
+	if !isStream(in) && !isStream(out) {
+		return pkg.Decrypt(in, out, password, pkg.Options{})
+	}
+
+	src, _, closeSrc, err := openSource(in)
+	if err != nil {
+		return err
+	}
+	defer closeSrc()
+
+	dst, closeDst, err := openDest(out)
+	if err != nil {
+		return err
+	}
+	defer closeDst()
+
+	if err := pkg.DecryptStream(dst, src, password, pkg.Options{}); err != nil {
+		return err
+	}
+	return closeDst()
 }
 
 // doVerify contrôle qu'un fichier est intact et déchiffrable sans rien écrire
 // sur le disque. Pratique pour vérifier une sauvegarde sans l'extraire.
 func doVerify(in string) error {
-	if !strings.HasSuffix(in, extension) {
+	if !isStream(in) && !strings.HasSuffix(in, extension) {
 		return fmt.Errorf("un fichier à vérifier doit porter l'extension %s", extension)
 	}
 
-	version, algo, kdf, compressed, err := pkg.Inspect(in)
-	if err != nil {
-		return err
+	if !isStream(in) {
+		d, err := pkg.Inspect(in)
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(os.Stderr, "%s format v%d · %s · %s%s\n", styleDim.Render("fichier      "),
+			d.Version, d.Algo, d.KDF, detailsSuffix(d))
 	}
-	fmt.Fprintf(os.Stderr, "%s format v%d · %s · %s%s\n", styleDim.Render("fichier      "),
-		version, algo, kdf, compressedSuffix(compressed))
 
-	password, err := readPassword(false)
+	password, err := readPassword(false, isStream(in))
 	if err != nil {
 		return err
 	}
 	defer zero(password)
 
-	if err := pkg.Verify(in, password, pkg.Options{}); err != nil {
+	if isStream(in) {
+		if err := pkg.VerifyStream(os.Stdin, password, pkg.Options{}); err != nil {
+			return err
+		}
+	} else if err := pkg.Verify(in, password, pkg.Options{}); err != nil {
 		return err
 	}
 	fmt.Fprintf(os.Stderr, "%s %s\n", styleAccent.Render("✓"),
@@ -198,7 +330,10 @@ func doVerify(in string) error {
 // doInfo affiche l'en-tête d'un .chto sans le déchiffrer : ni mot de passe, ni
 // écriture sur le disque.
 func doInfo(in string) error {
-	version, algo, kdf, compressed, err := pkg.Inspect(in)
+	if isStream(in) {
+		return errors.New("info a besoin d'un fichier : l'en-tête d'un flux ne peut pas être relu sans le consommer")
+	}
+	d, err := pkg.Inspect(in)
 	if err != nil {
 		return err
 	}
@@ -208,25 +343,88 @@ func doInfo(in string) error {
 	}
 
 	line := func(label, value string) {
-		fmt.Printf("%s%s\n", styleLabel.Render(label), styleText.Render(value))
+		fmt.Printf("%s%s\n", styleInfoLabel.Render(label), styleText.Render(value))
 	}
 	line("fichier", in)
 	line("taille", fmt.Sprintf("%d octets", st.Size()))
-	line("format", fmt.Sprintf("v%d", version))
-	line("aead", algo)
-	line("kdf", kdf)
-	line("gzip", map[bool]string{true: "oui", false: "non"}[compressed])
-	if version == 1 {
-		fmt.Println(styleDim.Render("  produit par une version 1.x : lecture seule, les nouveaux fichiers sont en v2"))
+	line("format", fmt.Sprintf("v%d", d.Version))
+	line("aead", d.Algo)
+	line("kdf", d.KDF)
+	line("compression", d.Comp)
+	line("contenu", map[bool]string{true: "dossier (archive tar)", false: "fichier"}[d.Archive])
+	line("remplissage", map[bool]string{true: "oui, taille réelle masquée", false: "non"}[d.Padded])
+	if d.Version < 3 {
+		fmt.Println(styleDim.Render(fmt.Sprintf(
+			"  produit par un format v%d : lecture seule, les nouveaux fichiers sont en v3", d.Version)))
 	}
 	return nil
 }
 
-func compressedSuffix(c bool) string {
-	if c {
-		return " · compressé"
+// openSource ouvre l'entrée et renvoie sa taille, ou -1 si elle est inconnue.
+func openSource(in string) (io.Reader, int64, func(), error) {
+	if isStream(in) {
+		return os.Stdin, -1, func() {}, nil
 	}
-	return ""
+	f, err := os.Open(in)
+	if err != nil {
+		return nil, 0, nil, fmt.Errorf("lecture: %w", err)
+	}
+	size := int64(-1)
+	if st, err := f.Stat(); err == nil && st.Mode().IsRegular() {
+		size = st.Size()
+	}
+	return f, size, func() { f.Close() }, nil
+}
+
+// openDest ouvre la destination. La fonction de fermeture renvoyée est
+// idempotente : on l'appelle explicitement pour remonter l'erreur de fermeture,
+// et en defer pour ne rien laisser ouvert en cas d'échec.
+func openDest(out string) (io.Writer, func() error, error) {
+	if isStream(out) {
+		return os.Stdout, func() error { return nil }, nil
+	}
+	f, err := os.Create(out)
+	if err != nil {
+		return nil, nil, fmt.Errorf("création de %s: %w", out, err)
+	}
+	closed := false
+	return f, func() error {
+		if closed {
+			return nil
+		}
+		closed = true
+		return f.Close()
+	}, nil
+}
+
+func describeDest(out string) string {
+	if isStream(out) {
+		return "écrit sur la sortie standard"
+	}
+	return out
+}
+
+func detailsSuffix(d pkg.Details) string {
+	s := ""
+	if d.Compressed {
+		s += " · " + d.Comp
+	}
+	if d.Archive {
+		s += " · dossier"
+	}
+	if d.Padded {
+		s += " · taille masquée"
+	}
+	return s
+}
+
+// trimTrailingSeparator retire les séparateurs finaux sans jamais réduire un
+// chemin à la chaîne vide : "photos/" devient "photos", mais "/" reste "/".
+func trimTrailingSeparator(p string) string {
+	for len(p) > 1 && os.IsPathSeparator(p[len(p)-1]) {
+		p = p[:len(p)-1]
+	}
+	return p
 }
 
 // checkPaths attrape les cas où l'on écraserait la source par la sortie.
@@ -249,18 +447,27 @@ func zero(b []byte) {
 }
 
 func usage() {
-	fmt.Fprintf(os.Stderr, `chiffremento %s — chiffrement de fichiers
+	fmt.Fprintf(os.Stderr, `chiffremento %s — chiffrement de fichiers et de dossiers
 
   chiffremento                        interface guidée
-  chiffremento -mode enc    -in FICHIER [options]
-  chiffremento -mode dec    -in FICHIER%s
-  chiffremento -mode verify -in FICHIER%s   contrôle sans rien écrire
-  chiffremento -mode info   -in FICHIER%s   en-tête, sans mot de passe
+  chiffremento -mode enc    -in FICHIER|DOSSIER [-out CHEMIN] [options]
+  chiffremento -mode dec    -in FICHIER%s      [-out CHEMIN]
+  chiffremento -mode verify -in FICHIER%s      contrôle sans rien écrire
+  chiffremento -mode info   -in FICHIER%s      en-tête, sans mot de passe
+
+Un dossier est empaqueté en tar au fil du chiffrement, et recréé à l'identique
+au déchiffrement.
+
+-in - lit l'entrée standard, -out - écrit sur la sortie standard : l'outil est
+donc composable. Sur un flux, l'écriture atomique n'existe pas et le clair sort
+avant que la fin du fichier soit authentifiée — à réserver aux tubes.
+
+  chiffremento -mode dec -in sauvegarde%s -out - | tar tf -
 
 Le mot de passe n'est jamais passé en argument : il est demandé de façon
 masquée, ou lu sur l'entrée standard si celle-ci n'est pas un terminal.
 
 Options :
-`, version, extension, extension, extension)
+`, version, extension, extension, extension, extension)
 	flag.PrintDefaults()
 }
