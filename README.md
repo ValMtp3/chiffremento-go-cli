@@ -19,7 +19,7 @@
 **Chiffremento CLI** est un outil en ligne de commande écrit en Go pour chiffrer et déchiffrer des fichiers. Il s'utilise soit via une interface guidée, soit avec des flags pour les scripts.
 
 ```
-  chiffremento chiffrement  v2.0
+  chiffremento chiffrement  v3.0.0
 ┌────────────────────────────────────────────────────┐
 │  entrée    rapport-annuel.pdf             14.2 Mo  │
 │  sortie    rapport-annuel.pdf.chto                 │
@@ -32,6 +32,15 @@
 │  ████████████░░░░░░░░░░░░░░░░░░  42%      38 Mo/s  │
 └────────────────────────────────────────────────────┘
 ```
+
+## ✨ Nouveautés v3.0
+
+- **📁 Dossiers** : chiffrer un dossier entier, empaqueté en tar au fil du chiffrement et recréé à l'identique au déchiffrement.
+- **🗜️ zstd** : nouvelle compression par défaut, mesurée ~8× plus rapide que gzip à ratio comparable. La compression est décrite par un champ de l'en-tête, plus par un simple bit — les `.chto` v1 et v2 restent lisibles.
+- **📏 `-pad`** : masque la taille réelle du contenu en arrondissant au palier supérieur.
+- **🔗 `-out`, `-in -`, `-out -`** : destination choisie, et flux standard pour composer avec d'autres outils.
+- **🗂️ Explorateur de fichiers** dans l'interface guidée, en alternative à la saisie du chemin.
+- **📊 Force du mot de passe par dictionnaire** : `azerty123` est enfin annoncé comme faible.
 
 ## ✨ Nouveautés v2.0
 
@@ -92,6 +101,8 @@ Sans aucun argument, dans un terminal :
 ```bash
 chiffremento
 ```
+
+Elle demande l'opération, puis comment désigner la cible : **saisir un chemin** (ou le glisser-déposer), ou **parcourir les fichiers**. Dans l'explorateur, `↑↓` se déplacent, `→` entre dans un dossier et `entrée` choisit.
 
 ### Ligne de commande
 
@@ -231,6 +242,15 @@ Le mode parano ne remplace pas un bon mot de passe : il protège contre la déco
 
 **Chiffremento CLI** is a command-line tool written in Go for encrypting and decrypting files. It offers a guided interface, or flags for scripting.
 
+## ✨ New in v3.0
+
+- **📁 Folders**: encrypt a whole folder, packed into a tar stream as it is encrypted and recreated as-is on decryption.
+- **🗜️ zstd**: the new default compression, measured ~8× faster than gzip at a comparable ratio. Compression is now described by a header field rather than a single bit — v1 and v2 `.chto` files remain readable.
+- **📏 `-pad`**: masks the real size of the contents by rounding up to the next bucket.
+- **🔗 `-out`, `-in -`, `-out -`**: choose the destination, and use the standard streams to compose with other tools.
+- **🗂️ File browser** in the guided interface, as an alternative to typing the path.
+- **📊 Dictionary-based password strength**: `azerty123` is finally reported as weak.
+
 ## ✨ New in v2.0
 
 - **🖥️ Guided interface**: running `chiffremento` with no arguments opens an interactive interface. Flags remain available for scripts.
@@ -290,6 +310,8 @@ With no arguments, in a terminal:
 ```bash
 chiffremento
 ```
+
+It asks for the operation, then how to point at the target: **type a path** (or drag and drop it), or **browse files**. In the browser, `↑↓` move, `→` enters a folder and `enter` selects.
 
 ### Command line
 

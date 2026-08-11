@@ -16,24 +16,23 @@ type formulaire = huh.Form
 
 type huhForm struct{ form *formulaire }
 
-// TestFormulaireSeConstruit vérifie que le formulaire principal se monte sans
-// panique avec le thème appliqué.
-//
-// Le piloter avec des touches simulées n'est pas fiable hors d'un vrai
-// terminal : sans pty, huh reste en attente. La vérification du comportement
-// clavier se fait donc à la main, en lançant `chiffremento` sans argument.
-func TestFormulaireSeConstruit(t *testing.T) {
-	action, path, mode := "enc", "", "saisie"
-	if f := mainForm(&action, &path, &mode); f == nil {
-		t.Fatal("mainForm a renvoyé nil")
+// TestFormulairesSeConstruisent vérifie que les deux formulaires se montent
+// sans panique, thème appliqué, dans toutes les combinaisons d'opération et de
+// mode de saisie.
+func TestFormulairesSeConstruisent(t *testing.T) {
+	action, mode := "enc", "saisie"
+	if f := choixForm(&action, &mode); f == nil {
+		t.Fatal("choixForm a renvoyé nil")
 	}
-	// Le second chemin de saisie monte l'explorateur de fichiers : il ne doit
-	// pas paniquer non plus, thème appliqué.
-	mode = "parcourir"
-	if f := mainForm(&action, &path, &mode); f == nil {
-		t.Fatal("mainForm a renvoyé nil avec l'explorateur")
+	for _, a := range []string{"enc", "dec", "verify"} {
+		for _, m := range []string{"saisie", "parcourir"} {
+			path := ""
+			if f := cibleForm(a, m, &path); f == nil {
+				t.Fatalf("cibleForm(%q, %q) a renvoyé nil", a, m)
+			}
+		}
 	}
-	if f := filePickerField(&action, &path); f == nil {
+	if f := filePickerField("enc", new(string)); f == nil {
 		t.Fatal("filePickerField a renvoyé nil")
 	}
 	if th := formTheme(); th == nil {
@@ -171,12 +170,12 @@ func TestCheckPaths(t *testing.T) {
 	}
 }
 
-// --- Pilotage du formulaire principal -----------------------------------
+// --- Pilotage des formulaires -------------------------------------------
 
 // huh.Form est un modèle Bubble Tea : on peut donc lui envoyer des touches et
 // lire son rendu sans terminal. C'est ce qui permet de vérifier que
-// l'explorateur de fichiers apparaît réellement — la seule chose qu'un test de
-// construction ne dit pas.
+// l'explorateur de fichiers apparaît réellement, et ouvert — la seule chose
+// qu'un test de construction ne dit pas.
 
 // envoyer applique une touche au formulaire et déroule les commandes qu'il
 // renvoie, comme le ferait la boucle de Bubble Tea.
@@ -212,63 +211,128 @@ func deroule(t *testing.T, f *huhForm, cmd tea.Cmd, profondeur int) {
 	deroule(t, f, suivante, profondeur+1)
 }
 
-func TestFormulaireOuvreLExplorateur(t *testing.T) {
-	action, path, mode := "enc", "", "saisie"
-	f := &huhForm{form: mainForm(&action, &path, &mode)}
+func ouvrir(t *testing.T, form *formulaire) *huhForm {
+	t.Helper()
+	f := &huhForm{form: form}
 	deroule(t, f, f.form.Init(), 0)
-
-	// Premier groupe : l'opération, puis le mode de désignation. On valide
-	// l'opération pour arriver sur le choix « saisir / parcourir ».
-	envoyer(t, f, tea.KeyMsg{Type: tea.KeyEnter})
-	if !strings.Contains(f.form.View(), "désigner la cible") {
-		t.Fatalf("le choix du mode de désignation n'est pas affiché:\n%s", f.form.View())
-	}
-
-	// En mode « saisie », c'est le champ texte qui doit suivre.
-	envoyer(t, f, tea.KeyMsg{Type: tea.KeyEnter})
-	if vue := f.form.View(); !strings.Contains(vue, "glisser deposer") {
-		t.Errorf("le champ texte n'est pas affiché en mode saisie:\n%s", vue)
-	}
-	if mode != "saisie" {
-		t.Errorf("mode = %q, attendu saisie", mode)
-	}
+	return f
 }
 
-func TestFormulaireModeParcourir(t *testing.T) {
-	action, path, mode := "enc", "", "parcourir"
-	f := &huhForm{form: mainForm(&action, &path, &mode)}
-	deroule(t, f, f.form.Init(), 0)
-
-	// Le mode est déjà « parcourir » : après le premier groupe, c'est
-	// l'explorateur qui doit apparaître, et non le champ texte.
-	envoyer(t, f, tea.KeyMsg{Type: tea.KeyEnter})
-	envoyer(t, f, tea.KeyMsg{Type: tea.KeyEnter})
+// TestChoixFormAfficheLesDeuxQuestions : l'opération, puis le mode de saisie.
+func TestChoixFormAfficheLesDeuxQuestions(t *testing.T) {
+	action, mode := "enc", "saisie"
+	f := ouvrir(t, choixForm(&action, &mode))
 
 	vue := f.form.View()
-	if !strings.Contains(vue, "entrer dans un dossier") {
-		t.Errorf("l'explorateur de fichiers n'apparaît pas en mode parcourir:\n%s", vue)
+	if !strings.Contains(vue, "opération") {
+		t.Errorf("la question de l'opération manque:\n%s", vue)
 	}
-	if strings.Contains(vue, "glisser deposer") {
-		t.Errorf("le champ texte est encore affiché alors que le mode est parcourir:\n%s", vue)
+	if !strings.Contains(vue, "désigner la cible") {
+		t.Errorf("le choix du mode de désignation manque:\n%s", vue)
 	}
-}
 
-// TestFormulaireBasculeDeMode : le choix se fait au clavier, donc la bascule
-// doit fonctionner sans que le formulaire ait été construit avec le bon mode.
-func TestFormulaireBasculeDeMode(t *testing.T) {
-	action, path, mode := "enc", "", "saisie"
-	f := &huhForm{form: mainForm(&action, &path, &mode)}
-	deroule(t, f, f.form.Init(), 0)
-
+	// La bascule au clavier doit écrire dans la variable liée.
 	envoyer(t, f, tea.KeyMsg{Type: tea.KeyEnter}) // opération validée
 	envoyer(t, f, tea.KeyMsg{Type: tea.KeyDown})  // « parcourir »
 	if mode != "parcourir" {
-		t.Fatalf("mode = %q après une flèche bas, attendu parcourir", mode)
+		t.Errorf("mode = %q après une flèche bas, attendu parcourir", mode)
 	}
-	envoyer(t, f, tea.KeyMsg{Type: tea.KeyEnter})
+}
+
+// TestCibleFormExplorateurOuvert est le test de la correction : l'explorateur
+// doit s'afficher déployé, sans permissions, sans qu'aucune touche soit
+// nécessaire pour le déplier.
+func TestCibleFormExplorateurOuvert(t *testing.T) {
+	path := ""
+	f := ouvrir(t, cibleForm("enc", "parcourir", &path))
 
 	vue := f.form.View()
 	if !strings.Contains(vue, "entrer dans un dossier") {
-		t.Errorf("l'explorateur n'apparaît pas après bascule au clavier:\n%s", vue)
+		t.Errorf("l'explorateur n'est pas affiché:\n%s", vue)
+	}
+	// « No file selected. » signifie que huh attend une touche avant de montrer
+	// l'arborescence : c'est précisément ce qu'on ne veut plus.
+	if strings.Contains(vue, "No file selected") {
+		t.Errorf("l'explorateur est replié, il faut une touche pour l'ouvrir:\n%s", vue)
+	}
+	if strings.Contains(vue, "drwx") || strings.Contains(vue, "-rw-") {
+		t.Errorf("les permissions encombrent la liste:\n%s", vue)
+	}
+	if strings.Contains(vue, "glisser") {
+		t.Errorf("le champ texte est affiché alors que le mode est parcourir:\n%s", vue)
+	}
+}
+
+func TestCibleFormChampTexte(t *testing.T) {
+	path := ""
+	f := ouvrir(t, cibleForm("enc", "saisie", &path))
+
+	vue := f.form.View()
+	if !strings.Contains(vue, "glisser") {
+		t.Errorf("le champ texte n'est pas affiché:\n%s", vue)
+	}
+	if strings.Contains(vue, "entrer dans un dossier") {
+		t.Errorf("l'explorateur est affiché alors que le mode est saisie:\n%s", vue)
+	}
+}
+
+// TestCibleFormAnnonceLaCibleAttendue : au déchiffrement, seul un .chto a un
+// sens — le champ doit le dire, et les deux chemins de saisie doivent le dire
+// pareil.
+func TestCibleFormAnnonceLaCibleAttendue(t *testing.T) {
+	for _, mode := range []string{"saisie", "parcourir"} {
+		for _, action := range []string{"dec", "verify"} {
+			path := ""
+			f := ouvrir(t, cibleForm(action, mode, &path))
+			if vue := f.form.View(); !strings.Contains(vue, extension) {
+				t.Errorf("%s/%s : le champ ne nomme pas l'extension attendue:\n%s", action, mode, vue)
+			}
+		}
+		path := ""
+		f := ouvrir(t, cibleForm("enc", mode, &path))
+		if vue := f.form.View(); !strings.Contains(vue, "dossier") {
+			t.Errorf("enc/%s : le champ ne mentionne pas le dossier:\n%s", mode, vue)
+		}
+	}
+}
+
+// TestCibleFormExplorateurListeAssezDEntrees garde le piège de l'ordre des
+// appels : si Height est appelé après Title, huh réduit la liste à une seule
+// ligne et l'explorateur devient inutilisable — sans que rien ne plante.
+func TestCibleFormExplorateurListeAssezDEntrees(t *testing.T) {
+	dir := t.TempDir()
+	// Un fichier caché dans le lot : ShowHidden doit être effectif, sinon on ne
+	// pourrait pas chiffrer une clé dans ~/.ssh depuis l'explorateur.
+	noms := []string{"alpha.txt", "beta.txt", "gamma.txt", "delta.txt",
+		"epsilon.txt", "zeta.txt", "eta.txt", ".config_cache"}
+	for _, n := range noms {
+		if err := os.WriteFile(filepath.Join(dir, n), []byte("x"), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// L'explorateur démarre dans le dossier courant.
+	precedent, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Chdir(precedent)
+
+	path := ""
+	f := ouvrir(t, cibleForm("enc", "parcourir", &path))
+	vue := f.form.View()
+
+	manquants := []string{}
+	for _, n := range noms {
+		if !strings.Contains(vue, n) {
+			manquants = append(manquants, n)
+		}
+	}
+	if len(manquants) > 0 {
+		t.Errorf("%d entrées sur %d ne sont pas listées (%v) — la liste est probablement réduite à une ligne:\n%s",
+			len(manquants), len(noms), manquants, vue)
 	}
 }

@@ -25,13 +25,22 @@ func isInteractive() bool {
 	return term.IsTerminal(int(os.Stdin.Fd())) && term.IsTerminal(int(os.Stdout.Fd()))
 }
 
-// runTUI enchaîne le formulaire puis l'écran de progression.
+// runTUI enchaîne les formulaires puis l'écran de progression.
+//
+// Deux formulaires successifs et non un seul à groupes masqués : le second est
+// donc construit *après* que l'opération et le mode de saisie sont connus. Ça
+// évite tout un nid de guêpes — un champ dont la configuration dépend d'un choix
+// pas encore fait, et un explorateur que huh replie dès qu'on tente de revenir
+// en arrière, laissant l'utilisateur devant une liste disparue.
 func runTUI() error {
 	action := "enc"
-	path := ""
 	mode := "saisie"
+	if err := choixForm(&action, &mode).Run(); err != nil {
+		return err
+	}
 
-	if err := mainForm(&action, &path, &mode).Run(); err != nil {
+	path := ""
+	if err := cibleForm(action, mode, &path).Run(); err != nil {
 		return err
 	}
 	path = trimTrailingSeparator(strings.TrimSpace(expandHome(path)))
@@ -46,15 +55,8 @@ func runTUI() error {
 	}
 }
 
-// mainForm demande l'opération, puis la cible — au clavier ou en naviguant.
-//
-// Les deux groupes de désignation sont exclusifs : `WithHideFunc` en masque un
-// selon le choix précédent. Le champ texte reste le chemin rapide, parce qu'un
-// glisser-déposer ou un chemin collé n'a rien à gagner d'un explorateur ; celui
-// -ci sert quand on ne sait plus où est le fichier.
-//
-// Extrait de runTUI pour être pilotable depuis les tests.
-func mainForm(action *string, path *string, mode *string) *huh.Form {
+// choixForm demande l'opération et la façon de désigner la cible.
+func choixForm(action *string, mode *string) *huh.Form {
 	return huh.NewForm(
 		huh.NewGroup(
 			huh.NewSelect[string]().
@@ -62,8 +64,8 @@ func mainForm(action *string, path *string, mode *string) *huh.Form {
 				Title("opération").
 				Options(
 					huh.NewOption("chiffrer un fichier ou un dossier", "enc"),
-					huh.NewOption("déchiffrer un fichier", "dec"),
-					huh.NewOption("vérifier un fichier (sans rien écrire)", "verify"),
+					huh.NewOption("déchiffrer un "+extension+"  (fichier ou dossier)", "dec"),
+					huh.NewOption("vérifier un "+extension+"  (sans rien écrire)", "verify"),
 				).
 				Value(action),
 
@@ -76,45 +78,100 @@ func mainForm(action *string, path *string, mode *string) *huh.Form {
 				).
 				Value(mode),
 		),
-
-		huh.NewGroup(
-			huh.NewInput().
-				Key("path").
-				Title("fichier ou dossier").
-				Placeholder("chemin du fichier ou glisser deposer le fichier/dossier").
-				Value(path).
-				Validate(func(s string) error { return validateTarget(s, *action) }),
-		).WithHideFunc(func() bool { return *mode != "saisie" }),
-
-		huh.NewGroup(
-			filePickerField(action, path),
-		).WithHideFunc(func() bool { return *mode != "parcourir" }),
 	).WithTheme(formTheme()).WithShowHelp(true)
+}
+
+// cibleForm demande la cible, au clavier ou en naviguant. L'opération est déjà
+// connue : le champ peut donc s'annoncer précisément.
+func cibleForm(action, mode string, path *string) *huh.Form {
+	var champ huh.Field
+	if mode == "parcourir" {
+		champ = filePickerField(action, path)
+	} else {
+		champ = huh.NewInput().
+			Key("path").
+			Title(cibleTitre(action)).
+			Placeholder(ciblePlaceholder(action)).
+			Value(path).
+			Validate(func(s string) error { return validateTarget(s, action) })
+	}
+	return huh.NewForm(huh.NewGroup(champ)).WithTheme(formTheme()).WithShowHelp(true)
 }
 
 // filePickerField construit l'explorateur. Il vient de huh, donc de bubbles :
 // aucune dépendance nouvelle.
 //
-// Les dossiers sont sélectionnables parce qu'ils sont une cible légitime au
-// chiffrement. Le filtrage par type n'est volontairement pas utilisé : c'est
-// `validateTarget` qui tranche, dans les deux chemins de saisie, avec ses
+// Picking(true) est essentiel : sans lui, le champ affiche « No file selected. »
+// et il faut appuyer sur une touche pour ouvrir l'arborescence. On veut la liste
+// tout de suite — c'est la raison d'être du mode « parcourir ».
+//
+// Les permissions ne sont pas affichées : `drwxr-xr-x` n'aide personne à choisir
+// un fichier et vole la place du nom. La taille, elle, sert. Les fichiers cachés
+// sont visibles parce que c'est précisément le genre de fichier qu'on chiffre —
+// une clé dans ~/.ssh, un fichier de configuration.
+//
+// Les dossiers ne sont sélectionnables qu'au chiffrement : ailleurs, seul un
+// .chto a un sens. `validateTarget` reste l'autorité sur le reste, avec ses
 // messages en français — `AllowedTypes` afficherait les siens en anglais et
 // ferait exister deux règles là où il n'en faut qu'une.
-//
-// La description rappelle la navigation, qui n'est pas devinable : la flèche
-// droite entre dans un dossier, entrée choisit ce qui est sous le curseur.
-func filePickerField(action *string, path *string) huh.Field {
+func filePickerField(action string, path *string) huh.Field {
+	// L'ordre des appels compte, et c'est un vrai piège de huh.
+	//
+	// NewFilePicker lit déjà le dossier à la construction. ShowHidden et Height
+	// doivent donc venir en premier : posés plus loin dans la chaîne, le premier
+	// n'a aucun effet — les fichiers cachés restent invisibles — et le second
+	// soustrait la hauteur d'un titre rendu sans thème, ce qui ne laisse qu'une
+	// seule ligne de liste. Dans les deux cas, rien ne plante : l'explorateur est
+	// simplement inutilisable. TestCibleFormExplorateurListeAssezDEntrees garde
+	// ces deux propriétés.
+	//
+	// Les fichiers cachés sont montrés parce que c'est précisément le genre de
+	// fichier qu'on chiffre : une clé dans ~/.ssh, un fichier de configuration.
 	return huh.NewFilePicker().
+		ShowHidden(true).
+		Height(16).
 		Key("picker").
-		Title("fichier ou dossier").
-		Description("→ entrer dans un dossier · entrée choisir · ← revenir").
+		Title(cibleTitre(action)).
+		Description("↑↓ se déplacer · → entrer dans un dossier · entrée choisir").
 		CurrentDirectory(".").
-		DirAllowed(true).
+		// Picking : sans lui, le champ affiche « No file selected. » et il faut
+		// appuyer sur une touche pour déplier l'arborescence. On veut la liste
+		// tout de suite — c'est la raison d'être du mode « parcourir ».
+		Picking(true).
+		// Un dossier n'est une cible qu'au chiffrement ; ailleurs, seul un .chto
+		// a un sens.
+		DirAllowed(action == "enc").
 		FileAllowed(true).
+		// Les permissions ne sont pas affichées : `drwxr-xr-x` n'aide personne à
+		// choisir un fichier et vole la place du nom. La taille, elle, sert.
 		ShowSize(true).
-		Height(12).
+		ShowPermissions(false).
 		Value(path).
-		Validate(func(s string) error { return validateTarget(s, *action) })
+		// Une sélection vide ne bloque pas la navigation : sinon huh refuse de
+		// quitter le champ tout en repliant la liste, et l'utilisateur se
+		// retrouve devant un écran vide sans comprendre pourquoi. Le reste est
+		// tranché par validateTarget, avec ses messages en français.
+		Validate(func(s string) error {
+			if strings.TrimSpace(s) == "" {
+				return nil
+			}
+			return validateTarget(s, action)
+		})
+}
+
+// cibleTitre nomme ce qu'on attend selon l'opération.
+func cibleTitre(action string) string {
+	if action == "enc" {
+		return "fichier ou dossier à chiffrer"
+	}
+	return "fichier " + extension + " à lire"
+}
+
+func ciblePlaceholder(action string) string {
+	if action == "enc" {
+		return "chemin, ou glisser-déposer le fichier ou le dossier"
+	}
+	return "chemin du fichier " + extension + ", ou glisser-déposer"
 }
 
 // validateTarget refuse tout de suite les cas qui échoueraient plus loin :
@@ -127,7 +184,7 @@ func validateTarget(s, action string) error {
 	}
 	info, err := os.Stat(s)
 	if err != nil {
-		return errors.New("fichier introuvable")
+		return errors.New("chemin introuvable")
 	}
 	if info.IsDir() && action != "enc" {
 		return errors.New("c'est un dossier : seul un fichier " + extension + " peut être déchiffré ou vérifié")
@@ -183,20 +240,22 @@ func tuiEncrypt(path string) error {
 					huh.NewOption("gzip  (relisible par les versions 2.x)", pkg.CompGzip),
 				).
 				Value(&comp),
+		),
 
+		// Le masquage de taille vit dans son propre groupe, escamoté dès qu'une
+		// compression est choisie : proposer une option pour la refuser ensuite
+		// est une impasse, autant ne pas la montrer. Un groupe masqué est aussi
+		// sauté à la navigation, donc l'utilisateur passe directement au mot de
+		// passe.
+		huh.NewGroup(
 			huh.NewConfirm().
 				Title("masquer la taille réelle").
-				DescriptionFunc(func() string { return padHint(comp) }, &comp).
+				Description("arrondit la taille au palier supérieur (jusqu'à ~12 % de disque en plus)").
 				Affirmative("oui").
 				Negative("non").
-				Value(&pad).
-				Validate(func(v bool) error {
-					if v && comp != pkg.CompNone {
-						return errors.New("incompatible avec la compression : la taille d'un fichier compressé dépend du contenu")
-					}
-					return nil
-				}),
-		),
+				Value(&pad),
+		).WithHideFunc(func() bool { return comp != pkg.CompNone }),
+
 		huh.NewGroup(
 			huh.NewInput().
 				Title("mot de passe").
@@ -270,8 +329,8 @@ func tuiDecrypt(path string) error {
 			filepath.Base(strings.TrimSuffix(path, extension)) + string(os.PathSeparator) +
 			", qui ne doit pas déjà exister"
 	}
-	if d.Version == 1 {
-		details += "\nfichier produit par une version 1.x : lecture seule, il sera relu tel quel"
+	if d.Version < 3 {
+		details += fmt.Sprintf("\nformat v%d, plus ancien que celui produit aujourd'hui : lecture seule, il sera relu tel quel", d.Version)
 	}
 
 	password := ""
@@ -343,7 +402,7 @@ func tuiVerify(path string) error {
 		AEAD:    d.Algo,
 		KDF:     d.KDF,
 		Salt:    fmt.Sprintf("format v%d · lu dans l'en-tête", d.Version),
-		Success: "fichier intact, déchiffrable, rien écrit sur le disque",
+		Success: verifySucces(d.Archive),
 	}
 	return runJob(info, func(p func(int64, int64)) error {
 		return pkg.Verify(path, []byte(password), pkg.Options{Progress: p})
@@ -591,20 +650,20 @@ func crackTime(bits float64) string {
 
 // compressHint adapte l'aide du champ compression : sur un dossier elle est
 // proposée active, autant dire pourquoi.
+// verifySucces adapte la phrase de fin : sur une archive, ce qui est contrôlé
+// est bien qu'elle serait extractible, pas seulement lisible.
+func verifySucces(archive bool) string {
+	if archive {
+		return "archive intacte, extractible, rien écrit sur le disque"
+	}
+	return "fichier intact, déchiffrable, rien écrit sur le disque"
+}
+
 func compressHint(dossier bool) string {
 	if dossier {
 		return "zstd par défaut sur un dossier · laisse fuiter la compressibilité du contenu"
 	}
 	return "réduit la taille, mais laisse fuiter la compressibilité du contenu"
-}
-
-// padHint explique le remplissage, et pourquoi il est indisponible dès qu'une
-// compression est choisie.
-func padHint(comp byte) string {
-	if comp != pkg.CompNone {
-		return "indisponible avec la compression : la taille dépendrait alors du contenu"
-	}
-	return "arrondit la taille au palier supérieur (jusqu'à ~12 % de disque en plus)"
 }
 
 func expandHome(p string) string {

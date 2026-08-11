@@ -663,18 +663,29 @@ func TestCrackTime(t *testing.T) {
 	}
 }
 
-func TestCompressHintEtPadHint(t *testing.T) {
+func TestCompressHint(t *testing.T) {
 	if got := compressHint(true); !strings.Contains(got, "dossier") {
 		t.Errorf("compressHint(dossier) = %q", got)
 	}
 	if got := compressHint(false); strings.Contains(got, "dossier") {
 		t.Errorf("compressHint(fichier) parle de dossier : %q", got)
 	}
-	if got := padHint(pkg.CompZstd); !strings.Contains(got, "indisponible") {
-		t.Errorf("padHint avec compression = %q, attendu un refus explicite", got)
+}
+
+func TestCibleTitreEtPlaceholder(t *testing.T) {
+	if got := cibleTitre("enc"); !strings.Contains(got, "dossier") {
+		t.Errorf("cibleTitre(enc) = %q, attendu qu'il mentionne le dossier", got)
 	}
-	if got := padHint(pkg.CompNone); strings.Contains(got, "indisponible") {
-		t.Errorf("padHint sans compression = %q", got)
+	for _, action := range []string{"dec", "verify"} {
+		if got := cibleTitre(action); !strings.Contains(got, extension) {
+			t.Errorf("cibleTitre(%s) = %q, attendu qu'il nomme l'extension", action, got)
+		}
+		if got := cibleTitre(action); strings.Contains(got, "dossier") {
+			t.Errorf("cibleTitre(%s) = %q : un dossier n'est pas une cible ici", action, got)
+		}
+		if got := ciblePlaceholder(action); !strings.Contains(got, extension) {
+			t.Errorf("ciblePlaceholder(%s) = %q", action, got)
+		}
 	}
 }
 

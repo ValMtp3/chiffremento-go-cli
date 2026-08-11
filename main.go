@@ -61,9 +61,13 @@ func run() error {
 		return errors.New("-mode et -in sont obligatoires")
 	}
 
-	if *mode != "enc" && (*compress || *chacha || *parano || *pad) {
+	if *mode != "enc" && (*compress || *chacha || *parano || *pad || estFourni("comp-algo")) {
 		fmt.Fprintln(os.Stderr, styleDim.Render(
-			"note : -comp, -pad, -chacha et -parano n'ont d'effet qu'en mode enc, ils sont ignorés ici"))
+			"note : -comp, -comp-algo, -pad, -chacha et -parano n'ont d'effet qu'en mode enc, ils sont ignorés ici"))
+	}
+	if *mode == "enc" && !*compress && estFourni("comp-algo") {
+		fmt.Fprintln(os.Stderr, styleDim.Render(
+			"note : -comp-algo sans -comp ne compresse rien, il est ignoré"))
 	}
 	if *mode == "info" && *fileOut != "" {
 		fmt.Fprintln(os.Stderr, styleDim.Render("note : -out n'a pas d'effet en mode info, il est ignoré"))
@@ -132,6 +136,19 @@ func chooseComp(compress bool, algo string) (byte, error) {
 	default:
 		return 0, fmt.Errorf("algorithme de compression inconnu %q (attendu zstd ou gzip)", algo)
 	}
+}
+
+// estFourni dit si un drapeau a été écrit sur la ligne de commande. Sa valeur
+// par défaut ne permet pas de le savoir : -comp-algo vaut « zstd » qu'on l'ait
+// tapé ou non, donc sans ça on ne pourrait pas signaler un réglage sans effet.
+func estFourni(nom string) bool {
+	fourni := false
+	flag.Visit(func(f *flag.Flag) {
+		if f.Name == nom {
+			fourni = true
+		}
+	})
+	return fourni
 }
 
 // isStream reconnaît le tiret conventionnel des flux standard.
@@ -300,11 +317,15 @@ func doVerify(in string) error {
 		return fmt.Errorf("un fichier à vérifier doit porter l'extension %s", extension)
 	}
 
+	// Sur un flux, l'en-tête n'est pas relisible d'avance : on ne peut donc pas
+	// savoir s'il s'agit d'une archive avant de l'avoir déchiffrée.
+	archive := false
 	if !isStream(in) {
 		d, err := pkg.Inspect(in)
 		if err != nil {
 			return err
 		}
+		archive = d.Archive
 		fmt.Fprintf(os.Stderr, "%s format v%d · %s · %s%s\n", styleDim.Render("fichier      "),
 			d.Version, d.Algo, d.KDF, detailsSuffix(d))
 	}
@@ -323,7 +344,7 @@ func doVerify(in string) error {
 		return err
 	}
 	fmt.Fprintf(os.Stderr, "%s %s\n", styleAccent.Render("✓"),
-		styleText.Render("fichier intact, déchiffrable, rien écrit sur le disque"))
+		styleText.Render(verifySucces(archive)))
 	return nil
 }
 
