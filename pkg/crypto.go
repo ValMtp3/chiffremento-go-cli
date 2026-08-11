@@ -1,6 +1,7 @@
 package pkg
 
 import (
+	"bytes"
 	"compress/gzip"
 	"crypto/rand"
 	"errors"
@@ -709,6 +710,29 @@ func openDecrypted(in io.Reader, total int64, password []byte, opts Options) (io
 	h, err := readHeader(in)
 	if err != nil {
 		return fail(err)
+	}
+
+	// Une archive réduite à son en-tête doit être signalée comme tronquée.
+	//
+	// sio accepte un flux sans aucun paquet et renvoie EOF tout de suite ; un tar
+	// vide, lui, renvoie EOF dès la première entrée. Sans ce contrôle, un .chto
+	// de dossier coupé juste après l'en-tête produisait donc un dossier *vide*
+	// sans la moindre erreur — le pire des cas pour une sauvegarde, où l'on
+	// croirait avoir restauré un dossier vide au lieu d'être averti. Or une
+	// archive a toujours une charge utile : même un dossier vide donne les deux
+	// blocs de fin du tar.
+	//
+	// Le contrôle ne peut pas être généralisé : pour un fichier ordinaire, sio
+	// ne produit rien à partir d'un clair vide, donc « charge utile absente » et
+	// « fichier vide » sont indistinguables. Un fichier coupé n'importe où
+	// ailleurs qu'exactement sur la frontière de l'en-tête échoue de toute façon
+	// sur l'authentification.
+	if h.archive() {
+		var premier [1]byte
+		if _, err := io.ReadFull(in, premier[:]); err != nil {
+			return fail(fmt.Errorf("%w : la charge utile est absente", errTruncated))
+		}
+		in = io.MultiReader(bytes.NewReader(premier[:]), in)
 	}
 
 	keys, err := deriveKeys(password, h)

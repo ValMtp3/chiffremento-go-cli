@@ -428,3 +428,231 @@ func TestFluxRemplissageImpossible(t *testing.T) {
 		t.Errorf("erreur peu explicite : %v", err)
 	}
 }
+
+// --- Corps falsifié ou tronqué ------------------------------------------
+
+// TestCorpsFalsifie : l'en-tête est déjà couvert par TestHeaderFalsifie. Ici on
+// s'attaque au corps, c'est-à-dire à l'AEAD lui-même — un octet retourné doit
+// faire échouer le déchiffrement et ne laisser aucune sortie derrière lui.
+func TestCorpsFalsifie(t *testing.T) {
+	dir := t.TempDir()
+	clair := bytes.Repeat([]byte("contenu confidentiel. "), 500)
+	in := write(t, dir, "clair.txt", clair)
+
+	for _, c := range []struct {
+		name string
+		opts Options
+	}{
+		{"aes", Options{Algo: AlgoAES}},
+		{"zstd", Options{Algo: AlgoAES, Comp: CompZstd}},
+		{"cascade", Options{Algo: AlgoCascade}},
+		{"remplissage", Options{Algo: AlgoAES, Pad: true}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			enc := filepath.Join(t.TempDir(), "ref.chto")
+			if err := Encrypt(in, enc, []byte("pw"), c.opts); err != nil {
+				t.Fatal(err)
+			}
+			raw, err := os.ReadFile(enc)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			// Un octet au milieu du corps, bien après l'en-tête.
+			milieu := headerSizeV3 + (len(raw)-headerSizeV3)/2
+			raw[milieu] ^= 0x01
+
+			sous := t.TempDir()
+			path := write(t, sous, "falsifie.chto", raw)
+			out := filepath.Join(sous, "out")
+			if err := Decrypt(path, out, []byte("pw"), Options{}); err == nil {
+				t.Fatal("un corps falsifié a été accepté")
+			}
+			if _, err := os.Stat(out); !os.IsNotExist(err) {
+				t.Error("une sortie a été laissée alors que le déchiffrement a échoué")
+			}
+			if err := Verify(path, []byte("pw"), Options{}); err == nil {
+				t.Error("la vérification a validé un fichier falsifié")
+			}
+		})
+	}
+}
+
+// TestFichierTronque : une coupure en cours de copie ou un disque plein
+// produisent un .chto incomplet. Le dernier paquet scellé manque, donc l'AEAD
+// doit refuser au lieu de rendre un clair partiel.
+func TestFichierTronque(t *testing.T) {
+	dir := t.TempDir()
+	in := write(t, dir, "clair.txt", bytes.Repeat([]byte("a"), 200000))
+	enc := filepath.Join(dir, "ref.chto")
+	if err := Encrypt(in, enc, []byte("pw"), Options{}); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(enc)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, garde := range []int{headerSizeV3 + 1, len(raw) / 2, len(raw) - 1} {
+		sous := t.TempDir()
+		path := write(t, sous, "tronque.chto", raw[:garde])
+		out := filepath.Join(sous, "out")
+		if err := Decrypt(path, out, []byte("pw"), Options{}); err == nil {
+			t.Errorf("un fichier tronqué à %d octets a été accepté", garde)
+		}
+		if _, err := os.Stat(out); !os.IsNotExist(err) {
+			t.Errorf("tronqué à %d octets : une sortie a été laissée", garde)
+		}
+	}
+
+	// Coupé exactement sur la frontière de l'en-tête, un fichier ordinaire est
+	// indistinguable d'un fichier vide : sio ne produit aucun octet pour un
+	// clair vide. On documente donc le comportement au lieu de prétendre le
+	// détecter.
+	sous := t.TempDir()
+	path := write(t, sous, "entete_seul.chto", raw[:headerSizeV3])
+	out := filepath.Join(sous, "out")
+	if err := Decrypt(path, out, []byte("pw"), Options{}); err != nil {
+		t.Fatalf("un fichier réduit à son en-tête devrait se lire comme un clair vide: %v", err)
+	}
+	if st, err := os.Stat(out); err != nil || st.Size() != 0 {
+		t.Errorf("sortie inattendue: %v", err)
+	}
+}
+
+// TestArchiveTronqueeALEntete : pour une archive, l'ambiguïté n'existe pas — un
+// tar a toujours ses deux blocs de fin. Un dossier coupé à l'en-tête doit donc
+// être refusé, et surtout ne pas produire un dossier vide sous le nom attendu.
+func TestArchiveTronqueeALEntete(t *testing.T) {
+	src := arbre(t)
+	dir := t.TempDir()
+	enc := filepath.Join(dir, "archive.chto")
+	if err := Encrypt(src, enc, []byte("pw"), Options{}); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(enc)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	path := write(t, dir, "tronque.chto", raw[:headerSizeV3])
+	dst := filepath.Join(dir, "restaure")
+	err = Decrypt(path, dst, []byte("pw"), Options{})
+	if err == nil {
+		t.Fatal("une archive réduite à son en-tête a été acceptée")
+	}
+	if !strings.Contains(err.Error(), "tronqué") {
+		t.Errorf("erreur %q, attendu qu'elle parle de troncature", err)
+	}
+	if _, err := os.Stat(dst); err == nil {
+		t.Error("un dossier vide a été créé sous le nom attendu")
+	}
+	if err := Verify(path, []byte("pw"), Options{}); err == nil {
+		t.Error("la vérification a validé une archive tronquée")
+	}
+}
+
+// TestDossierVideResteLisible est le pendant du test précédent : le contrôle de
+// troncature ne doit pas refuser un dossier légitimement vide.
+func TestDossierVideResteLisible(t *testing.T) {
+	src := filepath.Join(t.TempDir(), "vide")
+	if err := os.MkdirAll(src, 0755); err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	enc := filepath.Join(dir, "vide.chto")
+	if err := Encrypt(src, enc, []byte("pw"), Options{}); err != nil {
+		t.Fatal(err)
+	}
+	dst := filepath.Join(dir, "restaure")
+	if err := Decrypt(enc, dst, []byte("pw"), Options{}); err != nil {
+		t.Fatalf("un dossier vide devrait rester lisible: %v", err)
+	}
+	entries, err := os.ReadDir(dst)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Errorf("le dossier restauré contient %d entrées, attendu 0", len(entries))
+	}
+}
+
+// TestVerifyNEcritRien : la promesse de `verify` est de ne rien poser sur le
+// disque, même sur un fichier sain.
+func TestVerifyNEcritRien(t *testing.T) {
+	src := arbre(t)
+	work := t.TempDir()
+	enc := filepath.Join(work, "archive.chto")
+	if err := Encrypt(src, enc, []byte("pw"), Options{Comp: CompZstd}); err != nil {
+		t.Fatal(err)
+	}
+
+	avant, err := os.ReadDir(work)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := Verify(enc, []byte("pw"), Options{}); err != nil {
+		t.Fatal(err)
+	}
+	apres, err := os.ReadDir(work)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(avant) != len(apres) {
+		t.Errorf("le dossier contenait %d entrées avant la vérification, %d après", len(avant), len(apres))
+	}
+}
+
+func TestDefaultKDFLabel(t *testing.T) {
+	label := DefaultKDFLabel()
+	if !strings.Contains(label, "argon2id") {
+		t.Errorf("étiquette KDF %q, attendu qu'elle nomme argon2id", label)
+	}
+	// Elle doit décrire les paramètres réellement écrits dans les fichiers.
+	if !strings.Contains(label, defaultArgonParams().String()) {
+		t.Errorf("étiquette KDF %q, attendu qu'elle contienne %q", label, defaultArgonParams().String())
+	}
+}
+
+func TestOptionsValidate(t *testing.T) {
+	cases := []struct {
+		name    string
+		opts    Options
+		wantErr bool
+	}{
+		{"vide", Options{}, false},
+		{"zstd", Options{Comp: CompZstd}, false},
+		{"remplissage seul", Options{Pad: true}, false},
+		{"compression inconnue", Options{Comp: 99}, true},
+		{"remplissage et gzip", Options{Pad: true, Comp: CompGzip}, true},
+		{"remplissage et zstd", Options{Pad: true, Comp: CompZstd}, true},
+	}
+	for _, c := range cases {
+		if err := c.opts.validate(); (err != nil) != c.wantErr {
+			t.Errorf("%s : validate = %v, erreur attendue: %v", c.name, err, c.wantErr)
+		}
+	}
+}
+
+// TestRemplissageAvecCompressionEnLecture : un fichier qui annonce les deux à la
+// fois ne peut pas venir de ce binaire, mais rien n'empêche de le fabriquer. La
+// lecture doit rester cohérente — ici, échouer sur l'authentification, puisque
+// les drapeaux entrent dans la dérivation de clé.
+func TestRemplissageAvecCompressionEnLecture(t *testing.T) {
+	dir := t.TempDir()
+	in := write(t, dir, "clair.txt", bytes.Repeat([]byte("a"), 1000))
+	enc := filepath.Join(dir, "ref.chto")
+	if err := Encrypt(in, enc, []byte("pw"), Options{Comp: CompZstd}); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(enc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw[magicSize+versionSize] |= FlagPadded
+
+	path := write(t, dir, "les_deux.chto", raw)
+	if err := Decrypt(path, filepath.Join(dir, "out"), []byte("pw"), Options{}); err == nil {
+		t.Error("un fichier annonçant compression et remplissage a été déchiffré")
+	}
+}

@@ -366,3 +366,89 @@ func TestArborescenceTropProfonde(t *testing.T) {
 		t.Fatal("une arborescence trop profonde a été acceptée")
 	}
 }
+
+// --- Fichier modifié en cours d'archivage -------------------------------
+
+// infoTailleMenteuse annonce une taille différente de la réalité, ce qui simule
+// un fichier modifié entre le scan et l'écriture de l'archive.
+type infoTailleMenteuse struct {
+	os.FileInfo
+	taille int64
+}
+
+func (i infoTailleMenteuse) Size() int64 { return i.taille }
+
+// TestFichierModifiePendantArchivage : la taille annoncée dans l'en-tête tar est
+// lue au scan. Si le fichier change entre-temps, l'archive serait silencieusement
+// incohérente — un tar que rien ne pourrait plus relire correctement. On préfère
+// échouer.
+func TestFichierModifiePendantArchivage(t *testing.T) {
+	dir := t.TempDir()
+	chemin := write(t, dir, "f.bin", bytes.Repeat([]byte("a"), 1000))
+	reel, err := os.Stat(chemin)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cases := []struct {
+		name    string
+		annonce int64
+		motif   string
+	}{
+		{"le fichier a rétréci", 2000, "a changé de taille"},
+		{"le fichier a grossi", 500, "a grossi"},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			plan := &archivePlan{
+				entries: []archiveEntry{{
+					abs:  chemin,
+					rel:  "f.bin",
+					info: infoTailleMenteuse{FileInfo: reel, taille: c.annonce},
+				}},
+				total: c.annonce,
+			}
+			err := writeArchive(io.Discard, plan, nil)
+			if err == nil {
+				t.Fatal("archive acceptée alors que la taille ne correspond pas")
+			}
+			if !strings.Contains(err.Error(), c.motif) {
+				t.Errorf("erreur %q, attendu un message contenant %q", err, c.motif)
+			}
+		})
+	}
+}
+
+// TestTarSizeExact couvre les cas où l'en-tête tar déborde du format historique
+// et déclenche des enregistrements PAX supplémentaires : nom très long, nom non
+// ASCII. C'est là que la taille calculée risquait de diverger du tar réel, et
+// c'est le remplissage d'un dossier qui en dépend.
+func TestTarSizeExact(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "source")
+	profond := filepath.Join(root, strings.Repeat("dossier-au-nom-tres-long/", 4))
+	if err := os.MkdirAll(profond, 0755); err != nil {
+		t.Fatal(err)
+	}
+	write(t, profond, strings.Repeat("n", 120)+".txt", []byte("nom plus long que 100 caractères"))
+	write(t, root, "accentué é à ü.txt", []byte("nom non ASCII"))
+	write(t, root, "vide.txt", nil)
+	write(t, root, "aligné-512.bin", bytes.Repeat([]byte("a"), 512))
+
+	plan, err := scanDirectory(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	annonce, err := tarSize(plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var buf bytes.Buffer
+	if err := writeArchive(&buf, plan, nil); err != nil {
+		t.Fatal(err)
+	}
+	if int64(buf.Len()) != annonce {
+		t.Errorf("tarSize annonce %d octets, le tar produit en fait %d", annonce, buf.Len())
+	}
+}

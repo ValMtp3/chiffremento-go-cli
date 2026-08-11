@@ -5,7 +5,16 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/huh"
 )
+
+// formulaire et huhForm ne servent qu'à porter le formulaire d'un appel à
+// l'autre : Update renvoie un tea.Model, qu'il faut réaffecter.
+type formulaire = huh.Form
+
+type huhForm struct{ form *formulaire }
 
 // TestFormulaireSeConstruit vérifie que le formulaire principal se monte sans
 // panique avec le thème appliqué.
@@ -159,5 +168,107 @@ func TestCheckPaths(t *testing.T) {
 	}
 	if err := checkPaths("a.txt", "a.txt.chto"); err != nil {
 		t.Errorf("chemins distincts refusés à tort: %v", err)
+	}
+}
+
+// --- Pilotage du formulaire principal -----------------------------------
+
+// huh.Form est un modèle Bubble Tea : on peut donc lui envoyer des touches et
+// lire son rendu sans terminal. C'est ce qui permet de vérifier que
+// l'explorateur de fichiers apparaît réellement — la seule chose qu'un test de
+// construction ne dit pas.
+
+// envoyer applique une touche au formulaire et déroule les commandes qu'il
+// renvoie, comme le ferait la boucle de Bubble Tea.
+func envoyer(t *testing.T, f *huhForm, msg tea.Msg) {
+	t.Helper()
+	modele, cmd := f.form.Update(msg)
+	f.form = modele.(*formulaire)
+	deroule(t, f, cmd, 0)
+}
+
+// deroule exécute une commande et réinjecte le message produit. La profondeur
+// est bornée : une commande qui se relancerait indéfiniment ferait tourner le
+// test sans fin plutôt que d'échouer.
+func deroule(t *testing.T, f *huhForm, cmd tea.Cmd, profondeur int) {
+	t.Helper()
+	if cmd == nil || profondeur > 20 {
+		return
+	}
+	msg := cmd()
+	switch m := msg.(type) {
+	case nil:
+		return
+	case tea.BatchMsg:
+		for _, c := range m {
+			deroule(t, f, c, profondeur+1)
+		}
+		return
+	case tea.QuitMsg:
+		return
+	}
+	modele, suivante := f.form.Update(msg)
+	f.form = modele.(*formulaire)
+	deroule(t, f, suivante, profondeur+1)
+}
+
+func TestFormulaireOuvreLExplorateur(t *testing.T) {
+	action, path, mode := "enc", "", "saisie"
+	f := &huhForm{form: mainForm(&action, &path, &mode)}
+	deroule(t, f, f.form.Init(), 0)
+
+	// Premier groupe : l'opération, puis le mode de désignation. On valide
+	// l'opération pour arriver sur le choix « saisir / parcourir ».
+	envoyer(t, f, tea.KeyMsg{Type: tea.KeyEnter})
+	if !strings.Contains(f.form.View(), "désigner la cible") {
+		t.Fatalf("le choix du mode de désignation n'est pas affiché:\n%s", f.form.View())
+	}
+
+	// En mode « saisie », c'est le champ texte qui doit suivre.
+	envoyer(t, f, tea.KeyMsg{Type: tea.KeyEnter})
+	if vue := f.form.View(); !strings.Contains(vue, "glisser deposer") {
+		t.Errorf("le champ texte n'est pas affiché en mode saisie:\n%s", vue)
+	}
+	if mode != "saisie" {
+		t.Errorf("mode = %q, attendu saisie", mode)
+	}
+}
+
+func TestFormulaireModeParcourir(t *testing.T) {
+	action, path, mode := "enc", "", "parcourir"
+	f := &huhForm{form: mainForm(&action, &path, &mode)}
+	deroule(t, f, f.form.Init(), 0)
+
+	// Le mode est déjà « parcourir » : après le premier groupe, c'est
+	// l'explorateur qui doit apparaître, et non le champ texte.
+	envoyer(t, f, tea.KeyMsg{Type: tea.KeyEnter})
+	envoyer(t, f, tea.KeyMsg{Type: tea.KeyEnter})
+
+	vue := f.form.View()
+	if !strings.Contains(vue, "entrer dans un dossier") {
+		t.Errorf("l'explorateur de fichiers n'apparaît pas en mode parcourir:\n%s", vue)
+	}
+	if strings.Contains(vue, "glisser deposer") {
+		t.Errorf("le champ texte est encore affiché alors que le mode est parcourir:\n%s", vue)
+	}
+}
+
+// TestFormulaireBasculeDeMode : le choix se fait au clavier, donc la bascule
+// doit fonctionner sans que le formulaire ait été construit avec le bon mode.
+func TestFormulaireBasculeDeMode(t *testing.T) {
+	action, path, mode := "enc", "", "saisie"
+	f := &huhForm{form: mainForm(&action, &path, &mode)}
+	deroule(t, f, f.form.Init(), 0)
+
+	envoyer(t, f, tea.KeyMsg{Type: tea.KeyEnter}) // opération validée
+	envoyer(t, f, tea.KeyMsg{Type: tea.KeyDown})  // « parcourir »
+	if mode != "parcourir" {
+		t.Fatalf("mode = %q après une flèche bas, attendu parcourir", mode)
+	}
+	envoyer(t, f, tea.KeyMsg{Type: tea.KeyEnter})
+
+	vue := f.form.View()
+	if !strings.Contains(vue, "entrer dans un dossier") {
+		t.Errorf("l'explorateur n'apparaît pas après bascule au clavier:\n%s", vue)
 	}
 }
