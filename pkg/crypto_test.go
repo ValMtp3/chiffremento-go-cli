@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -307,6 +308,14 @@ func assertPasDeTemporaire(t *testing.T, dir string) {
 }
 
 func TestPermissions(t *testing.T) {
+	// Windows n'a pas de bits de permission POSIX : os.Chmod n'y bascule que
+	// l'attribut lecture seule, et Go rapporte 0666. L'accès y est gouverné par
+	// les ACL, que ce programme ne touche pas — c'est une limite documentée dans
+	// le modèle de menace, pas quelque chose que le code puisse corriger.
+	if runtime.GOOS == "windows" {
+		t.Skip("permissions POSIX indisponibles sous Windows")
+	}
+
 	dir := t.TempDir()
 	in := write(t, dir, "s.txt", []byte("secret"))
 	enc := filepath.Join(dir, "s.chto")

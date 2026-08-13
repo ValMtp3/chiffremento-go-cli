@@ -72,7 +72,10 @@ type atomicFile struct {
 // un .chto-tmp-* orphelin dans le répertoire de l'utilisateur.
 var (
 	pendingMu sync.Mutex
-	pending   = map[string]struct{}{}
+	// La valeur porte le descripteur quand il en existe un : Windows refuse de
+	// supprimer un fichier encore ouvert, il faut donc le fermer d'abord. Elle
+	// est nil pour les répertoires temporaires d'extraction.
+	pending = map[string]*os.File{}
 )
 
 // CleanupTemporaries supprime les temporaires encore en cours d'écriture.
@@ -81,15 +84,20 @@ var (
 func CleanupTemporaries() {
 	pendingMu.Lock()
 	defer pendingMu.Unlock()
-	for p := range pending {
+	for p, f := range pending {
+		if f != nil {
+			f.Close()
+		}
 		os.RemoveAll(p)
 		delete(pending, p)
 	}
 }
 
-func trackTemp(p string) {
+func trackTemp(p string) { trackTempFile(p, nil) }
+
+func trackTempFile(p string, f *os.File) {
 	pendingMu.Lock()
-	pending[p] = struct{}{}
+	pending[p] = f
 	pendingMu.Unlock()
 }
 
@@ -112,7 +120,7 @@ func newAtomicFile(dest string) (*atomicFile, error) {
 		os.Remove(f.Name())
 		return nil, fmt.Errorf("permissions du fichier temporaire: %w", err)
 	}
-	trackTemp(f.Name())
+	trackTempFile(f.Name(), f)
 	return &atomicFile{f: f, dest: dest}, nil
 }
 

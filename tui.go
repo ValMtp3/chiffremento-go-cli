@@ -674,7 +674,10 @@ func compressHint(dossier bool) string {
 func expandHome(p string) string {
 	if strings.HasPrefix(p, "~/") {
 		if home, err := os.UserHomeDir(); err == nil {
-			return home + p[1:]
+			// filepath.Join et non une concaténation : sous Windows, coller
+			// « /docs » à « C:\Users\x » produisait un chemin aux séparateurs
+			// mélangés. Go l'accepte, mais il s'affiche mal partout.
+			return filepath.Join(home, p[2:])
 		}
 	}
 	return p

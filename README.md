@@ -225,6 +225,7 @@ Ce que l'outil **ne** protège **pas** :
 - le **nom du fichier** : `secret.pdf.chto` annonce son contenu ;
 - la **taille** : elle suit celle du fichier d'origine, à quelques dizaines d'octets près ;
 - les **métadonnées** : dates et permissions d'origine ne sont pas conservées ;
+- sous **Windows**, les fichiers produits ne sont pas restreints en `0600` : le système n'a pas de bits de permission POSIX et l'accès y dépend des ACL, que cet outil ne touche pas. Sur macOS et Linux, la restriction est bien appliquée ;
 - avec `-comp`, la **compressibilité** du contenu fuit à travers la taille finale ;
 - une **machine compromise** : keylogger, mémoire lue par un autre processus, fichier d'origine encore présent sur le disque après chiffrement.
 
@@ -431,6 +432,7 @@ What it does **not** protect:
 - the **filename**: `secret.pdf.chto` advertises its own contents;
 - the **size**: it tracks the original file's size within a few dozen bytes;
 - **metadata**: original timestamps and permissions are not preserved;
+- on **Windows**, output files are not restricted to `0600`: the system has no POSIX permission bits and access is governed by ACLs, which this tool does not touch. On macOS and Linux the restriction is applied;
 - with `-comp`, the content's **compressibility** leaks through the final size;
 - a **compromised machine**: keyloggers, memory read by another process, or the original file still sitting on disk after encryption.
 
