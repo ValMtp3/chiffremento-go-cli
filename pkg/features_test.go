@@ -216,30 +216,40 @@ func TestMetadataAvecRemplissage(t *testing.T) {
 // TestMetadataNomHostile : le nom vient d'un fichier qu'on n'a pas produit. Même
 // authentifié, il a été écrit par quelqu'un d'autre.
 func TestMetadataNomHostile(t *testing.T) {
-	cases := map[string]string{
-		"traversée unix":     "../../.ssh/authorized_keys",
-		"traversée windows":  `..\..\Windows\System32\evil.dll`,
-		"chemin absolu":      "/etc/passwd",
-		"répertoire courant": "./././x.txt",
+	// Sorties exactes, pas seulement « pas de séparateur » : c'est un test plus
+	// strict, et le laxisme du précédent masquait un vrai bug sous Windows, où
+	// « /etc/passwd » ressortait en « \\ ».
+	//
+	// Le résultat doit être identique sur tous les systèmes : le champ est
+	// portable, il a pu être écrit ailleurs que là où il est relu.
+	attendus := map[string]string{
+		"../../.ssh/authorized_keys":      "authorized_keys",
+		`..\..\Windows\System32\evil.dll`: "evil.dll",
+		"/etc/passwd":                     "passwd",
+		"./././x.txt":                     "x.txt",
+		"dossier/sous/fichier.txt":        "fichier.txt",
+		"rapport.pdf":                     "rapport.pdf",
 	}
-	for nom, entree := range cases {
-		t.Run(nom, func(t *testing.T) {
-			got, err := sanitizeMetaName(entree)
-			if err != nil {
-				return // refusé, c'est acceptable
-			}
-			if strings.ContainsAny(got, `/\`) {
-				t.Errorf("%q assaini en %q : contient encore un séparateur", entree, got)
-			}
-			if got == ".." || got == "." || got == "" {
-				t.Errorf("%q assaini en %q", entree, got)
-			}
-		})
+	for entree, attendu := range attendus {
+		got, err := sanitizeMetaName(entree)
+		if err != nil {
+			t.Errorf("sanitizeMetaName(%q) refusé: %v", entree, err)
+			continue
+		}
+		if got != attendu {
+			t.Errorf("sanitizeMetaName(%q) = %q, attendu %q", entree, got, attendu)
+		}
 	}
 
-	for _, mauvais := range []string{"", ".", "..", "/", "/../"} {
-		if _, err := sanitizeMetaName(mauvais); err == nil {
-			t.Errorf("sanitizeMetaName(%q) accepté à tort", mauvais)
+	refuses := []string{
+		"", ".", "..", "/", "/../", "../..", `\`, `\\`, "///",
+		// Un « : » ouvrirait la porte aux chemins relatifs au lecteur sous
+		// Windows, et un octet nul tronquerait le nom pour un appelant en C.
+		"C:evil.txt", "flux:caché", "nom\x00tronqué",
+	}
+	for _, mauvais := range refuses {
+		if got, err := sanitizeMetaName(mauvais); err == nil {
+			t.Errorf("sanitizeMetaName(%q) accepté à tort, rendu %q", mauvais, got)
 		}
 	}
 }

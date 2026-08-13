@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"path"
 	"path/filepath"
 	"strings"
 	"time"
@@ -65,9 +66,14 @@ type FileMetadata struct {
 	ModTime time.Time
 }
 
-func newFileMetadata(path string, modTime time.Time) *FileMetadata {
+// newFileMetadata part d'un chemin local, donc filepath et non path : ici c'est
+// bien l'hôte qui fait autorité, contrairement à la relecture.
+//
+// Le paramètre ne s'appelle pas « path » : il masquerait le paquet du même nom,
+// utilisé quelques lignes plus bas.
+func newFileMetadata(localPath string, modTime time.Time) *FileMetadata {
 	return &FileMetadata{
-		Name:    filepath.Base(path),
+		Name:    filepath.Base(localPath),
 		ModTime: modTime.UTC().Truncate(metaTimeGrain),
 	}
 }
@@ -123,15 +129,34 @@ func readMetadata(r io.Reader) (*FileMetadata, error) {
 }
 
 // sanitizeMetaName réduit un nom stocké à un nom de fichier sûr.
+//
+// Le champ est portable : il a pu être écrit sur un autre système que celui qui
+// le relit. Le nettoyage utilise donc `path`, dont les règles sont fixes, et non
+// `filepath`, qui suit l'hôte. Avec filepath sous Windows, « // » est compris
+// comme un préfixe UNC : « /etc/passwd » ressortait en « \\ », soit un
+// séparateur nu en guise de nom de fichier, et « . », « .. » ou la chaîne vide
+// passaient au travers.
 func sanitizeMetaName(name string) (string, error) {
-	// Les séparateurs Windows aussi : un fichier produit là-bas, ou forgé pour
-	// l'occasion, peut en contenir alors que filepath.Base ne les coupe pas sur
-	// un système Unix.
-	name = strings.ReplaceAll(name, "\\", "/")
-	name = filepath.Base(filepath.Clean("/" + name))
+	invalide := errors.New("métadonnées : nom d'origine inutilisable")
+
+	// Les séparateurs Windows sont normalisés d'abord : path ne les connaît pas,
+	// et un nom forgé peut en contenir quel que soit le système de lecture.
+	name = strings.ReplaceAll(name, `\`, "/")
+
+	// Le préfixe « / » force Clean à résoudre les « .. » en tête plutôt qu'à les
+	// conserver : « ../../x » devient « /x ».
+	name = path.Base(path.Clean("/" + name))
 	switch name {
 	case "", ".", "..", "/":
-		return "", errors.New("métadonnées : nom d'origine inutilisable")
+		return "", invalide
+	}
+
+	// Ceinture et bretelles : après Base, il ne doit plus rester de séparateur.
+	// Un octet nul tronquerait le nom pour tout appelant en C, et un « : »
+	// ouvrirait la porte aux chemins relatifs au lecteur sous Windows
+	// (« C:evil » désigne le répertoire courant de C:).
+	if strings.ContainsAny(name, `/\:`) || strings.ContainsRune(name, 0) {
+		return "", invalide
 	}
 	return name, nil
 }
