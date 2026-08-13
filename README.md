@@ -114,13 +114,15 @@ Le mot de passe **n'est jamais un argument**. Il est demandé de façon masquée
 
 | Flag | Description |
 | :--- | :--- |
-| `-mode` | **Obligatoire.** `enc` (chiffrer), `dec` (déchiffrer), `verify` (contrôler sans rien écrire) ou `info` (inspecter l'en-tête). |
+| `-mode` | **Obligatoire.** `enc` (chiffrer), `dec` (déchiffrer), `verify` (contrôler sans rien écrire), `info` (inspecter l'en-tête) ou `bench` (mesurer les coûts). |
 | `-in` | **Obligatoire.** Fichier ou dossier d'entrée, ou `-` pour l'entrée standard. |
 | `-out` | Destination. Par défaut, l'entrée suivie de `.chto` en `enc`, l'entrée sans l'extension en `dec`. `-` écrit sur la sortie standard. |
 | `-comp` | *(enc)* Active la compression zstd. |
 | `-pad` | *(enc)* Masque la taille réelle. S'exclut avec `-comp`. |
 | `-chacha` | *(enc)* Utilise ChaCha20-Poly1305 au lieu d'AES-GCM. |
 | `-parano` | *(enc)* Double chiffrement en cascade. S'exclut avec `-chacha`. |
+| `-kdf` | *(enc)* Coût de la dérivation : `standard` (défaut), `fort` ou `maximum`. |
+| `-meta` | *(enc)* Métadonnées conservées : `none` (défaut) ou `minimal` (nom et date). |
 | `-version` | Affiche la version. |
 
 ### Exemples
@@ -153,6 +155,24 @@ Contrôler qu'une sauvegarde est intacte et déchiffrable, sans rien écrire sur
 
 ```bash
 chiffremento -mode verify -in sauvegarde.tar.gz.chto
+```
+
+Mesurer les coûts sur cette machine, pour choisir un profil en connaissance de cause :
+
+```bash
+chiffremento -mode bench
+```
+
+Renforcer la dérivation de clé :
+
+```bash
+chiffremento -mode enc -in secret.pdf -kdf fort
+```
+
+Conserver le nom et la date d'origine à l'intérieur du chiffré, pour pouvoir sortir sous un nom neutre :
+
+```bash
+chiffremento -mode enc -in rapport-medical.pdf -out a3f9c2.chto -meta minimal
 ```
 
 Inspecter un fichier sans le déchiffrer ni saisir de mot de passe :
@@ -212,6 +232,18 @@ La clé est dérivée en deux temps : `Argon2id(mot de passe, sel, paramètres)`
 Les fichiers en version 1 et 2 sont relus avec leur dérivation d'origine. Les nouveaux fichiers sont toujours écrits en version 3.
 
 La v3 remplace le drapeau de compression par un champ : un bit ne pouvait pas distinguer gzip de zstd, et empiler un bit par algorithme rendait possibles des états contradictoires. En v1 et v2, le bit 0 signifiait gzip — c'est le seul sens qu'il ait jamais eu, donc la relecture est directe. Un binaire plus ancien refuse un fichier v3 au lieu de l'interpréter de travers.
+
+## 🔑 Profils de dérivation
+
+Les paramètres Argon2 sont inscrits dans chaque fichier, donc ajustables sans casser l'existant.
+
+| Profil | Mémoire | Passes | Coût mesuré |
+| :--- | ---: | ---: | ---: |
+| `standard` *(défaut)* | 256 Mio | 3 | ~140 ms |
+| `fort` | 512 Mio | 4 | ~350 ms |
+| `maximum` | 1 Gio | 4 | ~730 ms |
+
+> **Le déchiffrement exige la même mémoire que le chiffrement.** Un fichier scellé en `maximum` sera indéchiffrable sur une machine qui n'a pas 1 Gio à consacrer à la dérivation. `chiffremento -mode bench` mesure les trois profils sur votre machine et conseille le plus robuste qui reste raisonnable, en tenant compte de cette contrainte.
 
 ## ⚠️ Modèle de menace
 
@@ -323,13 +355,15 @@ The password is **never an argument**. It is prompted for with masked input, or 
 
 | Flag | Description |
 | :--- | :--- |
-| `-mode` | **Required.** `enc` (encrypt), `dec` (decrypt), `verify` (check without writing anything) or `info` (inspect the header). |
+| `-mode` | **Required.** `enc` (encrypt), `dec` (decrypt), `verify` (check without writing anything), `info` (inspect the header) or `bench` (measure costs). |
 | `-in` | **Required.** Input file or folder, or `-` for standard input. |
 | `-out` | Destination. Defaults to the input plus `.chto` for `enc`, the input without the extension for `dec`. `-` writes to standard output. |
 | `-comp` | *(enc)* Enables zstd compression. |
 | `-pad` | *(enc)* Masks the real size. Mutually exclusive with `-comp`. |
 | `-chacha` | *(enc)* Uses ChaCha20-Poly1305 instead of AES-GCM. |
 | `-parano` | *(enc)* Cascaded double encryption. Mutually exclusive with `-chacha`. |
+| `-kdf` | *(enc)* Key derivation cost: `standard` (default), `fort` or `maximum`. |
+| `-meta` | *(enc)* Metadata kept: `none` (default) or `minimal` (name and date). |
 | `-version` | Prints the version. |
 
 ### Examples
@@ -362,6 +396,24 @@ Check that a backup is intact and decryptable, without writing anything to disk:
 
 ```bash
 chiffremento -mode verify -in backup.tar.gz.chto
+```
+
+Measure costs on this machine, to pick a profile knowingly:
+
+```bash
+chiffremento -mode bench
+```
+
+Strengthen key derivation:
+
+```bash
+chiffremento -mode enc -in secret.pdf -kdf fort
+```
+
+Keep the original name and date inside the ciphertext, so you can output under a neutral name:
+
+```bash
+chiffremento -mode enc -in medical-report.pdf -out a3f9c2.chto -meta minimal
 ```
 
 Inspect a file without decrypting it or entering a password:
@@ -419,6 +471,18 @@ salt       16 B
 The key is derived in two steps: `Argon2id(password, salt, params)` then `HKDF-Expand` with **the full header as info**. This binds the header to the key without an extra authentication field.
 
 Version 1 files are read back with their original derivation. New files are always written as version 2.
+
+## 🔑 Derivation profiles
+
+Argon2 parameters are written into every file, so they can be raised without breaking existing ones.
+
+| Profile | Memory | Passes | Measured cost |
+| :--- | ---: | ---: | ---: |
+| `standard` *(default)* | 256 MiB | 3 | ~140 ms |
+| `fort` | 512 MiB | 4 | ~350 ms |
+| `maximum` | 1 GiB | 4 | ~730 ms |
+
+> **Decryption requires the same memory as encryption.** A file sealed with `maximum` will be undecryptable on a machine that cannot spare 1 GiB for derivation. `chiffremento -mode bench` measures all three on your machine and advises the strongest that stays reasonable, taking that constraint into account.
 
 ## ⚠️ Threat model
 

@@ -217,19 +217,35 @@ func tuiEncrypt(path string) error {
 	// ou pas ».
 	compresser := estDossier
 	pad := false
+	kdf := pkg.KDFStandard
+	// Les métadonnées ne concernent qu'un fichier : l'archive tar d'un dossier
+	// porte déjà noms, dates et permissions de chaque entrée.
+	garderMeta := false
 	password, confirm := "", ""
 
 	form := huh.NewForm(
 		huh.NewGroup(
 			huh.NewSelect[byte]().
 				Title("algorithme").
-				Description(pkg.DefaultKDFLabel()).
 				Options(
 					huh.NewOption("aes-256-gcm  (défaut)", pkg.AlgoAES),
 					huh.NewOption("chacha20-poly1305", pkg.AlgoChaCha),
 					huh.NewOption("cascade  chacha20 + aes  (parano)", pkg.AlgoCascade),
 				).
 				Value(&algo),
+
+			// La description montre la mémoire exigée, parce qu'elle le sera
+			// aussi au déchiffrement : un fichier scellé en « maximum » ici sera
+			// illisible sur une machine qui n'a pas 1 Gio à y consacrer.
+			huh.NewSelect[pkg.KDFProfile]().
+				Title("coût de la dérivation de clé").
+				DescriptionFunc(func() string { return kdfHint(kdf) }, &kdf).
+				Options(
+					huh.NewOption("standard  (défaut)", pkg.KDFStandard),
+					huh.NewOption("fort", pkg.KDFFort),
+					huh.NewOption("maximum", pkg.KDFMaximum),
+				).
+				Value(&kdf),
 
 			huh.NewConfirm().
 				Title("compresser avant chiffrement  (zstd)").
@@ -252,6 +268,15 @@ func tuiEncrypt(path string) error {
 				Negative("non").
 				Value(&pad),
 		).WithHideFunc(func() bool { return compresser }),
+
+		huh.NewGroup(
+			huh.NewConfirm().
+				Title("conserver le nom et la date d'origine").
+				Description("stockés à l'intérieur du chiffré, donc restituables même sous un nom neutre").
+				Affirmative("oui").
+				Negative("non").
+				Value(&garderMeta),
+		).WithHideFunc(func() bool { return estDossier }),
 
 		huh.NewGroup(
 			huh.NewInput().
@@ -304,7 +329,8 @@ func tuiEncrypt(path string) error {
 	}
 	return runJob(info, func(p func(int64, int64)) error {
 		return pkg.Encrypt(path, out, []byte(password), pkg.Options{
-			Algo: algo, Comp: compEncodee(compresser), Pad: pad, Progress: p,
+			Algo: algo, Comp: compEncodee(compresser), Pad: pad,
+			KDF: kdf, Metadata: metaEncodee(garderMeta), Progress: p,
 		})
 	})
 }
@@ -681,4 +707,19 @@ func expandHome(p string) string {
 		}
 	}
 	return p
+}
+
+// kdfHint décrit un profil KDF pour la TUI. La mémoire est annoncée parce
+// qu'elle sera aussi exigée au déchiffrement.
+func kdfHint(p pkg.KDFProfile) string {
+	return fmt.Sprintf("%s · %d Mio de mémoire, exigés aussi au déchiffrement",
+		p.KDFLabel(), p.MemoryMiB())
+}
+
+// metaEncodee traduit la réponse de la TUI en mode de métadonnées.
+func metaEncodee(garder bool) pkg.MetadataMode {
+	if garder {
+		return pkg.MetadataMinimal
+	}
+	return pkg.MetadataNone
 }
