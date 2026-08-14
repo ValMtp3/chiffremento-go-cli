@@ -278,6 +278,14 @@ func TestBenchmark(t *testing.T) {
 	if testing.Short() {
 		t.Skip("mesure longue")
 	}
+	// Sous le détecteur de courses, ce test n'a pas d'intérêt et coûte cher : il
+	// mesure des durées, or l'instrumentation les multiplie — les chiffres ne
+	// veulent plus rien dire. C'est aussi le test le plus lourd du paquet, trois
+	// dérivations Argon2 dont une à 1 Gio, et c'est lui qui poussait la suite au
+	// délai de dix minutes sur le runner macOS.
+	if raceEnabled {
+		t.Skip("mesure de durée sans signification sous -race")
+	}
 	rep := Benchmark()
 
 	if rep.CPUs < 1 {

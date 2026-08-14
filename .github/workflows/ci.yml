@@ -45,8 +45,15 @@ jobs:
 
       # -race pour attraper toute course entre la goroutine de chiffrement et
       # l'animation de progression.
+      #
+      # -timeout au-delà du défaut de dix minutes : cette suite lance
+      # délibérément des dérivations Argon2 de 256 Mio à 1 Gio, et
+      # l'instrumentation du détecteur de courses les alourdit encore. Le runner
+      # macOS dépassait la limite par simple accumulation, sans qu'aucun test ne
+      # soit bloqué. Un vrai blocage se voit toujours : le test fautif est nommé
+      # dans la trace.
       - name: Tests
-        run: go test -race ./...
+        run: go test -race -timeout 25m ./...
 
       # Les deux fonctions qui lisent des octets venus de l'extérieur. Une
       # courte passe à chaque CI : le corpus s'accumule dans le cache du
