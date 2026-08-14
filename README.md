@@ -19,7 +19,7 @@
 **Chiffremento CLI** est un outil en ligne de commande écrit en Go pour chiffrer et déchiffrer des fichiers. Il s'utilise soit via une interface guidée, soit avec des flags pour les scripts.
 
 ```
-  chiffremento chiffrement  v3.0.0
+  chiffremento chiffrement  v2.1.0
 ┌────────────────────────────────────────────────────┐
 │  entrée    rapport-annuel.pdf             14.2 Mo  │
 │  sortie    rapport-annuel.pdf.chto                 │
@@ -33,7 +33,9 @@
 └────────────────────────────────────────────────────┘
 ```
 
-## ✨ Nouveautés v3.0
+## ✨ Nouveautés v2.1
+
+> Le **format de fichier** est passé en v3 dans cette version. Les deux numéros sont indépendants : la version du programme suit ses fonctionnalités, celle du format sa structure binaire. `chiffremento -mode info` affiche celle d'un fichier donné.
 
 - **📁 Dossiers** : chiffrer un dossier entier, empaqueté en tar au fil du chiffrement et recréé à l'identique au déchiffrement.
 - **🗜️ zstd** : remplace gzip, mesuré ~8× plus rapide à ratio comparable. gzip n'est plus produit, seulement relu : les `.chto` v1 et v2 compressés restent déchiffrables. La compression est désormais décrite par un champ de l'en-tête plutôt que par un simple bit.
@@ -41,6 +43,9 @@
 - **🔗 `-out`, `-in -`, `-out -`** : destination choisie, et flux standard pour composer avec d'autres outils.
 - **🗂️ Explorateur de fichiers** dans l'interface guidée, en alternative à la saisie du chemin.
 - **📊 Force du mot de passe par dictionnaire** : `azerty123` est enfin annoncé comme faible.
+- **🔑 Profils de dérivation** : `-kdf standard|fort|maximum`, du plus rapide au plus coûteux à attaquer.
+- **🏷️ `-meta minimal`** : conserve le nom et la date d'origine à l'intérieur du chiffré, pour pouvoir sortir sous un nom neutre.
+- **📊 `-mode bench`** : mesure les profils et le débit des algorithmes sur votre machine, et conseille un profil.
 
 ## ✨ Nouveautés v2.0
 
@@ -274,7 +279,9 @@ Le mode parano ne remplace pas un bon mot de passe : il protège contre la déco
 
 **Chiffremento CLI** is a command-line tool written in Go for encrypting and decrypting files. It offers a guided interface, or flags for scripting.
 
-## ✨ New in v3.0
+## ✨ New in v2.1
+
+> The **file format** moved to v3 in this release. The two numbers are independent: the program version tracks its features, the format version tracks its binary layout. `chiffremento -mode info` shows a given file's format version.
 
 - **📁 Folders**: encrypt a whole folder, packed into a tar stream as it is encrypted and recreated as-is on decryption.
 - **🗜️ zstd**: replaces gzip, measured ~8× faster at a comparable ratio. gzip is no longer produced, only read back: compressed v1 and v2 `.chto` files stay decryptable. Compression is now described by a header field rather than a single bit.
@@ -282,6 +289,9 @@ Le mode parano ne remplace pas un bon mot de passe : il protège contre la déco
 - **🔗 `-out`, `-in -`, `-out -`**: choose the destination, and use the standard streams to compose with other tools.
 - **🗂️ File browser** in the guided interface, as an alternative to typing the path.
 - **📊 Dictionary-based password strength**: `azerty123` is finally reported as weak.
+- **🔑 Derivation profiles**: `-kdf standard|fort|maximum`, from fastest to costliest to attack.
+- **🏷️ `-meta minimal`**: keeps the original name and date inside the ciphertext, so output can use a neutral name.
+- **📊 `-mode bench`**: measures the profiles and algorithm throughput on your machine, and advises a profile.
 
 ## ✨ New in v2.0
 
