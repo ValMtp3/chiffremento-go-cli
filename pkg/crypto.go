@@ -33,6 +33,16 @@ type Options struct {
 	// s'exclut avec la compression. Ignoré au déchiffrement.
 	Pad bool
 
+	// KDF choisit le coût de la dérivation de clé. Le profil vide vaut
+	// KDFStandard. Ignoré au déchiffrement : les paramètres réels sont lus dans
+	// l'en-tête du fichier.
+	KDF KDFProfile
+
+	// Metadata décide si le nom d'origine et la date de modification sont
+	// conservés dans le chiffré. Sans effet sur un dossier, dont la charge utile
+	// est un tar qui les porte déjà. Ignoré au déchiffrement.
+	Metadata MetadataMode
+
 	// Progress, si non nil, est appelé au fil de la copie avec le nombre
 	// d'octets d'entrée déjà traités et la taille totale de l'entrée. Un total
 	// nul signifie « taille inconnue » — c'est le cas d'une entrée lue sur un
@@ -390,6 +400,9 @@ type source struct {
 	r    io.Reader
 	// size est la taille du clair, ou -1 quand elle est inconnue.
 	size int64
+	// meta est non nil quand le nom d'origine et la date doivent être conservés.
+	// Toujours nil pour un dossier : le tar les porte déjà.
+	meta *FileMetadata
 }
 
 // payloadSize renvoie la taille exacte de la charge utile qui sera chiffrée, et
@@ -436,6 +449,9 @@ func Encrypt(inputPath, outputPath string, password []byte, opts Options) error 
 		}
 		defer inFile.Close()
 		src = source{r: inFile, size: info.Size()}
+		if opts.Metadata == MetadataMinimal {
+			src.meta = newFileMetadata(inputPath, info.ModTime())
+		}
 	}
 
 	out, err := newAtomicFile(outputPath)
@@ -475,6 +491,18 @@ func encrypt(dst io.Writer, src source, password []byte, opts Options) error {
 		return err
 	}
 
+	// Le bloc de métadonnées est sérialisé avant tout le reste : sa taille entre
+	// dans le calcul du remplissage, sinon la longueur du nom d'origine
+	// décalerait la taille finale hors du palier et se lirait dessus.
+	var metaBlock []byte
+	if src.meta != nil {
+		block, err := marshalMetadata(src.meta)
+		if err != nil {
+			return err
+		}
+		metaBlock = block
+	}
+
 	// Le remplissage doit être décidé avant l'écriture de l'en-tête : sa
 	// longueur est inscrite en tête de la charge utile, et on ne revient pas en
 	// arrière dans un flux.
@@ -487,7 +515,7 @@ func encrypt(dst io.Writer, src source, password []byte, opts Options) error {
 		if !known {
 			return errors.New("le remplissage exige une taille d'entrée connue : impossible sur un flux")
 		}
-		padding = paddingFor(payload)
+		padding = paddingFor(payload + int64(len(metaBlock)))
 	}
 
 	salt := make([]byte, saltSize)
@@ -495,10 +523,15 @@ func encrypt(dst io.Writer, src source, password []byte, opts Options) error {
 		return fmt.Errorf("génération du sel: %w", err)
 	}
 
+	profile, err := ParseKDFProfile(string(opts.KDF))
+	if err != nil {
+		return err
+	}
+
 	h := &header{
 		Version: currentVersion,
 		Algo:    algo,
-		Argon:   defaultArgonParams(),
+		Argon:   profile.argonParams(),
 		Comp:    opts.Comp,
 		Salt:    salt,
 	}
@@ -507,6 +540,9 @@ func encrypt(dst io.Writer, src source, password []byte, opts Options) error {
 	}
 	if opts.Pad {
 		h.Flags |= FlagPadded
+	}
+	if metaBlock != nil {
+		h.Flags |= FlagMetadata
 	}
 	if _, err := dst.Write(h.marshal()); err != nil {
 		return fmt.Errorf("écriture du header: %w", err)
@@ -537,6 +573,14 @@ func encrypt(dst io.Writer, src source, password []byte, opts Options) error {
 		if err := writePadding(payloadDst, padding); err != nil {
 			cipherWriter.Close()
 			return err
+		}
+	}
+
+	// Après le remplissage, avant le contenu : la lecture suit le même ordre.
+	if metaBlock != nil {
+		if _, err := payloadDst.Write(metaBlock); err != nil {
+			cipherWriter.Close()
+			return fmt.Errorf("écriture des métadonnées: %w", err)
 		}
 	}
 
@@ -579,9 +623,28 @@ func encrypt(dst io.Writer, src source, password []byte, opts Options) error {
 // Si le fichier contient un dossier, outputPath est créé comme dossier et
 // l'arborescence y est extraite. outputPath ne doit alors pas déjà exister.
 func Decrypt(inputPath, outputPath string, password []byte, opts Options) error {
+	_, err := DecryptTo(inputPath, outputPath, password, opts)
+	return err
+}
+
+// DecryptResult décrit ce qu'a produit un déchiffrement.
+type DecryptResult struct {
+	// Metadata est non nil quand le fichier portait un nom d'origine et une
+	// date. Ces valeurs viennent de l'intérieur du chiffrement, donc après
+	// authentification, et le nom a été assaini.
+	Metadata *FileMetadata
+	// Archive vaut true quand la sortie est une arborescence, pas un fichier.
+	Archive bool
+}
+
+// DecryptTo est Decrypt, en rendant compte de ce qui a été trouvé dans le
+// fichier. Les appelants qui veulent signaler le nom d'origine passent par là.
+func DecryptTo(inputPath, outputPath string, password []byte, opts Options) (DecryptResult, error) {
+	var res DecryptResult
+
 	inFile, size, err := openInput(inputPath)
 	if err != nil {
-		return err
+		return res, err
 	}
 	defer inFile.Close()
 
@@ -589,34 +652,47 @@ func Decrypt(inputPath, outputPath string, password []byte, opts Options) error 
 	// un mauvais mot de passe échoue donc sans rien créer.
 	src, h, closeSrc, err := openDecrypted(inFile, size, password, opts)
 	if err != nil {
-		return err
+		return res, err
 	}
 	defer closeSrc()
+
+	res.Metadata = h.Meta
+	res.Archive = h.archive()
 
 	if h.archive() {
 		out, err := newAtomicDir(outputPath)
 		if err != nil {
-			return err
+			return res, err
 		}
 		defer out.cleanup()
 
 		if err := extractArchive(src, out.path); err != nil {
-			return err
+			return res, err
 		}
-		return out.commit()
+		return res, out.commit()
 	}
 
 	out, err := newAtomicFile(outputPath)
 	if err != nil {
-		return err
+		return res, err
 	}
 	defer out.cleanup()
 
 	if _, err := io.Copy(out.f, src); err != nil {
-		return fmt.Errorf("déchiffrement: %w", err)
+		return res, fmt.Errorf("déchiffrement: %w", err)
 	}
 
-	return out.commit()
+	if err := out.commit(); err != nil {
+		return res, err
+	}
+
+	// La date est restituée après le rename : la poser sur le temporaire
+	// n'aurait servi à rien. L'échec n'est pas fatal — le contenu, lui, est
+	// écrit et authentifié.
+	if h.Meta != nil && !h.Meta.ModTime.IsZero() {
+		_ = os.Chtimes(outputPath, h.Meta.ModTime, h.Meta.ModTime)
+	}
+	return res, nil
 }
 
 // DecryptStream déchiffre src vers dst. Quand le fichier contient un dossier,
@@ -770,6 +846,17 @@ func openDecrypted(in io.Reader, total int64, password []byte, opts Options) (io
 		}
 	}
 
+	// Les métadonnées suivent immédiatement le remplissage, dans le même ordre
+	// qu'à l'écriture. Les lire ici est obligatoire, pas optionnel : laissées
+	// dans le flux, elles seraient recopiées en tête du clair.
+	if h.hasMetadata() {
+		meta, err := readMetadata(src)
+		if err != nil {
+			return fail(err)
+		}
+		h.Meta = meta
+	}
+
 	return src, h, closeAll, nil
 }
 
@@ -787,6 +874,10 @@ type Details struct {
 	// Padded vaut true quand la taille réelle du clair est masquée par du
 	// remplissage.
 	Padded bool
+	// Metadata vaut true quand le fichier porte le nom d'origine et la date.
+	// Le drapeau est dans l'en-tête, donc lisible sans mot de passe ; leur
+	// contenu, lui, est à l'intérieur du chiffrement.
+	Metadata bool
 }
 
 // Inspect lit l'en-tête d'un .chto sans le déchiffrer, pour que l'interface
@@ -811,6 +902,7 @@ func Inspect(path string) (Details, error) {
 		Comp:       CompName(h.Comp),
 		Archive:    h.archive(),
 		Padded:     h.padded(),
+		Metadata:   h.hasMetadata(),
 	}, nil
 }
 

@@ -517,10 +517,16 @@ func TestProtocolSafety_Tripwire(t *testing.T) {
 		expectedHeaderV2 = 36 // 8+1+1+1+4+4+1+16
 		expectedHeaderV3 = 37 // 8+1+1+1+4+4+1+1+16
 		expectedMagic    = "CHFRMT03"
-		// FlagArchive (bit1, dossiers) et FlagPadded (bit2, taille masquée). Un
-		// binaire antérieur refuse un bit inconnu au lieu de mal interpréter le
-		// fichier, et ce binaire relit tous les .chto v1, v2 et v3.
-		expectedKnownFlags = FlagCompressed | FlagArchive | FlagPadded
+		// FlagArchive (bit1, dossiers), FlagPadded (bit2, taille masquée) et
+		// FlagMetadata (bit3, nom et date d'origine).
+		//
+		// Définir un bit réservé n'appelle pas de bump de version : la disposition
+		// de l'en-tête v3 ne change pas, et un binaire antérieur *refuse* un bit
+		// qu'il ne connaît pas au lieu de mal interpréter le fichier. C'est
+		// exactement ce pour quoi knownFlags existe. Un bump ne serait dû que si
+		// la structure de l'en-tête bougeait — taille, ordre ou sens d'un champ
+		// existant.
+		expectedKnownFlags = FlagCompressed | FlagArchive | FlagPadded | FlagMetadata
 	)
 
 	if currentVersion < expectedVersion {

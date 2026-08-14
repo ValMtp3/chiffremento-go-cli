@@ -66,7 +66,10 @@ const (
 	// FlagPadded : la charge utile commence par un en-tête de remplissage
 	// (voir pad.go), destiné à masquer la taille réelle du clair.
 	FlagPadded = byte(1 << 2)
-	knownFlags = FlagCompressed | FlagArchive | FlagPadded
+	// FlagMetadata : un bloc de métadonnées (nom d'origine, date) précède le
+	// contenu, après le remplissage éventuel. Voir metadata.go.
+	FlagMetadata = byte(1 << 3)
+	knownFlags   = FlagCompressed | FlagArchive | FlagPadded | FlagMetadata
 )
 
 // Algorithmes de compression, tels qu'inscrits dans le champ compAlgo de la v3.
@@ -205,11 +208,16 @@ type header struct {
 	Comp byte
 	Salt []byte
 	Raw  []byte
+	// Meta est renseignée à la lecture quand FlagMetadata est posé. Elle vient
+	// de l'intérieur du chiffrement, donc après authentification — contrairement
+	// au reste de cette structure, qui est lisible sans mot de passe.
+	Meta *FileMetadata
 }
 
-func (h *header) compressed() bool { return h.Comp != CompNone }
-func (h *header) archive() bool    { return h.Flags&FlagArchive != 0 }
-func (h *header) padded() bool     { return h.Flags&FlagPadded != 0 }
+func (h *header) compressed() bool  { return h.Comp != CompNone }
+func (h *header) archive() bool     { return h.Flags&FlagArchive != 0 }
+func (h *header) padded() bool      { return h.Flags&FlagPadded != 0 }
+func (h *header) hasMetadata() bool { return h.Flags&FlagMetadata != 0 }
 
 // AlgoName rend un identifiant d'algorithme lisible pour l'interface.
 func AlgoName(algo byte) string {

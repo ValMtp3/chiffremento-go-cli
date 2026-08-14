@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+	"time"
 
 	"chiffremento-cli/pkg"
 )
@@ -28,13 +29,15 @@ func main() {
 
 func run() error {
 	showVersion := flag.Bool("version", false, "afficher la version")
-	mode := flag.String("mode", "", "enc (chiffrer), dec (déchiffrer), verify (contrôler) ou info (inspecter)")
+	mode := flag.String("mode", "", "enc (chiffrer), dec (déchiffrer), verify (contrôler), info (inspecter) ou bench (mesurer)")
 	fileIn := flag.String("in", "", "fichier ou dossier d'entrée, ou - pour l'entrée standard (dossier en mode enc uniquement)")
 	fileOut := flag.String("out", "", "destination (défaut : entrée + "+extension+" en enc, entrée sans l'extension en dec) ; - pour la sortie standard")
 	compress := flag.Bool("comp", false, "compresser les données en zstd avant chiffrement")
 	pad := flag.Bool("pad", false, "masquer la taille réelle en ajoutant du remplissage ; s'exclut avec -comp")
 	chacha := flag.Bool("chacha", false, "utiliser ChaCha20-Poly1305 au lieu d'AES-GCM")
 	parano := flag.Bool("parano", false, "mode parano : double chiffrement en cascade (chacha20 + aes), plus lent")
+	kdf := flag.String("kdf", "", "coût de la dérivation de clé : standard (défaut), fort ou maximum")
+	meta := flag.String("meta", "", "métadonnées conservées dans le chiffré : none (défaut) ou minimal (nom et date)")
 	flag.Usage = usage
 
 	// Sans le moindre argument, dans un vrai terminal : interface guidée.
@@ -55,14 +58,19 @@ func run() error {
 		return nil
 	}
 
+	// bench ne prend pas d'entrée : il ne lit ni n'écrit aucun fichier.
+	if *mode == "bench" {
+		return doBench()
+	}
+
 	if *mode == "" || *fileIn == "" {
 		usage()
 		return errors.New("-mode et -in sont obligatoires")
 	}
 
-	if *mode != "enc" && (*compress || *chacha || *parano || *pad) {
+	if *mode != "enc" && (*compress || *chacha || *parano || *pad || *kdf != "" || *meta != "") {
 		fmt.Fprintln(os.Stderr, styleDim.Render(
-			"note : -comp, -pad, -chacha et -parano n'ont d'effet qu'en mode enc, ils sont ignorés ici"))
+			"note : -comp, -pad, -chacha, -parano, -kdf et -meta n'ont d'effet qu'en mode enc, ils sont ignorés ici"))
 	}
 	if *mode == "info" && *fileOut != "" {
 		fmt.Fprintln(os.Stderr, styleDim.Render("note : -out n'a pas d'effet en mode info, il est ignoré"))
@@ -74,7 +82,18 @@ func run() error {
 		if err != nil {
 			return err
 		}
-		return doEncrypt(*fileIn, *fileOut, algo, chooseComp(*compress), *pad)
+		profile, err := pkg.ParseKDFProfile(*kdf)
+		if err != nil {
+			return err
+		}
+		metaMode, err := pkg.ParseMetadataMode(*meta)
+		if err != nil {
+			return err
+		}
+		return doEncrypt(*fileIn, *fileOut, pkg.Options{
+			Algo: algo, Comp: chooseComp(*compress), Pad: *pad,
+			KDF: profile, Metadata: metaMode,
+		})
 	case "dec":
 		return doDecrypt(*fileIn, *fileOut)
 	case "verify":
@@ -82,7 +101,7 @@ func run() error {
 	case "info":
 		return doInfo(*fileIn)
 	default:
-		return fmt.Errorf("mode inconnu %q (attendu enc, dec, verify ou info)", *mode)
+		return fmt.Errorf("mode inconnu %q (attendu enc, dec, verify, info ou bench)", *mode)
 	}
 }
 
@@ -130,8 +149,14 @@ func chooseComp(compress bool) byte {
 // isStream reconnaît le tiret conventionnel des flux standard.
 func isStream(p string) bool { return p == "-" }
 
-func doEncrypt(in, out string, algo, comp byte, pad bool) error {
-	opts := pkg.Options{Algo: algo, Comp: comp, Pad: pad}
+func doEncrypt(in, out string, opts pkg.Options) error {
+	algo, comp, pad, kdf, meta := opts.Algo, opts.Comp, opts.Pad, opts.KDF, opts.Metadata
+	if algo == 0 {
+		algo = pkg.AlgoAES
+	}
+	if kdf == "" {
+		kdf = pkg.KDFStandard
+	}
 
 	// Un dossier glissé dans le terminal ou complété par le shell arrive
 	// souvent avec un séparateur final : sans ce nettoyage, la sortie
@@ -161,12 +186,16 @@ func doEncrypt(in, out string, algo, comp byte, pad bool) error {
 	defer zero(password)
 
 	fmt.Fprintf(os.Stderr, "%s %s\n", styleDim.Render("chiffrement  "), pkg.AlgoName(algo))
-	fmt.Fprintf(os.Stderr, "%s %s\n", styleDim.Render("kdf          "), pkg.DefaultKDFLabel())
+	fmt.Fprintf(os.Stderr, "%s %s (%s)\n", styleDim.Render("kdf          "), kdf.KDFLabel(), kdf)
 	if comp != pkg.CompNone {
 		fmt.Fprintf(os.Stderr, "%s %s\n", styleDim.Render("compression  "), pkg.CompName(comp))
 	}
 	if pad {
 		fmt.Fprintf(os.Stderr, "%s %s\n", styleDim.Render("remplissage  "), "taille arrondie au palier supérieur")
+	}
+	if meta == pkg.MetadataMinimal {
+		fmt.Fprintf(os.Stderr, "%s %s\n", styleDim.Render("métadonnées  "),
+			"nom d'origine et date conservés dans le chiffré")
 	}
 	if !isStream(in) {
 		if st, err := os.Stat(in); err == nil && st.IsDir() {
@@ -254,36 +283,52 @@ func doDecrypt(in, out string) error {
 	}
 	defer zero(password)
 
-	if err := decryptTo(in, out, password); err != nil {
+	meta, err := decryptTo(in, out, password)
+	if err != nil {
 		return err
 	}
 	fmt.Fprintf(os.Stderr, "%s %s\n", styleAccent.Render("✓"), describeDest(out))
+
+	// Le nom d'origine n'est lisible qu'après authentification : impossible de
+	// l'annoncer plus tôt, et impossible de nommer la sortie avec avant d'avoir
+	// vérifié le fichier. On le signale donc, sans renommer d'autorité.
+	if meta != nil {
+		fmt.Fprintf(os.Stderr, "%s %s\n", styleDim.Render("nom d'origine"), meta.Name)
+		if !isStream(out) && filepath.Base(out) != meta.Name {
+			fmt.Fprintf(os.Stderr, "%s %s\n", styleDim.Render("             "),
+				"diffère du nom de sortie ; à renommer si besoin")
+		}
+	}
 	return nil
 }
 
 // decryptTo aiguille comme encryptTo. Sur la sortie standard, une archive sort
 // telle quelle, en tar : il n'y a rien à extraire dans un tube.
-func decryptTo(in, out string, password []byte) error {
+func decryptTo(in, out string, password []byte) (*pkg.FileMetadata, error) {
 	if !isStream(in) && !isStream(out) {
-		return pkg.Decrypt(in, out, password, pkg.Options{})
+		res, err := pkg.DecryptTo(in, out, password, pkg.Options{})
+		return res.Metadata, err
 	}
 
 	src, _, closeSrc, err := openSource(in)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer closeSrc()
 
 	dst, closeDst, err := openDest(out)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer closeDst()
 
+	// Sur un flux, les métadonnées ne sont pas remontées : il n'y a pas de
+	// fichier de sortie à qui appliquer une date, et l'appelant a déjà choisi
+	// où vont les octets.
 	if err := pkg.DecryptStream(dst, src, password, pkg.Options{}); err != nil {
-		return err
+		return nil, err
 	}
-	return closeDst()
+	return nil, closeDst()
 }
 
 // doVerify contrôle qu'un fichier est intact et déchiffrable sans rien écrire
@@ -350,6 +395,10 @@ func doInfo(in string) error {
 	line("compression", d.Comp)
 	line("contenu", map[bool]string{true: "dossier (archive tar)", false: "fichier"}[d.Archive])
 	line("remplissage", map[bool]string{true: "oui, taille réelle masquée", false: "non"}[d.Padded])
+	line("métadonnées", map[bool]string{
+		true:  "oui, nom et date à l'intérieur du chiffré",
+		false: "non",
+	}[d.Metadata])
 	if d.Version < 3 {
 		fmt.Println(styleDim.Render(fmt.Sprintf(
 			"  produit par un format v%d : lecture seule, les nouveaux fichiers sont en v3", d.Version)))
@@ -467,4 +516,37 @@ masquée, ou lu sur l'entrée standard si celle-ci n'est pas un terminal.
 Options :
 `, version, extension, extension, extension, extension)
 	flag.PrintDefaults()
+}
+
+// doBench mesure les coûts sur cette machine. Ni lecture ni écriture de
+// fichier, ni mot de passe : c'est de l'information, pas une opération.
+func doBench() error {
+	rep := pkg.Benchmark()
+
+	fmt.Printf("%s%s\n\n", styleLabel.Render("machine"),
+		styleText.Render(fmt.Sprintf("%d cœurs logiques", rep.CPUs)))
+
+	fmt.Println(styleDim.Render("  dérivation de clé (argon2id)"))
+	for _, m := range rep.KDF {
+		marque := "  "
+		if m.Profile == rep.Advised {
+			marque = styleAccent.Render("→ ")
+		}
+		fmt.Printf("  %s%-10s %-24s %6d Mio  %8s\n", marque, m.Profile, m.Label,
+			m.MemoryMiB, m.Duration.Round(time.Millisecond))
+	}
+	fmt.Printf("\n  %s\n", styleAccent.Render(rep.Advisory))
+	fmt.Println(styleDim.Render("  la mémoire annoncée sera aussi exigée au déchiffrement"))
+
+	fmt.Printf("\n%s\n", styleDim.Render("  débit de chiffrement"))
+	for _, m := range rep.AEAD {
+		if m.Err != nil {
+			fmt.Printf("    %-34s %s\n", m.Name, styleDim.Render("mesure impossible : "+m.Err.Error()))
+			continue
+		}
+		fmt.Printf("    %-34s %10s/s\n", m.Name, humanSize(m.BytesPerSec))
+	}
+	fmt.Printf("\n  %s\n", styleDim.Render(
+		"sans accélération AES matérielle, chacha20 passe devant : c'est là que -chacha se justifie"))
+	return nil
 }

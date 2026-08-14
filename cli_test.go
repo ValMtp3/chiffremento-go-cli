@@ -113,7 +113,7 @@ func TestDoEncryptDecryptFichier(t *testing.T) {
 
 	// Sortie par défaut : l'entrée suivie de l'extension.
 	avecMotDePasse(t, motDePasseTest)
-	if err := doEncrypt(in, "", pkg.AlgoAES, pkg.CompNone, false); err != nil {
+	if err := doEncrypt(in, "", pkg.Options{Algo: pkg.AlgoAES}); err != nil {
 		t.Fatalf("chiffrement: %v", err)
 	}
 	if _, err := os.Stat(in + extension); err != nil {
@@ -141,7 +141,7 @@ func TestDoEncryptDestinationChoisie(t *testing.T) {
 	ailleurs := filepath.Join(t.TempDir(), "autre-nom.chto")
 
 	avecMotDePasse(t, motDePasseTest)
-	if err := doEncrypt(in, ailleurs, pkg.AlgoChaCha, pkg.CompZstd, false); err != nil {
+	if err := doEncrypt(in, ailleurs, pkg.Options{Algo: pkg.AlgoChaCha, Comp: pkg.CompZstd}); err != nil {
 		t.Fatalf("chiffrement vers une destination choisie: %v", err)
 	}
 	d, err := pkg.Inspect(ailleurs)
@@ -165,7 +165,7 @@ func TestDoEncryptDecryptDossier(t *testing.T) {
 	chto := filepath.Join(t.TempDir(), "archive.chto")
 
 	avecMotDePasse(t, motDePasseTest)
-	if err := doEncrypt(src, chto, pkg.AlgoAES, pkg.CompZstd, false); err != nil {
+	if err := doEncrypt(src, chto, pkg.Options{Algo: pkg.AlgoAES, Comp: pkg.CompZstd}); err != nil {
 		t.Fatalf("chiffrement du dossier: %v", err)
 	}
 
@@ -198,7 +198,7 @@ func TestDoEncryptDossierSeparateurFinal(t *testing.T) {
 	src := arbreCLI(t)
 
 	avecMotDePasse(t, motDePasseTest)
-	if err := doEncrypt(src+string(os.PathSeparator), "", pkg.AlgoAES, pkg.CompNone, false); err != nil {
+	if err := doEncrypt(src+string(os.PathSeparator), "", pkg.Options{Algo: pkg.AlgoAES}); err != nil {
 		t.Fatalf("chiffrement: %v", err)
 	}
 	if _, err := os.Stat(src + extension); err != nil {
@@ -215,7 +215,7 @@ func TestDoEncryptRemplissage(t *testing.T) {
 	chto := filepath.Join(dir, "masque.chto")
 
 	avecMotDePasse(t, motDePasseTest)
-	if err := doEncrypt(in, chto, pkg.AlgoAES, pkg.CompNone, true); err != nil {
+	if err := doEncrypt(in, chto, pkg.Options{Algo: pkg.AlgoAES, Pad: true}); err != nil {
 		t.Fatalf("chiffrement avec remplissage: %v", err)
 	}
 	d, err := pkg.Inspect(chto)
@@ -258,7 +258,7 @@ func TestDoEncryptVersSortieStandard(t *testing.T) {
 
 	sortie := captureSortie(t)
 	avecMotDePasse(t, motDePasseTest)
-	if err := doEncrypt(in, "-", pkg.AlgoAES, pkg.CompNone, false); err != nil {
+	if err := doEncrypt(in, "-", pkg.Options{Algo: pkg.AlgoAES}); err != nil {
 		t.Fatalf("chiffrement vers la sortie standard: %v", err)
 	}
 
@@ -292,7 +292,7 @@ func TestDoDecryptDossierVersSortieStandard(t *testing.T) {
 	chto := filepath.Join(t.TempDir(), "archive.chto")
 
 	avecMotDePasse(t, motDePasseTest)
-	if err := doEncrypt(src, chto, pkg.AlgoAES, pkg.CompNone, false); err != nil {
+	if err := doEncrypt(src, chto, pkg.Options{Algo: pkg.AlgoAES}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -333,7 +333,7 @@ func TestDoVerifyDepuisFlux(t *testing.T) {
 	chto := filepath.Join(dir, "doc.chto")
 
 	avecMotDePasse(t, motDePasseTest)
-	if err := doEncrypt(in, chto, pkg.AlgoAES, pkg.CompZstd, false); err != nil {
+	if err := doEncrypt(in, chto, pkg.Options{Algo: pkg.AlgoAES, Comp: pkg.CompZstd}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -378,7 +378,7 @@ func TestDoEncryptRefus(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			avecMotDePasse(t, motDePasseTest)
-			err := doEncrypt(c.in, c.out, pkg.AlgoAES, c.comp, c.pad)
+			err := doEncrypt(c.in, c.out, pkg.Options{Algo: pkg.AlgoAES, Comp: c.comp, Pad: c.pad})
 			if err == nil {
 				t.Fatal("aucune erreur alors que le cas devrait être refusé")
 			}
@@ -419,7 +419,7 @@ func TestDoDecryptMauvaisMotDePasse(t *testing.T) {
 	chto := filepath.Join(dir, "doc.chto")
 
 	avecMotDePasse(t, motDePasseTest)
-	if err := doEncrypt(in, chto, pkg.AlgoAES, pkg.CompNone, false); err != nil {
+	if err := doEncrypt(in, chto, pkg.Options{Algo: pkg.AlgoAES}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -441,7 +441,7 @@ func TestDoVerifyEtDoInfo(t *testing.T) {
 	chto := filepath.Join(dir, "archive.chto")
 
 	avecMotDePasse(t, motDePasseTest)
-	if err := doEncrypt(src, chto, pkg.AlgoCascade, pkg.CompZstd, false); err != nil {
+	if err := doEncrypt(src, chto, pkg.Options{Algo: pkg.AlgoCascade, Comp: pkg.CompZstd}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -522,7 +522,7 @@ func TestGzipRefuseALEcriture(t *testing.T) {
 	out := filepath.Join(dir, "doc.chto")
 
 	avecMotDePasse(t, motDePasseTest)
-	err := doEncrypt(in, out, pkg.AlgoAES, pkg.CompGzip, false)
+	err := doEncrypt(in, out, pkg.Options{Algo: pkg.AlgoAES, Comp: pkg.CompGzip})
 	if err == nil {
 		t.Fatal("le chiffrement en gzip a été accepté")
 	}
