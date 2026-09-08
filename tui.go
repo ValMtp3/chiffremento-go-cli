@@ -40,10 +40,19 @@ func runTUI() error {
 	}
 
 	path := ""
-	if err := cibleForm(action, mode, &path).Run(); err != nil {
-		return err
+	// La boucle est là parce que l'explorateur tolère une sélection vide pour
+	// ne pas bloquer la navigation : le formulaire se termine donc parfois sans
+	// rien proposer, et on le réaffiche au lieu de laisser filer un chemin vide
+	// vers une erreur obscure plus loin.
+	for {
+		if err := cibleForm(action, mode, &path).Run(); err != nil {
+			return err
+		}
+		path = trimTrailingSeparator(strings.TrimSpace(expandHome(devirerGuillemets(path))))
+		if path != "" {
+			break
+		}
 	}
-	path = trimTrailingSeparator(strings.TrimSpace(expandHome(path)))
 
 	switch action {
 	case "dec":
@@ -132,7 +141,7 @@ func filePickerField(action string, path *string) huh.Field {
 		Height(16).
 		Key("picker").
 		Title(cibleTitre(action)).
-		Description("↑↓ se déplacer · → entrer dans un dossier · entrée choisir").
+		Description("↑↓ se déplacer · → ouvrir un dossier · ← remonter · entrée choisir").
 		CurrentDirectory(".").
 		// Picking : sans lui, le champ affiche « No file selected. » et il faut
 		// appuyer sur une touche pour déplier l'arborescence. On veut la liste
@@ -306,7 +315,19 @@ func tuiEncrypt(path string) error {
 		return err
 	}
 
+	// Le groupe du remplissage est masqué quand la compression est active, mais
+	// masquer n'efface pas : un aller-retour dans le formulaire — pad à oui,
+	// retour en arrière, compression à oui — laissait les deux posés, et
+	// l'opération échouait plus loin sur « le remplissage et la compression
+	// s'excluent ». C'est la compression, dernier choix visible, qui tranche.
+	if compresser {
+		pad = false
+	}
+
 	out := path + extension
+	if err := confirmerEcrasement(out); err != nil {
+		return err
+	}
 	// La ligne « sel » du cadre reste sur une seule ligne : les mentions
 	// s'y ajoutent plutôt que de casser la mise en page.
 	salt := "16 o aléatoires · en-tête lié à la clé"
@@ -319,18 +340,21 @@ func tuiEncrypt(path string) error {
 		salt = "16 o aléatoires · taille réelle masquée"
 	}
 	info := jobInfo{
-		Action:  "chiffrement",
-		In:      path,
-		Out:     out,
-		AEAD:    pkg.AlgoName(algo),
-		KDF:     pkg.DefaultKDFLabel(),
+		Action: "chiffrement",
+		In:     path,
+		Out:    out,
+		AEAD:   pkg.AlgoName(algo),
+		// Le profil choisi, pas le profil par défaut : afficher « m=256MiB »
+		// alors que l'utilisateur venait de sélectionner « maximum » démentait
+		// son propre choix à l'écran.
+		KDF:     kdf.KDFLabel(),
 		Salt:    salt,
 		Success: out,
 	}
 	return runJob(info, func(p func(int64, int64)) error {
 		return pkg.Encrypt(path, out, []byte(password), pkg.Options{
 			Algo: algo, Comp: compEncodee(compresser), Pad: pad,
-			KDF: kdf, Metadata: metaEncodee(garderMeta), Progress: p,
+			KDF: kdf, Metadata: metaEncodee(garderMeta), Force: true, Progress: p,
 		})
 	})
 }
@@ -373,6 +397,9 @@ func tuiDecrypt(path string) error {
 	}
 
 	out := strings.TrimSuffix(path, extension)
+	if err := confirmerEcrasement(out); err != nil {
+		return err
+	}
 	info := jobInfo{
 		Action:  "déchiffrement",
 		In:      path,
@@ -383,7 +410,7 @@ func tuiDecrypt(path string) error {
 		Success: out,
 	}
 	return runJob(info, func(p func(int64, int64)) error {
-		return pkg.Decrypt(path, out, []byte(password), pkg.Options{Progress: p})
+		return pkg.Decrypt(path, out, []byte(password), pkg.Options{Force: true, Progress: p})
 	})
 }
 
@@ -456,6 +483,16 @@ func runJob(info jobInfo, op func(progress func(done, total int64)) error) error
 	}()
 
 	if _, err := prog.Run(); err != nil {
+		// Ctrl+C ferme l'écran mais ne prévient pas l'opération : sans cette
+		// sortie franche, elle continuerait en arrière-plan, invisible, et un
+		// ✓ arriverait après coup sur un terminal déjà rendu. On nettoie les
+		// temporaires puis on quitte, comme le handler de signal — la mort du
+		// processus est ce qui interrompt réellement le chiffrement.
+		if errors.Is(err, tea.ErrInterrupted) || errors.Is(err, tea.ErrProgramKilled) {
+			pkg.CleanupTemporaries()
+			fmt.Fprintln(os.Stderr, "\ninterrompu")
+			os.Exit(130)
+		}
 		return err
 	}
 	if err := <-errCh; err != nil {
@@ -671,8 +708,6 @@ func crackTime(bits float64) string {
 	}
 }
 
-// compressHint adapte l'aide du champ compression : sur un dossier elle est
-// proposée active, autant dire pourquoi.
 // verifySucces adapte la phrase de fin : sur une archive, ce qui est contrôlé
 // est bien qu'elle serait extractible, pas seulement lisible.
 func verifySucces(archive bool) string {
@@ -680,6 +715,42 @@ func verifySucces(archive bool) string {
 		return "archive intacte, extractible, rien écrit sur le disque"
 	}
 	return "fichier intact, déchiffrable, rien écrit sur le disque"
+}
+
+// confirmerEcrasement demande son avis à l'utilisateur quand la destination
+// existe déjà, plutôt que de la remplacer en silence.
+//
+// C'est le pendant du drapeau -force du CLI : ici la question peut être posée,
+// donc elle l'est, et les appels à pkg passent ensuite Force. Un dossier n'est
+// jamais proposé à l'écrasement — le remplacer voudrait dire supprimer une
+// arborescence entière sur un simple « oui ».
+func confirmerEcrasement(dest string) error {
+	info, err := os.Lstat(dest)
+	if err != nil {
+		return nil // rien à cet emplacement : rien à demander
+	}
+	if info.IsDir() {
+		return fmt.Errorf("%s existe déjà et c'est un dossier : déplace-le ou renomme-le avant de continuer", dest)
+	}
+
+	ecraser := false
+	form := huh.NewForm(
+		huh.NewGroup(
+			huh.NewConfirm().
+				Title(dest + " existe déjà — l'écraser ?").
+				Description("son contenu actuel sera définitivement perdu").
+				Affirmative("écraser").
+				Negative("annuler").
+				Value(&ecraser),
+		),
+	).WithTheme(formTheme()).WithShowHelp(true)
+	if err := form.Run(); err != nil {
+		return err
+	}
+	if !ecraser {
+		return fmt.Errorf("annulé : %s n'a pas été touché", dest)
+	}
+	return nil
 }
 
 // compEncodee traduit la réponse de l'interface en identifiant de compression.
@@ -695,6 +766,34 @@ func compressHint(dossier bool) string {
 		return "proposée active sur un dossier · laisse fuiter la compressibilité du contenu"
 	}
 	return "réduit la taille, mais laisse fuiter la compressibilité du contenu"
+}
+
+// shellEchappeLesEspaces dit si l'hôte échappe les espaces d'un chemin avec des
+// contre-obliques. Faux sous Windows, où la contre-oblique est le séparateur de
+// chemin : « C:\Users\x\mes documents » y deviendrait « C:Usersxmes documents ».
+//
+// Une variable et non un test direct sur runtime.GOOS, pour que le test couvre
+// les deux branches depuis n'importe quel système.
+var shellEchappeLesEspaces = os.PathSeparator != '\\'
+
+// devirerGuillemets nettoie un chemin collé dans le champ par un
+// glisser-déposer : le terminal le livre quoté (« '/a/mon fichier.txt' ») ou
+// échappé (« /a/mon\ fichier.txt »), et validateTarget répondrait « chemin
+// introuvable » à un fichier qui existe.
+//
+// Le retrait des guillemets vaut partout — l'explorateur Windows quote lui aussi
+// les chemins à espaces. Le déséchappement, lui, est réservé aux systèmes où la
+// contre-oblique n'est pas un séparateur : ailleurs il détruirait le chemin au
+// lieu de le réparer.
+func devirerGuillemets(p string) string {
+	p = strings.TrimSpace(p)
+	if len(p) >= 2 && (p[0] == '\'' || p[0] == '"') && p[len(p)-1] == p[0] {
+		p = p[1 : len(p)-1]
+	}
+	if !shellEchappeLesEspaces || !strings.Contains(p, `\`) {
+		return p
+	}
+	return strings.NewReplacer(`\ `, " ", `\'`, "'", `\"`, "\"").Replace(p)
 }
 
 func expandHome(p string) string {

@@ -32,6 +32,12 @@ const (
 	// tourne à pleine vitesse dans sa goroutine, et la barre ne dépasse jamais
 	// la progression réelle (voir displayRatio). Aucun effet en mode CLI, qui
 	// n'utilise pas cet écran.
+	//
+	// Quatre secondes est un choix assumé, pas un réglage à optimiser : c'est le
+	// temps qu'il faut pour que l'animation soit *regardée* et que le
+	// récapitulatif du cadre (aead, kdf, sel) se lise en entier. Le seuil
+	// s'efface de lui-même sur un gros fichier, où la progression réelle est
+	// plus lente que le rythme imposé.
 	minDuration = 4 * time.Second
 )
 

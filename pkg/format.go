@@ -358,5 +358,11 @@ func (h *header) finalize() error {
 	if h.Version < versionV3 && h.padded() {
 		return fmt.Errorf("header incohérent : drapeau de remplissage sur un fichier v%d", h.Version)
 	}
+	// Même raison pour les métadonnées : elles n'existent pas avant la v3, et un
+	// vieux fichier qui les annonce verrait ses premiers octets de clair relus
+	// comme un bloc de métadonnées.
+	if h.Version < versionV3 && h.hasMetadata() {
+		return fmt.Errorf("header incohérent : drapeau de métadonnées sur un fichier v%d", h.Version)
+	}
 	return h.Argon.validate()
 }

@@ -123,7 +123,7 @@ func TestDoEncryptDecryptFichier(t *testing.T) {
 	// Destination choisie au déchiffrement.
 	out := filepath.Join(dir, "relu.txt")
 	avecMotDePasse(t, motDePasseTest)
-	if err := doDecrypt(in+extension, out); err != nil {
+	if err := doDecrypt(in+extension, out, false); err != nil {
 		t.Fatalf("déchiffrement: %v", err)
 	}
 	got, err := os.ReadFile(out)
@@ -171,7 +171,7 @@ func TestDoEncryptDecryptDossier(t *testing.T) {
 
 	dst := filepath.Join(t.TempDir(), "restaure")
 	avecMotDePasse(t, motDePasseTest)
-	if err := doDecrypt(chto, dst); err != nil {
+	if err := doDecrypt(chto, dst, false); err != nil {
 		t.Fatalf("déchiffrement du dossier: %v", err)
 	}
 	for rel, attendu := range map[string]string{
@@ -235,7 +235,7 @@ func TestDoEncryptRemplissage(t *testing.T) {
 
 	avecMotDePasse(t, motDePasseTest)
 	out := filepath.Join(dir, "relu.bin")
-	if err := doDecrypt(chto, out); err != nil {
+	if err := doDecrypt(chto, out, false); err != nil {
 		t.Fatalf("déchiffrement d'un fichier rempli: %v", err)
 	}
 	got, err := os.ReadFile(out)
@@ -273,7 +273,7 @@ func TestDoEncryptVersSortieStandard(t *testing.T) {
 
 	out := filepath.Join(dir, "relu.txt")
 	avecMotDePasse(t, motDePasseTest)
-	if err := doDecrypt(chto, out); err != nil {
+	if err := doDecrypt(chto, out, false); err != nil {
 		t.Fatalf("relecture de ce qui est sorti du tube: %v", err)
 	}
 	got, err := os.ReadFile(out)
@@ -298,7 +298,7 @@ func TestDoDecryptDossierVersSortieStandard(t *testing.T) {
 
 	sortie := captureSortie(t)
 	avecMotDePasse(t, motDePasseTest)
-	if err := doDecrypt(chto, "-"); err != nil {
+	if err := doDecrypt(chto, "-", false); err != nil {
 		t.Fatalf("déchiffrement vers la sortie standard: %v", err)
 	}
 
@@ -393,19 +393,19 @@ func TestDoDecryptEtVerifyRefus(t *testing.T) {
 	dir := t.TempDir()
 	sansExtension := ecrire(t, filepath.Join(dir, "doc.txt"), []byte("x"))
 
-	if err := doDecrypt(sansExtension, ""); err == nil {
+	if err := doDecrypt(sansExtension, "", false); err == nil {
 		t.Error("un fichier sans extension .chto a été accepté au déchiffrement")
 	}
 	if err := doVerify(sansExtension); err == nil {
 		t.Error("un fichier sans extension .chto a été accepté à la vérification")
 	}
-	if err := doDecrypt("-", ""); err == nil {
+	if err := doDecrypt("-", "", false); err == nil {
 		t.Error("un flux sans -out a été accepté")
 	}
 	// Un .chto qui n'en est pas un : l'en-tête doit être refusé avant toute
 	// demande de mot de passe, donc sans toucher à l'entrée standard.
 	bidon := ecrire(t, filepath.Join(dir, "bidon.chto"), bytes.Repeat([]byte("X"), 64))
-	if err := doDecrypt(bidon, filepath.Join(dir, "out")); err == nil {
+	if err := doDecrypt(bidon, filepath.Join(dir, "out"), false); err == nil {
 		t.Error("un fichier au format inconnu a été accepté")
 	}
 	if err := doInfo("-"); err == nil {
@@ -425,7 +425,7 @@ func TestDoDecryptMauvaisMotDePasse(t *testing.T) {
 
 	out := filepath.Join(dir, "relu.txt")
 	avecMotDePasse(t, "mauvais mot de passe")
-	if err := doDecrypt(chto, out); err == nil {
+	if err := doDecrypt(chto, out, false); err == nil {
 		t.Fatal("un mauvais mot de passe a été accepté")
 	}
 	if _, err := os.Stat(out); err == nil {
@@ -601,7 +601,7 @@ func TestOpenSourceEtOpenDest(t *testing.T) {
 	// La fermeture de la destination doit être idempotente : elle est appelée
 	// explicitement pour remonter l'erreur, puis en defer.
 	dest := filepath.Join(dir, "sortie")
-	w, closeDst, err := openDest(dest)
+	w, closeDst, err := openDest(dest, false)
 	if err != nil {
 		t.Fatal(err)
 	}

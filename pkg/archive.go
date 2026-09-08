@@ -84,8 +84,23 @@ type archivePlan struct {
 // pour la barre de progression, et un échec *avant* que le moindre octet ne
 // soit écrit quand l'arborescence contient quelque chose qu'on refuse.
 func scanDirectory(root string) (*archivePlan, error) {
+	// Lstat et non Stat : la racine doit être un *vrai* dossier. Un lien
+	// symbolique vers un dossier passait le os.Stat de Encrypt, puis WalkDir
+	// s'arrêtait dessus sans y descendre — le plan restait vide et l'archive
+	// produite ne contenait rien. Le déchiffrement rendait alors un dossier vide
+	// sans la moindre erreur, soit le pire des cas pour une sauvegarde. Le lien
+	// est donc refusé ici, comme il l'est à l'intérieur de l'arborescence.
+	rootInfo, err := os.Lstat(root)
+	if err != nil {
+		return nil, fmt.Errorf("parcours du dossier: %w", err)
+	}
+	if !rootInfo.IsDir() {
+		return nil, fmt.Errorf("%s : type non supporté (%s) — un dossier est attendu, et les liens symboliques sont refusés ; désigne directement la cible du lien",
+			root, rootInfo.Mode().Type())
+	}
+
 	plan := &archivePlan{}
-	err := filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
+	err = filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}

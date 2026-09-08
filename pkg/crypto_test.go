@@ -626,7 +626,7 @@ func TestVerifyFichierV1(t *testing.T) {
 // gestionnaire de signal : un Ctrl+C ne doit pas laisser de .chto-tmp-*.
 func TestNettoyageTemporaires(t *testing.T) {
 	dir := t.TempDir()
-	a, err := newAtomicFile(filepath.Join(dir, "cible"))
+	a, err := newAtomicFile(filepath.Join(dir, "cible"), false)
 	if err != nil {
 		t.Fatal(err)
 	}

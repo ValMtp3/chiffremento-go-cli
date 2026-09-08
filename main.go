@@ -13,6 +13,8 @@ import (
 	"time"
 
 	"chiffremento-cli/pkg"
+
+	"github.com/charmbracelet/huh"
 )
 
 var version = "dev"
@@ -22,6 +24,11 @@ const extension = ".chto"
 func main() {
 	installSignalHandler()
 	if err := run(); err != nil {
+		// Échap ou Ctrl+C sur un formulaire : l'utilisateur a choisi de partir,
+		// pas la peine d'afficher « erreur : user aborted ».
+		if errors.Is(err, huh.ErrUserAborted) {
+			os.Exit(130)
+		}
 		fmt.Fprintln(os.Stderr, styleError.Render("erreur :"), err)
 		os.Exit(1)
 	}
@@ -38,6 +45,7 @@ func run() error {
 	parano := flag.Bool("parano", false, "mode parano : double chiffrement en cascade (chacha20 + aes), plus lent")
 	kdf := flag.String("kdf", "", "coût de la dérivation de clé : standard (défaut), fort ou maximum")
 	meta := flag.String("meta", "", "métadonnées conservées dans le chiffré : none (défaut) ou minimal (nom et date)")
+	force := flag.Bool("force", false, "écraser la destination si elle existe déjà (enc et dec ; jamais pour un dossier extrait)")
 	flag.Usage = usage
 
 	// Sans le moindre argument, dans un vrai terminal : interface guidée.
@@ -72,6 +80,10 @@ func run() error {
 		fmt.Fprintln(os.Stderr, styleDim.Render(
 			"note : -comp, -pad, -chacha, -parano, -kdf et -meta n'ont d'effet qu'en mode enc, ils sont ignorés ici"))
 	}
+	if *mode != "enc" && *mode != "dec" && *force {
+		fmt.Fprintln(os.Stderr, styleDim.Render(
+			"note : -force n'a d'effet qu'en mode enc et dec, il est ignoré ici"))
+	}
 	if *mode == "info" && *fileOut != "" {
 		fmt.Fprintln(os.Stderr, styleDim.Render("note : -out n'a pas d'effet en mode info, il est ignoré"))
 	}
@@ -92,10 +104,10 @@ func run() error {
 		}
 		return doEncrypt(*fileIn, *fileOut, pkg.Options{
 			Algo: algo, Comp: chooseComp(*compress), Pad: *pad,
-			KDF: profile, Metadata: metaMode,
+			KDF: profile, Metadata: metaMode, Force: *force,
 		})
 	case "dec":
-		return doDecrypt(*fileIn, *fileOut)
+		return doDecrypt(*fileIn, *fileOut, *force)
 	case "verify":
 		return doVerify(*fileIn)
 	case "info":
@@ -225,7 +237,7 @@ func encryptTo(in, out string, password []byte, opts pkg.Options) error {
 	}
 	defer closeSrc()
 
-	dst, closeDst, err := openDest(out)
+	dst, closeDst, err := openDest(out, opts.Force)
 	if err != nil {
 		return err
 	}
@@ -237,7 +249,7 @@ func encryptTo(in, out string, password []byte, opts pkg.Options) error {
 	return closeDst()
 }
 
-func doDecrypt(in, out string) error {
+func doDecrypt(in, out string, force bool) error {
 	if !isStream(in) && !strings.HasSuffix(in, extension) {
 		return fmt.Errorf("un fichier à déchiffrer doit porter l'extension %s", extension)
 	}
@@ -283,7 +295,7 @@ func doDecrypt(in, out string) error {
 	}
 	defer zero(password)
 
-	meta, err := decryptTo(in, out, password)
+	meta, err := decryptTo(in, out, password, force)
 	if err != nil {
 		return err
 	}
@@ -304,9 +316,9 @@ func doDecrypt(in, out string) error {
 
 // decryptTo aiguille comme encryptTo. Sur la sortie standard, une archive sort
 // telle quelle, en tar : il n'y a rien à extraire dans un tube.
-func decryptTo(in, out string, password []byte) (*pkg.FileMetadata, error) {
+func decryptTo(in, out string, password []byte, force bool) (*pkg.FileMetadata, error) {
 	if !isStream(in) && !isStream(out) {
-		res, err := pkg.DecryptTo(in, out, password, pkg.Options{})
+		res, err := pkg.DecryptTo(in, out, password, pkg.Options{Force: force})
 		return res.Metadata, err
 	}
 
@@ -316,7 +328,7 @@ func decryptTo(in, out string, password []byte) (*pkg.FileMetadata, error) {
 	}
 	defer closeSrc()
 
-	dst, closeDst, err := openDest(out)
+	dst, closeDst, err := openDest(out, force)
 	if err != nil {
 		return nil, err
 	}
@@ -425,9 +437,19 @@ func openSource(in string) (io.Reader, int64, func(), error) {
 // openDest ouvre la destination. La fonction de fermeture renvoyée est
 // idempotente : on l'appelle explicitement pour remonter l'erreur de fermeture,
 // et en defer pour ne rien laisser ouvert en cas d'échec.
-func openDest(out string) (io.Writer, func() error, error) {
+//
+// Le chemin des flux n'a pas d'écriture atomique : os.Create tronque la cible
+// tout de suite. Le refus d'une destination existante y est donc encore plus
+// nécessaire que dans pkg, où le rename final laisse au moins une chance de
+// s'arrêter avant.
+func openDest(out string, force bool) (io.Writer, func() error, error) {
 	if isStream(out) {
 		return os.Stdout, func() error { return nil }, nil
+	}
+	if !force {
+		if _, err := os.Lstat(out); err == nil {
+			return nil, nil, fmt.Errorf("%s existe déjà : déplace-le, renomme-le, ou relance avec -force pour l'écraser", out)
+		}
 	}
 	f, err := os.Create(out)
 	if err != nil {
@@ -483,6 +505,14 @@ func checkPaths(in, out string) error {
 	if err1 == nil && err2 == nil && absIn == absOut {
 		return errors.New("le fichier d'entrée et le fichier de sortie sont identiques")
 	}
+	// Même fichier par l'inode : système insensible à la casse (« f.txt » vs
+	// « F.txt » sur macOS) ou lien matériel. La comparaison en string passe
+	// au travers ; SameFile non.
+	if infoIn, err := os.Stat(in); err == nil {
+		if infoOut, err := os.Stat(out); err == nil && os.SameFile(infoIn, infoOut) {
+			return errors.New("le fichier d'entrée et le fichier de sortie sont identiques")
+		}
+	}
 	return nil
 }
 
@@ -503,6 +533,9 @@ func usage() {
 
 Un dossier est empaqueté en tar au fil du chiffrement, et recréé à l'identique
 au déchiffrement.
+
+Une destination qui existe déjà est refusée : -force pour l'écraser quand même.
+Un dossier extrait ne s'écrase jamais, quel que soit le drapeau.
 
 -in - lit l'entrée standard, -out - écrit sur la sortie standard : l'outil est
 donc composable. Sur un flux, l'écriture atomique n'existe pas et le clair sort

@@ -38,6 +38,17 @@ type Options struct {
 	// l'en-tête du fichier.
 	KDF KDFProfile
 
+	// Force autorise l'écrasement d'une destination existante. Sans lui, une
+	// écriture qui trouverait déjà un fichier à la destination échoue avant
+	// d'avoir rien produit. C'est le seul champ pris en compte des deux côtés :
+	// écraser par mégarde le clair d'origine au chiffrement, ou un fichier
+	// homonyme au déchiffrement, coûte la même chose.
+	//
+	// Sans effet sur l'extraction d'un dossier, qui refuse toujours une
+	// destination existante : la remplacer voudrait dire supprimer une
+	// arborescence entière, ce qui n'est pas à la portée d'un drapeau.
+	Force bool
+
 	// Metadata décide si le nom d'origine et la date de modification sont
 	// conservés dans le chiffré. Sans effet sur un dossier, dont la charge utile
 	// est un tar qui les porte déjà. Ignoré au déchiffrement.
@@ -117,7 +128,17 @@ func untrackTemp(p string) {
 	pendingMu.Unlock()
 }
 
-func newAtomicFile(dest string) (*atomicFile, error) {
+// newAtomicFile prépare l'écriture de dest. Sauf force, une destination qui
+// existe déjà est refusée : le rename final la remplacerait sans retour
+// possible, et c'est exactement le scénario que l'écriture atomique était censée
+// écarter — déchiffrer `doc.pdf.chto` à côté d'un `doc.pdf` sans rapport
+// détruisait ce dernier en silence.
+func newAtomicFile(dest string, force bool) (*atomicFile, error) {
+	if !force {
+		if _, err := os.Lstat(dest); err == nil {
+			return nil, fmt.Errorf("%s existe déjà : déplace-le, renomme-le, ou relance avec -force pour l'écraser", dest)
+		}
+	}
 	dir := filepath.Dir(dest)
 	f, err := os.CreateTemp(dir, ".chto-tmp-*")
 	if err != nil {
@@ -454,7 +475,7 @@ func Encrypt(inputPath, outputPath string, password []byte, opts Options) error 
 		}
 	}
 
-	out, err := newAtomicFile(outputPath)
+	out, err := newAtomicFile(outputPath, opts.Force)
 	if err != nil {
 		return err
 	}
@@ -569,9 +590,21 @@ func encrypt(dst io.Writer, src source, password []byte, opts Options) error {
 		payloadDst = compWriter
 	}
 
+	// abort relâche les deux couches sur un chemin d'échec. Le compresseur doit
+	// être fermé lui aussi : l'encodeur zstd fait tourner des goroutines de
+	// travail, et le laisser ouvert les abandonnait vivantes à chaque erreur —
+	// invisible sur une opération unique, une fuite pour qui appelle le paquet
+	// en boucle.
+	abort := func() {
+		if compWriter != nil {
+			compWriter.Close()
+		}
+		cipherWriter.Close()
+	}
+
 	if opts.Pad {
 		if err := writePadding(payloadDst, padding); err != nil {
-			cipherWriter.Close()
+			abort()
 			return err
 		}
 	}
@@ -579,14 +612,14 @@ func encrypt(dst io.Writer, src source, password []byte, opts Options) error {
 	// Après le remplissage, avant le contenu : la lecture suit le même ordre.
 	if metaBlock != nil {
 		if _, err := payloadDst.Write(metaBlock); err != nil {
-			cipherWriter.Close()
+			abort()
 			return fmt.Errorf("écriture des métadonnées: %w", err)
 		}
 	}
 
 	if src.plan != nil {
 		if err := writeArchive(payloadDst, src.plan, opts.Progress); err != nil {
-			cipherWriter.Close()
+			abort()
 			return err
 		}
 	} else {
@@ -595,7 +628,7 @@ func encrypt(dst io.Writer, src source, password []byte, opts Options) error {
 			total = 0
 		}
 		if _, err := io.Copy(payloadDst, withProgress(src.r, total, opts.Progress)); err != nil {
-			cipherWriter.Close()
+			abort()
 			return fmt.Errorf("chiffrement: %w", err)
 		}
 	}
@@ -672,7 +705,7 @@ func DecryptTo(inputPath, outputPath string, password []byte, opts Options) (Dec
 		return res, out.commit()
 	}
 
-	out, err := newAtomicFile(outputPath)
+	out, err := newAtomicFile(outputPath, opts.Force)
 	if err != nil {
 		return res, err
 	}

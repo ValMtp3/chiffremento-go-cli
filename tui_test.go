@@ -161,14 +161,84 @@ func TestChooseAlgo(t *testing.T) {
 }
 
 func TestCheckPaths(t *testing.T) {
-	if err := checkPaths("a.txt", "a.txt"); err == nil {
+	dir := t.TempDir()
+	a := filepath.Join(dir, "a.txt")
+	b := filepath.Join(dir, "a.txt.chto")
+	for _, p := range []string{a, b} {
+		if err := os.WriteFile(p, []byte("x"), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := checkPaths(a, a); err == nil {
 		t.Error("une source identique à la destination devrait être refusée")
 	}
-	if err := checkPaths("./a.txt", "a.txt"); err == nil {
+	if err := checkPaths(filepath.Join(dir, ".", "a.txt"), a); err == nil {
 		t.Error("les chemins équivalents devraient être détectés")
 	}
-	if err := checkPaths("a.txt", "a.txt.chto"); err != nil {
+	if err := checkPaths(a, b); err != nil {
 		t.Errorf("chemins distincts refusés à tort: %v", err)
+	}
+
+	// Lien matériel : chemins différents, même fichier par l'inode.
+	lien := filepath.Join(dir, "lien.txt")
+	if err := os.Link(a, lien); err == nil {
+		if err := checkPaths(a, lien); err == nil {
+			t.Error("un lien matériel vers la source devrait être refusé")
+		}
+	} else {
+		t.Log("os.Link indisponible ici:", err)
+	}
+}
+
+// TestDevirerGuillemets : un glisser-déposer livre le chemin quoté ou échappé,
+// et validateTarget répondrait « chemin introuvable » à un fichier qui existe.
+//
+// Les deux branches sont pilotées explicitement, pas déduites de l'hôte : la
+// règle diffère selon que la contre-oblique est un caractère d'échappement ou
+// un séparateur de chemin, et les deux cas doivent être vérifiés partout.
+func TestDevirerGuillemets(t *testing.T) {
+	// Le retrait des guillemets ne dépend pas du système : l'explorateur
+	// Windows quote lui aussi les chemins à espaces.
+	communs := []struct{ in, want string }{
+		{`'/Users/x/mon fichier.txt'`, `/Users/x/mon fichier.txt`},
+		{`"/Users/x/mon fichier.txt"`, `/Users/x/mon fichier.txt`},
+		{`"C:\Users\x\mes documents"`, `C:\Users\x\mes documents`},
+		{`/chemin/simple.txt`, `/chemin/simple.txt`},
+		{`  /chemin/simple.txt  `, `/chemin/simple.txt`},
+		{"", ""},
+		{`'`, `'`}, // un seul caractère : pas une paire de guillemets
+	}
+
+	original := shellEchappeLesEspaces
+	defer func() { shellEchappeLesEspaces = original }()
+
+	t.Run("contre-oblique dechappement", func(t *testing.T) {
+		shellEchappeLesEspaces = true
+		cas := append(append([]struct{ in, want string }{}, communs...),
+			struct{ in, want string }{`/Users/x/mon\ fichier.txt`, `/Users/x/mon fichier.txt`},
+			struct{ in, want string }{`/a/l\'ete.txt`, `/a/l'ete.txt`},
+		)
+		verifieDevirage(t, cas)
+	})
+
+	// Sous Windows, déséchapper détruirait le chemin : « C:\Users\x » n'est pas
+	// un chemin échappé, c'est un chemin tout court.
+	t.Run("contre-oblique separateur", func(t *testing.T) {
+		shellEchappeLesEspaces = false
+		cas := append(append([]struct{ in, want string }{}, communs...),
+			struct{ in, want string }{`C:\Users\x\mes documents`, `C:\Users\x\mes documents`},
+			struct{ in, want string }{`C:\ dossier\a.txt`, `C:\ dossier\a.txt`},
+		)
+		verifieDevirage(t, cas)
+	})
+}
+
+func verifieDevirage(t *testing.T, cas []struct{ in, want string }) {
+	t.Helper()
+	for _, c := range cas {
+		if got := devirerGuillemets(c.in); got != c.want {
+			t.Errorf("devirerGuillemets(%q) = %q, attendu %q", c.in, got, c.want)
+		}
 	}
 }
 
@@ -249,8 +319,11 @@ func TestCibleFormExplorateurOuvert(t *testing.T) {
 	f := ouvrir(t, cibleForm("enc", "parcourir", &path))
 
 	vue := f.form.View()
-	if !strings.Contains(vue, "entrer dans un dossier") {
+	if !strings.Contains(vue, "ouvrir un dossier") {
 		t.Errorf("l'explorateur n'est pas affiché:\n%s", vue)
+	}
+	if !strings.Contains(vue, "remonter") {
+		t.Errorf("l'aide ne mentionne pas comment remonter:\n%s", vue)
 	}
 	// « No file selected. » signifie que huh attend une touche avant de montrer
 	// l'arborescence : c'est précisément ce qu'on ne veut plus.

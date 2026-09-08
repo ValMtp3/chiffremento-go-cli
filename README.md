@@ -128,7 +128,13 @@ Le mot de passe **n'est jamais un argument**. Il est demandé de façon masquée
 | `-parano` | *(enc)* Double chiffrement en cascade. S'exclut avec `-chacha`. |
 | `-kdf` | *(enc)* Coût de la dérivation : `standard` (défaut), `fort` ou `maximum`. |
 | `-meta` | *(enc)* Métadonnées conservées : `none` (défaut) ou `minimal` (nom et date). |
+| `-force` | *(enc, dec)* Écrase la destination si elle existe déjà. Sans lui, l'opération est refusée. Ne s'applique jamais à un dossier extrait. |
 | `-version` | Affiche la version. |
+
+> Une destination qui existe déjà est **refusée par défaut** : déchiffrer
+> `doc.pdf.chto` à côté d'un `doc.pdf` sans rapport ne le détruit pas. Utilise
+> `-force` pour écraser volontairement. Un dossier extrait ne s'écrase jamais,
+> même avec `-force` : cela voudrait dire supprimer une arborescence entière.
 
 ### Exemples
 
@@ -374,7 +380,13 @@ The password is **never an argument**. It is prompted for with masked input, or 
 | `-parano` | *(enc)* Cascaded double encryption. Mutually exclusive with `-chacha`. |
 | `-kdf` | *(enc)* Key derivation cost: `standard` (default), `fort` or `maximum`. |
 | `-meta` | *(enc)* Metadata kept: `none` (default) or `minimal` (name and date). |
+| `-force` | *(enc, dec)* Overwrites the destination if it already exists. Without it, the operation is refused. Never applies to an extracted folder. |
 | `-version` | Prints the version. |
+
+> An existing destination is **refused by default**: decrypting `doc.pdf.chto`
+> next to an unrelated `doc.pdf` will not destroy it. Use `-force` to overwrite
+> deliberately. An extracted folder is never overwritten, even with `-force`:
+> that would mean deleting an entire tree.
 
 ### Examples
 
