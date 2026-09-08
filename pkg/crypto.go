@@ -939,12 +939,6 @@ func Inspect(path string) (Details, error) {
 	}, nil
 }
 
-// DefaultKDFLabel décrit les paramètres Argon2 utilisés pour les nouveaux
-// fichiers, à afficher dans l'interface.
-func DefaultKDFLabel() string {
-	return "argon2id  " + defaultArgonParams().String()
-}
-
 func withProgress(r io.Reader, total int64, fn func(done, total int64)) io.Reader {
 	if fn == nil {
 		return r

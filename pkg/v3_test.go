@@ -603,14 +603,16 @@ func TestVerifyNEcritRien(t *testing.T) {
 	}
 }
 
-func TestDefaultKDFLabel(t *testing.T) {
-	label := DefaultKDFLabel()
-	if !strings.Contains(label, "argon2id") {
-		t.Errorf("étiquette KDF %q, attendu qu'elle nomme argon2id", label)
-	}
-	// Elle doit décrire les paramètres réellement écrits dans les fichiers.
-	if !strings.Contains(label, defaultArgonParams().String()) {
-		t.Errorf("étiquette KDF %q, attendu qu'elle contienne %q", label, defaultArgonParams().String())
+func TestKDFLabel(t *testing.T) {
+	for _, p := range AllKDFProfiles() {
+		label := p.KDFLabel()
+		if !strings.Contains(label, "argon2id") {
+			t.Errorf("profil %s : étiquette KDF %q, attendu qu'elle nomme argon2id", p, label)
+		}
+		// Elle doit décrire les paramètres réellement écrits dans les fichiers.
+		if want := p.argonParams().String(); !strings.Contains(label, want) {
+			t.Errorf("profil %s : étiquette KDF %q, attendu qu'elle contienne %q", p, label, want)
+		}
 	}
 }
 
