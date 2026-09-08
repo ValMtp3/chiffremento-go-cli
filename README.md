@@ -19,7 +19,7 @@
 **Chiffremento CLI** est un outil en ligne de commande écrit en Go pour chiffrer et déchiffrer des fichiers. Il s'utilise soit via une interface guidée, soit avec des flags pour les scripts.
 
 ```
-  chiffremento chiffrement  v2.1.0
+  chiffremento chiffrement  v2.1.1
 ┌────────────────────────────────────────────────────┐
 │  entrée    rapport-annuel.pdf             14.2 Mo  │
 │  sortie    rapport-annuel.pdf.chto                 │

@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -21,13 +22,18 @@ var version = "dev"
 
 const extension = ".chto"
 
+// exitInterrompu : 128 + SIGINT, la convention shell pour « interrompu par
+// l'utilisateur ». Un script appelant distingue ainsi un abandon volontaire
+// d'une vraie erreur, qui sort en 1.
+const exitInterrompu = 130
+
 func main() {
 	installSignalHandler()
 	if err := run(); err != nil {
 		// Échap ou Ctrl+C sur un formulaire : l'utilisateur a choisi de partir,
 		// pas la peine d'afficher « erreur : user aborted ».
 		if errors.Is(err, huh.ErrUserAborted) {
-			os.Exit(130)
+			os.Exit(exitInterrompu)
 		}
 		fmt.Fprintln(os.Stderr, styleError.Render("erreur :"), err)
 		os.Exit(1)
@@ -126,7 +132,7 @@ func installSignalHandler() {
 		<-c
 		pkg.CleanupTemporaries()
 		fmt.Fprintln(os.Stderr, "\ninterrompu")
-		os.Exit(130)
+		os.Exit(exitInterrompu)
 	}()
 }
 
@@ -217,7 +223,7 @@ func doEncrypt(in, out string, opts pkg.Options) error {
 	}
 
 	if err := encryptTo(in, out, password, opts); err != nil {
-		return err
+		return indiceForce(err)
 	}
 	fmt.Fprintf(os.Stderr, "%s %s\n", styleAccent.Render("✓"), describeDest(out))
 	return nil
@@ -297,7 +303,7 @@ func doDecrypt(in, out string, force bool) error {
 
 	meta, err := decryptTo(in, out, password, force)
 	if err != nil {
-		return err
+		return indiceForce(err)
 	}
 	fmt.Fprintf(os.Stderr, "%s %s\n", styleAccent.Render("✓"), describeDest(out))
 
@@ -438,6 +444,16 @@ func openSource(in string) (io.Reader, int64, func(), error) {
 // idempotente : on l'appelle explicitement pour remonter l'erreur de fermeture,
 // et en defer pour ne rien laisser ouvert en cas d'échec.
 //
+// indiceForce rhabille ErrDestinationExistante avec le moyen de passer outre.
+// pkg signale le fait sans nommer de drapeau ; c'est ici, et seulement ici,
+// qu'on sait qu'il existe un -force à proposer.
+func indiceForce(err error) error {
+	if errors.Is(err, pkg.ErrDestinationExistante) {
+		return fmt.Errorf("%w : déplace-le, renomme-le, ou relance avec -force pour l'écraser", err)
+	}
+	return err
+}
+
 // Le chemin des flux n'a pas d'écriture atomique : os.Create tronque la cible
 // tout de suite. Le refus d'une destination existante y est donc encore plus
 // nécessaire que dans pkg, où le rename final laisse au moins une chance de
@@ -447,8 +463,14 @@ func openDest(out string, force bool) (io.Writer, func() error, error) {
 		return os.Stdout, func() error { return nil }, nil
 	}
 	if !force {
+		// Même prudence que newAtomicFile, et plus nécessaire encore : ce
+		// chemin n'a aucune écriture atomique, os.Create tronque la cible
+		// tout de suite. Une garde qui sautait sur une erreur de Lstat
+		// coûtait le fichier.
 		if _, err := os.Lstat(out); err == nil {
-			return nil, nil, fmt.Errorf("%s existe déjà : déplace-le, renomme-le, ou relance avec -force pour l'écraser", out)
+			return nil, nil, fmt.Errorf("%w : %s", pkg.ErrDestinationExistante, out)
+		} else if !errors.Is(err, fs.ErrNotExist) {
+			return nil, nil, fmt.Errorf("vérification de %s: %w", out, err)
 		}
 	}
 	f, err := os.Create(out)

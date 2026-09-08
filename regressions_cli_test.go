@@ -94,18 +94,28 @@ func TestOpenDestRefuseFichierExistant(t *testing.T) {
 func TestConfirmerEcrasementDossier(t *testing.T) {
 	dir := t.TempDir()
 
-	// Rien à cet emplacement : aucune question, aucune erreur.
-	if err := confirmerEcrasement(filepath.Join(dir, "absent")); err != nil {
+	// Rien à cet emplacement : aucune question, aucune erreur — et surtout
+	// pas d'autorisation d'écraser. Rendre true ici désarmait la garde de pkg
+	// pour toute la TUI : un fichier apparu entre ce contrôle et l'écriture
+	// était remplacé sans que personne ne l'ait demandé.
+	ecraser, err := confirmerEcrasement(filepath.Join(dir, "absent"))
+	if err != nil {
 		t.Errorf("une destination libre ne devrait rien déclencher: %v", err)
+	}
+	if ecraser {
+		t.Error("une destination libre ne doit pas autoriser l'écrasement")
 	}
 
 	existant := filepath.Join(dir, "sous-dossier")
 	if err := os.Mkdir(existant, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	err := confirmerEcrasement(existant)
+	ecraser, err = confirmerEcrasement(existant)
 	if err == nil {
 		t.Fatal("un dossier existant devrait être refusé sans question")
+	}
+	if ecraser {
+		t.Error("un dossier refusé ne doit pas autoriser l'écrasement")
 	}
 	if !strings.Contains(err.Error(), "dossier") {
 		t.Errorf("le message devrait dire qu'il s'agit d'un dossier: %v", err)

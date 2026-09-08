@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sync"
@@ -14,6 +15,14 @@ import (
 	"github.com/klauspost/compress/zstd"
 	"github.com/minio/sio"
 )
+
+// ErrDestinationExistante signale qu'un fichier occupe déjà la destination.
+//
+// pkg ne parle pas de drapeaux : c'est à l'appelant de dire comment passer
+// outre. Le CLI ajoute « relance avec -force », l'interface guidée pose la
+// question. Faire citer -force par la bibliothèque produisait un conseil que
+// la TUI ne pouvait de toute façon jamais afficher.
+var ErrDestinationExistante = errors.New("la destination existe déjà")
 
 // Options regroupe les réglages d'une opération. Elle remplace la série de
 // booléens positionnels de la v1, où -chacha et -parano pouvaient se
@@ -135,8 +144,14 @@ func untrackTemp(p string) {
 // détruisait ce dernier en silence.
 func newAtomicFile(dest string, force bool) (*atomicFile, error) {
 	if !force {
+		// Seule l'absence franche autorise à continuer. Un EACCES sur le
+		// répertoire parent fait échouer le Lstat, et le test « err == nil »
+		// seul le lisait « rien à cet emplacement » : la garde sautait
+		// précisément là où le disque refusait de répondre.
 		if _, err := os.Lstat(dest); err == nil {
-			return nil, fmt.Errorf("%s existe déjà : déplace-le, renomme-le, ou relance avec -force pour l'écraser", dest)
+			return nil, fmt.Errorf("%w : %s", ErrDestinationExistante, dest)
+		} else if !errors.Is(err, fs.ErrNotExist) {
+			return nil, fmt.Errorf("vérification de %s: %w", dest, err)
 		}
 	}
 	dir := filepath.Dir(dest)
@@ -206,8 +221,14 @@ type atomicDir struct {
 func newAtomicDir(dest string) (*atomicDir, error) {
 	// Un rename de dossier échoue si la destination existe déjà (et n'est pas
 	// un dossier vide) : autant le dire tout de suite, et clairement.
+	//
+	// Pas de ErrDestinationExistante ici : ce refus est définitif, et la
+	// sentinelle ferait ajouter « relance avec -force » par le CLI à un
+	// message où -force n'a justement aucun effet.
 	if _, err := os.Lstat(dest); err == nil {
 		return nil, fmt.Errorf("%s existe déjà : déplace-le ou renomme-le avant d'extraire", dest)
+	} else if !errors.Is(err, fs.ErrNotExist) {
+		return nil, fmt.Errorf("vérification de %s: %w", dest, err)
 	}
 	p, err := os.MkdirTemp(filepath.Dir(dest), ".chto-tmp-*")
 	if err != nil {

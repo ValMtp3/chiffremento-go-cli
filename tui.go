@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"io/fs"
 	"math"
 	"os"
 	"path/filepath"
@@ -325,7 +326,8 @@ func tuiEncrypt(path string) error {
 	}
 
 	out := path + extension
-	if err := confirmerEcrasement(out); err != nil {
+	ecraser, err := confirmerEcrasement(out)
+	if err != nil {
 		return err
 	}
 	// La ligne « sel » du cadre reste sur une seule ligne : les mentions
@@ -354,7 +356,7 @@ func tuiEncrypt(path string) error {
 	return runJob(info, func(p func(int64, int64)) error {
 		return pkg.Encrypt(path, out, []byte(password), pkg.Options{
 			Algo: algo, Comp: compEncodee(compresser), Pad: pad,
-			KDF: kdf, Metadata: metaEncodee(garderMeta), Force: true, Progress: p,
+			KDF: kdf, Metadata: metaEncodee(garderMeta), Force: ecraser, Progress: p,
 		})
 	})
 }
@@ -397,7 +399,8 @@ func tuiDecrypt(path string) error {
 	}
 
 	out := strings.TrimSuffix(path, extension)
-	if err := confirmerEcrasement(out); err != nil {
+	ecraser, err := confirmerEcrasement(out)
+	if err != nil {
 		return err
 	}
 	info := jobInfo{
@@ -410,7 +413,7 @@ func tuiDecrypt(path string) error {
 		Success: out,
 	}
 	return runJob(info, func(p func(int64, int64)) error {
-		return pkg.Decrypt(path, out, []byte(password), pkg.Options{Force: true, Progress: p})
+		return pkg.Decrypt(path, out, []byte(password), pkg.Options{Force: ecraser, Progress: p})
 	})
 }
 
@@ -491,7 +494,7 @@ func runJob(info jobInfo, op func(progress func(done, total int64)) error) error
 		if errors.Is(err, tea.ErrInterrupted) || errors.Is(err, tea.ErrProgramKilled) {
 			pkg.CleanupTemporaries()
 			fmt.Fprintln(os.Stderr, "\ninterrompu")
-			os.Exit(130)
+			os.Exit(exitInterrompu)
 		}
 		return err
 	}
@@ -721,16 +724,28 @@ func verifySucces(archive bool) string {
 // existe déjà, plutôt que de la remplacer en silence.
 //
 // C'est le pendant du drapeau -force du CLI : ici la question peut être posée,
-// donc elle l'est, et les appels à pkg passent ensuite Force. Un dossier n'est
-// jamais proposé à l'écrasement — le remplacer voudrait dire supprimer une
-// arborescence entière sur un simple « oui ».
-func confirmerEcrasement(dest string) error {
+// donc elle l'est. Un dossier n'est jamais proposé à l'écrasement — le
+// remplacer voudrait dire supprimer une arborescence entière sur un simple
+// « oui ».
+//
+// Le booléen rendu est la réponse réelle de l'utilisateur, et il alimente
+// Options.Force. Poser Force à true d'office désarmait la garde de pkg pour
+// toute la TUI, y compris quand il n'y avait rien à écraser et donc aucune
+// question posée : un fichier apparu entre ce Lstat et l'écriture était
+// détruit sans un mot. En rendant false quand la place est libre, on laisse
+// pkg refaire le contrôle au moment d'écrire.
+func confirmerEcrasement(dest string) (bool, error) {
 	info, err := os.Lstat(dest)
+	if errors.Is(err, fs.ErrNotExist) {
+		return false, nil // rien à cet emplacement : rien à demander
+	}
 	if err != nil {
-		return nil // rien à cet emplacement : rien à demander
+		// Ni un fichier, ni une absence franche : un EACCES sur le parent
+		// passait ici pour « la place est libre ».
+		return false, fmt.Errorf("vérification de %s: %w", dest, err)
 	}
 	if info.IsDir() {
-		return fmt.Errorf("%s existe déjà et c'est un dossier : déplace-le ou renomme-le avant de continuer", dest)
+		return false, fmt.Errorf("%s existe déjà et c'est un dossier : déplace-le ou renomme-le avant de continuer", dest)
 	}
 
 	ecraser := false
@@ -745,12 +760,12 @@ func confirmerEcrasement(dest string) error {
 		),
 	).WithTheme(formTheme()).WithShowHelp(true)
 	if err := form.Run(); err != nil {
-		return err
+		return false, err
 	}
 	if !ecraser {
-		return fmt.Errorf("annulé : %s n'a pas été touché", dest)
+		return false, fmt.Errorf("annulé : %s n'a pas été touché", dest)
 	}
-	return nil
+	return true, nil
 }
 
 // compEncodee traduit la réponse de l'interface en identifiant de compression.
