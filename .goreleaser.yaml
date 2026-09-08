@@ -26,6 +26,13 @@ builds:
     goarch:
       - amd64
       - arm64
+    # -trimpath n'est pas un ldflag : il s'adresse au compilateur, pas à
+    # l'éditeur de liens. Il retire les chemins absolus de la machine de
+    # compilation, si bien que deux machines produisent le même binaire à
+    # partir du même tag. Une release devient vérifiable, ce qui a du sens
+    # pour un outil de chiffrement dont l'utilisateur ne voit que le binaire.
+    flags:
+      - -trimpath
     ldflags:
       - -s -w -X main.version={{.Version}}
 

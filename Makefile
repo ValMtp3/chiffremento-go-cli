@@ -7,6 +7,13 @@ BUILD_DIR=build
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 LDFLAGS=-s -w -X main.version=$(VERSION)
 
+# -trimpath retire de l'exécutable les chemins absolus de la machine de
+# compilation. Deux machines produisent alors le même binaire à partir du même
+# tag, ce qui rend une release vérifiable — ce qui compte pour un outil de
+# chiffrement, où l'utilisateur n'a que le binaire pour juger. Le gain de
+# taille (~33 Ko) n'est qu'un effet de bord.
+BUILDFLAGS=-trimpath
+
 .PHONY: all build build-all clean install test lint
 
 all: lint test build
@@ -14,17 +21,17 @@ all: lint test build
 # Compile pour le système actuel
 build:
 	@echo "Building $(BINARY_NAME) $(VERSION)..."
-	go build -ldflags="$(LDFLAGS)" -o $(BINARY_NAME) .
+	go build $(BUILDFLAGS) -ldflags="$(LDFLAGS)" -o $(BINARY_NAME) .
 
 # Compile pour Linux, macOS (Intel/ARM) et Windows
 build-all: clean
 	@echo "Building $(VERSION) for all platforms..."
 	mkdir -p $(BUILD_DIR)
-	GOOS=linux   GOARCH=amd64 go build -ldflags="$(LDFLAGS)" -o $(BUILD_DIR)/$(BINARY_NAME)-linux-amd64 .
-	GOOS=linux   GOARCH=arm64 go build -ldflags="$(LDFLAGS)" -o $(BUILD_DIR)/$(BINARY_NAME)-linux-arm64 .
-	GOOS=darwin  GOARCH=amd64 go build -ldflags="$(LDFLAGS)" -o $(BUILD_DIR)/$(BINARY_NAME)-darwin-amd64 .
-	GOOS=darwin  GOARCH=arm64 go build -ldflags="$(LDFLAGS)" -o $(BUILD_DIR)/$(BINARY_NAME)-darwin-arm64 .
-	GOOS=windows GOARCH=amd64 go build -ldflags="$(LDFLAGS)" -o $(BUILD_DIR)/$(BINARY_NAME)-windows-amd64.exe .
+	GOOS=linux   GOARCH=amd64 go build $(BUILDFLAGS) -ldflags="$(LDFLAGS)" -o $(BUILD_DIR)/$(BINARY_NAME)-linux-amd64 .
+	GOOS=linux   GOARCH=arm64 go build $(BUILDFLAGS) -ldflags="$(LDFLAGS)" -o $(BUILD_DIR)/$(BINARY_NAME)-linux-arm64 .
+	GOOS=darwin  GOARCH=amd64 go build $(BUILDFLAGS) -ldflags="$(LDFLAGS)" -o $(BUILD_DIR)/$(BINARY_NAME)-darwin-amd64 .
+	GOOS=darwin  GOARCH=arm64 go build $(BUILDFLAGS) -ldflags="$(LDFLAGS)" -o $(BUILD_DIR)/$(BINARY_NAME)-darwin-arm64 .
+	GOOS=windows GOARCH=amd64 go build $(BUILDFLAGS) -ldflags="$(LDFLAGS)" -o $(BUILD_DIR)/$(BINARY_NAME)-windows-amd64.exe .
 	@echo "Done! Binaries are in $(BUILD_DIR)/"
 
 # Nettoie les fichiers de build
@@ -44,7 +51,7 @@ endif
 
 install:
 	@mkdir -p $(GOBIN_DIR)
-	go build -ldflags="$(LDFLAGS)" -o $(GOBIN_DIR)/$(BINARY_NAME) .
+	go build $(BUILDFLAGS) -ldflags="$(LDFLAGS)" -o $(GOBIN_DIR)/$(BINARY_NAME) .
 	@echo "Installé : $(GOBIN_DIR)/$(BINARY_NAME)"
 	@command -v $(BINARY_NAME) >/dev/null 2>&1 && \
 		[ "$$(command -v $(BINARY_NAME))" != "$(GOBIN_DIR)/$(BINARY_NAME)" ] && \
