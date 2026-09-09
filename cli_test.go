@@ -464,7 +464,7 @@ func TestDoVerifyEtDoInfo(t *testing.T) {
 		t.Fatal(err)
 	}
 	affiche := string(brut)
-	for _, attendu := range []string{"format", "v3", "cascade", "zstd", "dossier", "remplissage", "argon2id"} {
+	for _, attendu := range []string{"format", "v4", "cascade", "zstd", "dossier", "remplissage", "argon2id"} {
 		if !strings.Contains(affiche, attendu) {
 			t.Errorf("la sortie de info ne mentionne pas %q :\n%s", attendu, affiche)
 		}
@@ -726,5 +726,147 @@ func TestZero(t *testing.T) {
 		if b != 0 {
 			t.Fatalf("octet %d non effacé : %q", i, b)
 		}
+	}
+}
+
+// avecLignes remplace l'entrée standard par plusieurs lignes : le cas de
+// passwd, qui demande l'ancien mot de passe puis le nouveau.
+func avecLignes(t *testing.T, lignes ...string) {
+	t.Helper()
+	f, err := os.CreateTemp(t.TempDir(), "stdin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, l := range lignes {
+		if _, err := f.WriteString(l + "\n"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := f.Seek(0, io.SeekStart); err != nil {
+		t.Fatal(err)
+	}
+	precedent := os.Stdin
+	os.Stdin = f
+	t.Cleanup(func() {
+		os.Stdin = precedent
+		f.Close()
+	})
+}
+
+// TestDoPasswd : le changement de mot de passe passe par deux lectures de
+// l'entrée standard. C'est aussi la non-régression du lecteur partagé — un
+// bufio.Reader neuf à chaque appel avalait la seconde ligne, et la commande
+// échouait sur « aucun mot de passe reçu ».
+func TestDoPasswd(t *testing.T) {
+	dir := t.TempDir()
+	in := filepath.Join(dir, "note.txt")
+	if err := os.WriteFile(in, []byte("contenu à garder"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	chto := in + extension
+
+	avecMotDePasse(t, motDePasseTest)
+	if err := doEncrypt(in, chto, pkg.Options{Algo: pkg.AlgoAES}); err != nil {
+		t.Fatal(err)
+	}
+	avant, err := os.ReadFile(chto)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	const nouveau = "un-nouveau-mot-de-passe-solide"
+	avecLignes(t, motDePasseTest, nouveau)
+	if err := doPasswd(chto); err != nil {
+		t.Fatalf("doPasswd: %v", err)
+	}
+
+	apres, err := os.ReadFile(chto)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(avant) != len(apres) {
+		t.Errorf("taille passée de %d à %d octets", len(avant), len(apres))
+	}
+
+	// Le nouveau mot de passe ouvre, l'ancien non.
+	out := filepath.Join(dir, "sortie.txt")
+	avecMotDePasse(t, nouveau)
+	if err := doDecrypt(chto, out, false); err != nil {
+		t.Fatalf("déchiffrement avec le nouveau mot de passe: %v", err)
+	}
+	got, err := os.ReadFile(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "contenu à garder" {
+		t.Errorf("contenu inattendu: %q", got)
+	}
+
+	avecMotDePasse(t, motDePasseTest)
+	if err := doDecrypt(chto, filepath.Join(dir, "x.txt"), false); err == nil {
+		t.Error("l'ancien mot de passe ouvre encore le fichier")
+	}
+}
+
+// TestDoPasswdRefusCasSansFichier : les entrées qui n'ont pas de sens doivent
+// être refusées avant toute saisie de mot de passe.
+func TestDoPasswdRefusCasSansFichier(t *testing.T) {
+	dir := t.TempDir()
+	clair := filepath.Join(dir, "note.txt")
+	if err := os.WriteFile(clair, []byte("x"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := doPasswd("-"); err == nil {
+		t.Error("un flux a été accepté")
+	}
+	if err := doPasswd(clair); err == nil {
+		t.Error("un fichier sans l'extension a été accepté")
+	}
+}
+
+// TestCheckPadFlags : un niveau de remplissage sans -pad ne masque rien. Le
+// refuser vaut mieux que de l'ignorer — l'utilisateur croirait sa taille cachée.
+func TestCheckPadFlags(t *testing.T) {
+	cases := []struct {
+		nom     string
+		pad     bool
+		niveau  string
+		wantErr bool
+	}{
+		{"rien", false, "", false},
+		{"remplissage seul", true, "", false},
+		{"remplissage et niveau", true, "maximum", false},
+		{"niveau seul", false, "maximum", true},
+	}
+	for _, c := range cases {
+		t.Run(c.nom, func(t *testing.T) {
+			if err := checkPadFlags(c.pad, c.niveau); (err != nil) != c.wantErr {
+				t.Errorf("checkPadFlags(%v, %q) = %v, erreur attendue: %v", c.pad, c.niveau, err, c.wantErr)
+			}
+		})
+	}
+}
+
+// TestDoPasswdAncienFormat : le refus doit tomber avant toute saisie. Aucun mot
+// de passe n'est fourni ici — si la commande en demandait un, elle échouerait
+// sur « aucun mot de passe reçu » au lieu du message attendu.
+func TestDoPasswdAncienFormat(t *testing.T) {
+	src := filepath.Join("pkg", "testdata", "v2_aes.chto")
+	octets, err := os.ReadFile(src)
+	if err != nil {
+		t.Skipf("fichier de référence indisponible: %v", err)
+	}
+	copie := filepath.Join(t.TempDir(), "ancien"+extension)
+	if err := os.WriteFile(copie, octets, 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	err = doPasswd(copie)
+	if err == nil {
+		t.Fatal("un fichier v2 a été accepté")
+	}
+	if !strings.Contains(err.Error(), "rechiffrer") {
+		t.Errorf("le message n'explique pas quoi faire: %v", err)
 	}
 }

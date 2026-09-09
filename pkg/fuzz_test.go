@@ -30,9 +30,16 @@ func FuzzReadHeader(f *testing.F) {
 			}
 		}
 	}
-	// Un en-tête v3 valide, construit ici pour ne pas dépendre d'un fichier.
+	// Des en-têtes v3 et v4 valides, construits ici pour ne pas dépendre d'un
+	// fichier. Sans la graine v4, le fuzzer partirait des seules versions
+	// anciennes et mettrait longtemps à produire un en-tête courant bien formé.
 	h := &header{Version: versionV3, Algo: AlgoAES, Argon: defaultArgonParams(), Comp: CompZstd, Salt: make([]byte, saltSize)}
 	f.Add(h.marshal())
+	v4 := &header{
+		Version: versionV4, Algo: AlgoAES, Argon: defaultArgonParams(), Comp: CompNone,
+		Salt: make([]byte, saltSize), Commit: make([]byte, commitSize), Wrapped: make([]byte, wrappedSize),
+	}
+	f.Add(v4.marshal())
 	f.Add([]byte(magicNumber))
 	f.Add([]byte{})
 
@@ -44,7 +51,9 @@ func FuzzReadHeader(f *testing.F) {
 
 		// Tout en-tête accepté doit être intégralement cohérent : c'est ce que
 		// le reste du code suppose sans jamais le revérifier.
-		if h.Version != versionV1 && h.Version != versionV2 && h.Version != versionV3 {
+		switch h.Version {
+		case versionV1, versionV2, versionV3, versionV4:
+		default:
 			t.Fatalf("version acceptée hors des versions connues : %d", h.Version)
 		}
 		if err := validateAlgo(h.Algo); err != nil {
@@ -64,6 +73,18 @@ func FuzzReadHeader(f *testing.F) {
 		}
 		if len(h.Salt) != saltSize {
 			t.Fatalf("sel de %d octets accepté, attendu %d", len(h.Salt), saltSize)
+		}
+		// En v4, l'engagement et l'enveloppe doivent avoir exactement la taille
+		// attendue : la dérivation les indexe sans revérifier.
+		if h.Version >= versionV4 {
+			if len(h.Commit) != commitSize {
+				t.Fatalf("engagement de %d octets accepté, attendu %d", len(h.Commit), commitSize)
+			}
+			if len(h.Wrapped) != wrappedSize {
+				t.Fatalf("enveloppe de %d octets acceptée, attendu %d", len(h.Wrapped), wrappedSize)
+			}
+		} else if h.Commit != nil || h.Wrapped != nil {
+			t.Fatalf("champs v4 renseignés sur un fichier v%d", h.Version)
 		}
 		// Raw doit décrire exactement les octets lus : c'est lui qui authentifie
 		// l'en-tête via la dérivation de clé.

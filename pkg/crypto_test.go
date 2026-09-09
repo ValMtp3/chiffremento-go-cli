@@ -486,7 +486,7 @@ func TestCompatibiliteV1(t *testing.T) {
 	}
 }
 
-func TestEncryptEcritDuV3AvecArgonRenforce(t *testing.T) {
+func TestEncryptEcritLaVersionCouranteAvecArgonRenforce(t *testing.T) {
 	dir := t.TempDir()
 	in := write(t, dir, "clair.txt", []byte("x"))
 	enc := filepath.Join(dir, "out.chto")
@@ -497,8 +497,8 @@ func TestEncryptEcritDuV3AvecArgonRenforce(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if d.Version != versionV3 {
-		t.Errorf("version écrite %d, attendu %d", d.Version, versionV3)
+	if d.Version != currentVersion {
+		t.Errorf("version écrite %d, attendu %d", d.Version, currentVersion)
 	}
 	if !strings.Contains(d.KDF, "m=256MiB") {
 		t.Errorf("paramètres Argon2 inattendus dans le header: %s", d.KDF)

@@ -35,7 +35,7 @@
 
 ## ✨ Nouveautés v2.1
 
-> Le **format de fichier** est passé en v3 dans cette version. Les deux numéros sont indépendants : la version du programme suit ses fonctionnalités, celle du format sa structure binaire. `chiffremento -mode info` affiche celle d'un fichier donné.
+> Le **format de fichier** est passé en v4 dans cette version. Les deux numéros sont indépendants : la version du programme suit ses fonctionnalités, celle du format sa structure binaire. `chiffremento -mode info` affiche celle d'un fichier donné.
 
 - **📁 Dossiers** : chiffrer un dossier entier, empaqueté en tar au fil du chiffrement et recréé à l'identique au déchiffrement.
 - **🗜️ zstd** : remplace gzip, mesuré ~8× plus rapide à ratio comparable. gzip n'est plus produit, seulement relu : les `.chto` v1 et v2 compressés restent déchiffrables. La compression est désormais décrite par un champ de l'en-tête plutôt que par un simple bit.
@@ -109,21 +109,30 @@ chiffremento
 
 Elle demande l'opération, puis comment désigner la cible : **saisir un chemin** (ou le glisser-déposer), ou **parcourir les fichiers**. Dans l'explorateur, `↑↓` se déplacent, `→` entre dans un dossier et `entrée` choisit.
 
+Les décisions suivent la même grammaire : `↑↓` parcourent les réponses, `→` (ou `entrée`) valide, `←` revient à la décision précédente — y compris d'un écran à l'autre, en gardant les réponses déjà données. Dans un champ texte et dans l'explorateur, où `←` sert déjà, le retour se fait avec `shift+tab`.
+
+Au chiffrement, une fois le nom et la date conservés à l'intérieur du chiffré, elle propose de **brouiller ceux du fichier produit** : sortie sous un nom tiré au hasard — `3fb8db8ee5db3891.chto` — et datée du 1er janvier 2000. Le déchiffrement les restitue tous les deux. La date de *création*, elle, reste celle de l'écriture : aucun appel en espace utilisateur ne la change, le brouillage cache la date au regard ordinaire, pas à l'examen du disque.
+
+Quand le masquage de taille est activé, elle demande aussi la **largeur du palier**, en montrant ce que chaque cran coûte sur *ce* fichier : « 7.2 Mo → environ 8.0 Mo (+11.8 %) · tout ce qui pèse de 4.0 Mo à 8.0 Mo sort identique ».
+
+Une fois l'opération finie, elle propose enfin de **supprimer ce qu'elle remplace** : l'original après un chiffrement, le `.chto` après un déchiffrement. Effacer un original n'a lieu qu'après relecture et authentification complète du chiffré — l'original est la seule autre copie. « Garder » est toujours la réponse sous le curseur, et la suppression retire l'entrée du dossier sans effacer les données du support.
+
 ### Ligne de commande
 
 ```bash
-chiffremento -mode <enc|dec|verify|info> -in <fichier> [options]
+chiffremento -mode <enc|dec|verify|info|passwd> -in <fichier> [options]
 ```
 
 Le mot de passe **n'est jamais un argument**. Il est demandé de façon masquée, ou lu sur l'entrée standard si celle-ci n'est pas un terminal.
 
 | Flag | Description |
 | :--- | :--- |
-| `-mode` | **Obligatoire.** `enc` (chiffrer), `dec` (déchiffrer), `verify` (contrôler sans rien écrire), `info` (inspecter l'en-tête) ou `bench` (mesurer les coûts). |
+| `-mode` | **Obligatoire.** `enc` (chiffrer), `dec` (déchiffrer), `verify` (contrôler sans rien écrire), `info` (inspecter l'en-tête), `passwd` (changer le mot de passe) ou `bench` (mesurer les coûts). |
 | `-in` | **Obligatoire.** Fichier ou dossier d'entrée, ou `-` pour l'entrée standard. |
 | `-out` | Destination. Par défaut, l'entrée suivie de `.chto` en `enc`, l'entrée sans l'extension en `dec`. `-` écrit sur la sortie standard. |
 | `-comp` | *(enc)* Active la compression zstd. |
 | `-pad` | *(enc)* Masque la taille réelle. S'exclut avec `-comp`. |
+| `-pad-niveau` | *(enc)* Largeur du palier : `standard` (défaut), `fort` ou `maximum`. Exige `-pad`. |
 | `-chacha` | *(enc)* Utilise ChaCha20-Poly1305 au lieu d'AES-GCM. |
 | `-parano` | *(enc)* Double chiffrement en cascade. S'exclut avec `-chacha`. |
 | `-kdf` | *(enc)* Coût de la dérivation : `standard` (défaut), `fort` ou `maximum`. |
@@ -186,10 +195,18 @@ Conserver le nom et la date d'origine à l'intérieur du chiffré, pour pouvoir 
 chiffremento -mode enc -in rapport-medical.pdf -out a3f9c2.chto -meta minimal
 ```
 
+Au déchiffrement, le nom n'est lisible qu'une fois le contenu authentifié : la ligne de commande l'affiche sans renommer d'autorité, l'interface guidée propose de rendre son nom au fichier.
+
 Inspecter un fichier sans le déchiffrer ni saisir de mot de passe :
 
 ```bash
 chiffremento -mode info -in document.txt.chto
+```
+
+Changer le mot de passe sans re-chiffrer le contenu — l'ancien est demandé, puis le nouveau :
+
+```bash
+chiffremento -mode passwd -in document.txt.chto
 ```
 
 Mode parano avec compression :
@@ -210,6 +227,20 @@ Masquer la taille réelle du fichier :
 chiffremento -mode enc -in contrat.pdf -pad
 ```
 
+Trois largeurs de palier au choix. Ce qui compte n'est pas la taille du palier, mais le nombre de fichiers qui sortent à la **même** taille — mesuré sur des fichiers de 7,5 à 7,9 Mo :
+
+| `-pad-niveau` | tailles distinctes obtenues | surcoût maximal |
+|---|---|---|
+| `standard` *(défaut)* | 7 605 925 · 7 737 061 · 7 999 333 | ~12 % |
+| `fort` | 7 605 925 · 7 868 197 · 8 130 469 | ~25 % |
+| `maximum` | 8 392 741 — **une seule** | ~100 % |
+
+```bash
+chiffremento -mode enc -in contrat.pdf -pad -pad-niveau maximum
+```
+
+Le palier reste proportionnel à la taille à tous les niveaux : un pas fixe — arrondir tout le monde au multiple de 10 Mo supérieur — gonflerait un fichier de 3 Ko d'un facteur mille et ne masquerait plus rien à 1,4 Go, où 10 Mo ne pèsent plus que 0,7 %. Ajouter de l'aléa au remplissage serait contre-productif pour la même raison inverse : un palier fixe met tout un intervalle sur une valeur unique, alors qu'un tirage disperse les tailles à l'intérieur du palier et redonne à un observateur de quoi séparer deux fichiers.
+
 Lister une sauvegarde de dossier sans l'extraire, en passant le tar à `tar` :
 
 ```bash
@@ -228,19 +259,35 @@ echo "$MOT_DE_PASSE" | chiffremento -mode enc -in backup.db
 
 ```
 magic       8 o   "CHFRMT03"
-version     1 o   1 et 2 (anciens), 3 (courant)
-flags       1 o   bit 0 = compressé (v1/v2), bit 1 = archive tar, bit 2 = rempli
+version     1 o   1 à 3 (anciens), 4 (courant)
+flags       1 o   bit 0 = compressé (v1/v2), bit 1 = archive tar, bit 2 = rempli,
+                  bit 3 = métadonnées
 algo        1 o   1 = AES-GCM, 2 = ChaCha20-Poly1305, 3 = cascade
 argonTime   4 o   uint32 big-endian        ┐
-argonMemory 4 o   uint32 big-endian (KiB)  ├ v2 et v3
+argonMemory 4 o   uint32 big-endian (KiB)  ├ v2 et suivantes
 argonPar    1 o   uint8                    ┘
-compAlgo    1 o   0 = aucune, 1 = gzip (lu, plus écrit), 2 = zstd  ─ v3
+compAlgo    1 o   0 = aucune, 1 = gzip (lu, plus écrit), 2 = zstd  ─ v3 et suivantes
 salt       16 o
+commit     32 o   engagement sur la clé maîtresse   ┐
+wrappedDEK 48 o   clé du fichier, scellée           ┘ v4
 ```
 
-La clé est dérivée en deux temps : `Argon2id(mot de passe, sel, paramètres)` puis `HKDF-Expand` avec **l'en-tête complet en info**. C'est ce qui lie l'en-tête à la clé sans champ d'authentification supplémentaire.
+**Dérivation en v4.** `masterKey = Argon2id(mot de passe, sel, paramètres)`, puis trois usages séparés par `HKDF-Expand`, chacun sous son étiquette :
 
-Les fichiers en version 1 et 2 sont relus avec leur dérivation d'origine. Les nouveaux fichiers sont toujours écrits en version 3.
+| Sortie | Rôle |
+| :--- | :--- |
+| `commit` (32 o) | écrit dans l'en-tête, comparé en temps constant **avant** tout déchiffrement |
+| `kek` + nonce (44 o) | ouvre l'enveloppe qui contient la clé du fichier |
+| — | les clés du contenu, elles, viennent de la **DEK**, tirée au hasard par fichier |
+
+Deux propriétés en découlent :
+
+- **Engagement de clé.** AES-GCM et ChaCha20-Poly1305 ne sont pas engageants : on peut fabriquer un chiffré valide sous plusieurs clés, ce qu'exploitent les [attaques par oracle de partitionnement](https://www.usenix.org/conference/usenixsecurity21/presentation/len). Le tag `commit` ferme cette porte, et rend au passage un message clair — « mot de passe incorrect » — au lieu d'une erreur d'authentification survenue au milieu du fichier.
+- **Changement de mot de passe instantané.** La clé du contenu ne dépend plus du mot de passe : `-mode passwd` réécrit les 117 octets d'en-tête, quelle que soit la taille du fichier.
+
+L'en-tête reste authentifié : il sert de données associées (AAD) au scellement de l'enveloppe, donc en modifier un octet — version, algorithme, sel, engagement — empêche l'ouverture. C'est ce qui remplace, en v4, le liage par HKDF des versions 2 et 3.
+
+Les fichiers en version 1, 2 et 3 sont relus avec leur dérivation d'origine. Les nouveaux fichiers sont toujours écrits en version 4.
 
 La v3 remplace le drapeau de compression par un champ : un bit ne pouvait pas distinguer gzip de zstd, et empiler un bit par algorithme rendait possibles des états contradictoires. En v1 et v2, le bit 0 signifiait gzip — c'est le seul sens qu'il ait jamais eu, donc la relecture est directe. Un binaire plus ancien refuse un fichier v3 au lieu de l'interpréter de travers.
 
@@ -287,7 +334,7 @@ Le mode parano ne remplace pas un bon mot de passe : il protège contre la déco
 
 ## ✨ New in v2.1
 
-> The **file format** moved to v3 in this release. The two numbers are independent: the program version tracks its features, the format version tracks its binary layout. `chiffremento -mode info` shows a given file's format version.
+> The **file format** moved to v4 in this release. The two numbers are independent: the program version tracks its features, the format version tracks its binary layout. `chiffremento -mode info` shows a given file's format version.
 
 - **📁 Folders**: encrypt a whole folder, packed into a tar stream as it is encrypted and recreated as-is on decryption.
 - **🗜️ zstd**: replaces gzip, measured ~8× faster at a comparable ratio. gzip is no longer produced, only read back: compressed v1 and v2 `.chto` files stay decryptable. Compression is now described by a header field rather than a single bit.
@@ -361,21 +408,30 @@ chiffremento
 
 It asks for the operation, then how to point at the target: **type a path** (or drag and drop it), or **browse files**. In the browser, `↑↓` move, `→` enters a folder and `enter` selects.
 
+Every decision follows the same grammar: `↑↓` move through the answers, `→` (or `enter`) confirms, `←` goes back to the previous decision — across screens too, keeping the answers already given. In a text field and in the browser, where `←` already has a job, going back is `shift+tab`.
+
+When encrypting, once the original name and date are kept inside the ciphertext, it offers to **scramble those of the file it writes**: a randomly drawn name — `3fb8db8ee5db3891.chto` — dated 1 January 2000. Decryption restores both. The *creation* date stays that of the actual write: no userspace call changes it, so the scrambling hides the date from an ordinary look, not from an inspection of the filesystem.
+
+When size masking is on, it also asks for the **bucket width**, showing what each step costs on *this* file: "7.2 Mo → environ 8.0 Mo (+11.8 %) · tout ce qui pèse de 4.0 Mo à 8.0 Mo sort identique".
+
+Once the operation is done, it finally offers to **delete what it replaces**: the original after encryption, the `.chto` after decryption. An original is only erased after the ciphertext has been read back and fully authenticated — the original is the only other copy. "Keep" is always the answer under the cursor, and deleting removes the directory entry without wiping the data from the medium.
+
 ### Command line
 
 ```bash
-chiffremento -mode <enc|dec|verify|info> -in <file> [options]
+chiffremento -mode <enc|dec|verify|info|passwd> -in <file> [options]
 ```
 
 The password is **never an argument**. It is prompted for with masked input, or read from standard input when that is not a terminal.
 
 | Flag | Description |
 | :--- | :--- |
-| `-mode` | **Required.** `enc` (encrypt), `dec` (decrypt), `verify` (check without writing anything), `info` (inspect the header) or `bench` (measure costs). |
+| `-mode` | **Required.** `enc` (encrypt), `dec` (decrypt), `verify` (check without writing anything), `info` (inspect the header), `passwd` (change the password) or `bench` (measure costs). |
 | `-in` | **Required.** Input file or folder, or `-` for standard input. |
 | `-out` | Destination. Defaults to the input plus `.chto` for `enc`, the input without the extension for `dec`. `-` writes to standard output. |
 | `-comp` | *(enc)* Enables zstd compression. |
 | `-pad` | *(enc)* Masks the real size. Mutually exclusive with `-comp`. |
+| `-pad-niveau` | *(enc)* Bucket width: `standard` (default), `fort` or `maximum`. Requires `-pad`. |
 | `-chacha` | *(enc)* Uses ChaCha20-Poly1305 instead of AES-GCM. |
 | `-parano` | *(enc)* Cascaded double encryption. Mutually exclusive with `-chacha`. |
 | `-kdf` | *(enc)* Key derivation cost: `standard` (default), `fort` or `maximum`. |
@@ -438,10 +494,18 @@ Keep the original name and date inside the ciphertext, so you can output under a
 chiffremento -mode enc -in medical-report.pdf -out a3f9c2.chto -meta minimal
 ```
 
+On decryption the name is only readable once the content is authenticated: the command line prints it without renaming anything, while the guided interface offers to give the file its name back.
+
 Inspect a file without decrypting it or entering a password:
 
 ```bash
 chiffremento -mode info -in document.txt.chto
+```
+
+Change the password without re-encrypting the contents — the old one is asked for, then the new one:
+
+```bash
+chiffremento -mode passwd -in document.txt.chto
 ```
 
 Parano mode with compression:
@@ -462,6 +526,20 @@ Mask the real file size:
 chiffremento -mode enc -in contract.pdf -pad
 ```
 
+Three bucket widths. What matters is not the bucket size but how many files come out at the **same** size — measured on files from 7.5 to 7.9 MB:
+
+| `-pad-niveau` | distinct sizes produced | maximum overhead |
+|---|---|---|
+| `standard` *(default)* | 7,605,925 · 7,737,061 · 7,999,333 | ~12 % |
+| `fort` | 7,605,925 · 7,868,197 · 8,130,469 | ~25 % |
+| `maximum` | 8,392,741 — **a single one** | ~100 % |
+
+```bash
+chiffremento -mode enc -in contract.pdf -pad -pad-niveau maximum
+```
+
+The bucket stays proportional to the size at every level: a fixed step — rounding everything up to the next 10 MB — would inflate a 3 KB file a thousandfold and mask nothing at 1.4 GB, where 10 MB is only 0.7 %. Adding randomness to the padding would be counter-productive for the mirror reason: a fixed bucket collapses a whole interval onto one value, whereas a random draw spreads sizes inside the bucket and hands an observer a way to tell two files apart again.
+
 List a folder backup without extracting it, by piping the tar into `tar`:
 
 ```bash
@@ -480,19 +558,35 @@ echo "$PASSWORD" | chiffremento -mode enc -in backup.db
 
 ```
 magic       8 B   "CHFRMT03"
-version     1 B   1 and 2 (legacy), 3 (current)
-flags       1 B   bit 0 = compressed (v1/v2), bit 1 = tar archive, bit 2 = padded
+version     1 B   1 to 3 (legacy), 4 (current)
+flags       1 B   bit 0 = compressed (v1/v2), bit 1 = tar archive, bit 2 = padded,
+                  bit 3 = metadata
 algo        1 B   1 = AES-GCM, 2 = ChaCha20-Poly1305, 3 = cascade
 argonTime   4 B   uint32 big-endian        ┐
-argonMemory 4 B   uint32 big-endian (KiB)  ├ v2 and v3
+argonMemory 4 B   uint32 big-endian (KiB)  ├ v2 onwards
 argonPar    1 B   uint8                    ┘
-compAlgo    1 B   0 = none, 1 = gzip (read-only), 2 = zstd  ─ v3
+compAlgo    1 B   0 = none, 1 = gzip (read-only), 2 = zstd  ─ v3 onwards
 salt       16 B
+commit     32 B   commitment to the master key   ┐
+wrappedDEK 48 B   file key, sealed               ┘ v4
 ```
 
-The key is derived in two steps: `Argon2id(password, salt, params)` then `HKDF-Expand` with **the full header as info**. This binds the header to the key without an extra authentication field.
+**v4 derivation.** `masterKey = Argon2id(password, salt, params)`, then three separate uses via `HKDF-Expand`, each under its own label:
 
-Version 1 files are read back with their original derivation. New files are always written as version 2.
+| Output | Role |
+| :--- | :--- |
+| `commit` (32 B) | written in the header, compared in constant time **before** any decryption |
+| `kek` + nonce (44 B) | opens the envelope holding the file key |
+| — | the content keys come from the **DEK**, drawn at random per file |
+
+Two properties follow:
+
+- **Key commitment.** AES-GCM and ChaCha20-Poly1305 are not committing: one can craft a ciphertext valid under several keys, which is what [partitioning oracle attacks](https://www.usenix.org/conference/usenixsecurity21/presentation/len) exploit. The `commit` tag closes that door, and incidentally returns a clear message — "wrong password" — instead of an authentication error hit midway through the file.
+- **Instant password change.** The content key no longer depends on the password: `-mode passwd` rewrites the 117-byte header, whatever the file size.
+
+The header stays authenticated: it is the associated data (AAD) of the envelope seal, so changing one byte — version, algorithm, salt, commitment — prevents it from opening. That replaces, in v4, the HKDF binding used by versions 2 and 3.
+
+Version 1, 2 and 3 files are read back with their original derivation. New files are always written as version 4.
 
 ## 🔑 Derivation profiles
 

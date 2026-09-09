@@ -29,7 +29,7 @@ func TestFormulairesSeConstruisent(t *testing.T) {
 	for _, a := range []string{"enc", "dec", "verify"} {
 		for _, m := range []string{"saisie", "parcourir"} {
 			path := ""
-			if f := cibleForm(a, m, &path); f == nil {
+			if f, _ := cibleForm(a, m, &path); f == nil {
 				t.Fatalf("cibleForm(%q, %q) a renvoyé nil", a, m)
 			}
 		}
@@ -67,6 +67,9 @@ func TestValidateTarget(t *testing.T) {
 		{"dossier avec séparateur final", dir + string(os.PathSeparator), "enc", false},
 		{"dossier à déchiffrer", dir, "dec", true},
 		{"dossier à vérifier", dir, "verify", true},
+		{"chiffré, changement de mot de passe", chiffre, "passwd", false},
+		{"clair, changement de mot de passe", clair, "passwd", true},
+		{"dossier, changement de mot de passe", dir, "passwd", true},
 		{"chemin vide", "", "enc", true},
 	}
 
@@ -283,6 +286,14 @@ func deroule(t *testing.T, f *huhForm, cmd tea.Cmd, profondeur int) {
 	deroule(t, f, suivante, profondeur+1)
 }
 
+// ouvrirCible monte l'écran de la cible et laisse de côté l'ancre de retour :
+// les tests qui suivent regardent la vue, pas la navigation entre écrans.
+func ouvrirCible(t *testing.T, action, mode string, path *string) *huhForm {
+	t.Helper()
+	form, _ := cibleForm(action, mode, path)
+	return ouvrir(t, form)
+}
+
 func ouvrir(t *testing.T, form *formulaire) *huhForm {
 	t.Helper()
 	f := &huhForm{form: form}
@@ -316,7 +327,7 @@ func TestChoixFormAfficheLesDeuxQuestions(t *testing.T) {
 // nécessaire pour le déplier.
 func TestCibleFormExplorateurOuvert(t *testing.T) {
 	path := ""
-	f := ouvrir(t, cibleForm("enc", "parcourir", &path))
+	f := ouvrirCible(t, "enc", "parcourir", &path)
 
 	vue := f.form.View()
 	if !strings.Contains(vue, "ouvrir un dossier") {
@@ -340,7 +351,7 @@ func TestCibleFormExplorateurOuvert(t *testing.T) {
 
 func TestCibleFormChampTexte(t *testing.T) {
 	path := ""
-	f := ouvrir(t, cibleForm("enc", "saisie", &path))
+	f := ouvrirCible(t, "enc", "saisie", &path)
 
 	vue := f.form.View()
 	if !strings.Contains(vue, "glisser") {
@@ -358,13 +369,13 @@ func TestCibleFormAnnonceLaCibleAttendue(t *testing.T) {
 	for _, mode := range []string{"saisie", "parcourir"} {
 		for _, action := range []string{"dec", "verify"} {
 			path := ""
-			f := ouvrir(t, cibleForm(action, mode, &path))
+			f := ouvrirCible(t, action, mode, &path)
 			if vue := f.form.View(); !strings.Contains(vue, extension) {
 				t.Errorf("%s/%s : le champ ne nomme pas l'extension attendue:\n%s", action, mode, vue)
 			}
 		}
 		path := ""
-		f := ouvrir(t, cibleForm("enc", mode, &path))
+		f := ouvrirCible(t, "enc", mode, &path)
 		if vue := f.form.View(); !strings.Contains(vue, "dossier") {
 			t.Errorf("enc/%s : le champ ne mentionne pas le dossier:\n%s", mode, vue)
 		}
@@ -397,7 +408,7 @@ func TestCibleFormExplorateurListeAssezDEntrees(t *testing.T) {
 	defer os.Chdir(precedent)
 
 	path := ""
-	f := ouvrir(t, cibleForm("enc", "parcourir", &path))
+	f := ouvrirCible(t, "enc", "parcourir", &path)
 	vue := f.form.View()
 
 	manquants := []string{}
@@ -420,5 +431,73 @@ func TestCompEncodee(t *testing.T) {
 	}
 	if got := compEncodee(false); got != pkg.CompNone {
 		t.Errorf("compEncodee(false) = %d, attendu CompNone", got)
+	}
+}
+
+// TestCibleRestitution : le nom d'origine ne remonte qu'après authentification,
+// et l'interface propose alors de le rendre au fichier. Elle ne le propose que
+// si la place est libre — un déchiffrement réussi ne doit pas se terminer sur
+// une offre d'écraser un voisin.
+func TestCibleRestitution(t *testing.T) {
+	dir := t.TempDir()
+	out := filepath.Join(dir, "neutre")
+	occupe := filepath.Join(dir, "occupe.txt")
+	if err := os.WriteFile(occupe, []byte("x"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	cas := []struct {
+		nom       string
+		meta      *pkg.FileMetadata
+		wantCible string
+		wantLibre bool
+	}{
+		{"sans métadonnées", nil, "", false},
+		{"nom vide", &pkg.FileMetadata{}, "", false},
+		{"nom déjà porté par la sortie", &pkg.FileMetadata{Name: "neutre"}, "", false},
+		{"nom libre", &pkg.FileMetadata{Name: "rapport.txt"}, filepath.Join(dir, "rapport.txt"), true},
+		{"nom déjà pris", &pkg.FileMetadata{Name: "occupe.txt"}, occupe, false},
+	}
+
+	for _, c := range cas {
+		t.Run(c.nom, func(t *testing.T) {
+			cible, libre := cibleRestitution(out, c.meta)
+			if cible != c.wantCible || libre != c.wantLibre {
+				t.Errorf("cibleRestitution(%q, %+v) = (%q, %v), attendu (%q, %v)",
+					out, c.meta, cible, libre, c.wantCible, c.wantLibre)
+			}
+		})
+	}
+}
+
+// TestChoixFormProposeLeChangementDeMotDePasse : l'opération doit figurer dans
+// la liste, sans quoi la commande n'existe que pour qui lit l'aide du CLI.
+func TestChoixFormProposeLeChangementDeMotDePasse(t *testing.T) {
+	action, mode := "enc", "saisie"
+	f := ouvrir(t, choixForm(&action, &mode))
+	if vue := f.form.View(); !strings.Contains(vue, "changer le mot de passe") {
+		t.Errorf("l'interface ne propose pas le changement de mot de passe:\n%s", vue)
+	}
+}
+
+// TestTuiPasswdRefuseLesAnciensFormats : sur un fichier v2, le changement direct
+// est impossible — l'explication doit le dire, et rien ne doit être demandé.
+func TestTuiPasswdRefuseLesAnciensFormats(t *testing.T) {
+	src := filepath.Join("pkg", "testdata", "v2_aes.chto")
+	copie := filepath.Join(t.TempDir(), "v2.chto")
+	octets, err := os.ReadFile(src)
+	if err != nil {
+		t.Skipf("fichier de référence indisponible: %v", err)
+	}
+	if err := os.WriteFile(copie, octets, 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	err = tuiPasswd(copie)
+	if err == nil {
+		t.Fatal("un fichier v2 a été accepté")
+	}
+	if !strings.Contains(err.Error(), "rechiffrer") {
+		t.Errorf("le message n'explique pas quoi faire: %v", err)
 	}
 }

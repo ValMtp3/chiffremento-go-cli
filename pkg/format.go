@@ -10,17 +10,21 @@ import (
 // Format de fichier .chto
 //
 //	magic       8   "CHFRMT03"
-//	version     1   1 et 2 (anciens), 3 (courant)
-//	flags       1   bit0 = compressé (v1/v2), bit1 = archive tar, bit2 = rempli
+//	version     1   1 à 3 (anciens), 4 (courant)
+//	flags       1   bit0 = compressé (v1/v2), bit1 = archive tar, bit2 = rempli,
+//	                bit3 = métadonnées
 //	algoID      1   1=AES-GCM, 2=ChaCha20-Poly1305, 3=Cascade
 //	--- v2 et v3 --------------------------------------------
 //	argonTime   4   uint32 big-endian
 //	argonMemory 4   uint32 big-endian, en KiB
 //	argonPar    1   uint8
-//	--- v3 uniquement ---------------------------------------
+//	--- v3 et v4 --------------------------------------------
 //	compAlgo    1   0=aucune, 1=gzip (lecture seule), 2=zstd
 //	---------------------------------------------------------
 //	salt       16
+//	--- v4 uniquement ---------------------------------------
+//	commit     32   engagement sur la clé maîtresse
+//	wrappedDEK 48   clé du fichier, scellée par le mot de passe
 //
 // Le magic est resté identique d'une version à l'autre : c'est l'octet de
 // version qui aiguille la lecture. Changer le magic aurait fait échouer les
@@ -42,14 +46,23 @@ const (
 
 	argonParamsSize = 4 + 4 + 1
 
+	// commitSize : un engagement de 32 octets, soit la sortie de SHA-256. Plus
+	// court laisserait la porte ouverte à une collision trouvée hors ligne.
+	commitSize = 32
+	// wrappedSize : la clé de fichier (32 o) scellée par AES-256-GCM, dont le
+	// tag d'authentification pèse 16 octets.
+	wrappedSize = 32 + 16
+
 	headerSizeV1 = magicSize + versionSize + flagsSize + algoIDSize + saltSize // 27
 	headerSizeV2 = headerSizeV1 + argonParamsSize                              // 36
 	headerSizeV3 = headerSizeV2 + compAlgoSize                                 // 37
+	headerSizeV4 = headerSizeV3 + commitSize + wrappedSize                     // 117
 
 	versionV1      = byte(1)
 	versionV2      = byte(2)
 	versionV3      = byte(3)
-	currentVersion = versionV3
+	versionV4      = byte(4)
+	currentVersion = versionV4
 )
 
 // Drapeaux du header. Tout bit non listé dans knownFlags est refusé à la
@@ -207,7 +220,12 @@ type header struct {
 	// FlagCompressed, en v3 il est lu dans le champ compAlgo.
 	Comp byte
 	Salt []byte
-	Raw  []byte
+	// Commit et Wrapped n'existent qu'en v4. Le premier est l'engagement sur la
+	// clé maîtresse, vérifié avant tout déchiffrement ; le second est la clé du
+	// fichier, scellée par une clé dérivée du mot de passe.
+	Commit  []byte
+	Wrapped []byte
+	Raw     []byte
 	// Meta est renseignée à la lecture quand FlagMetadata est posé. Elle vient
 	// de l'intérieur du chiffrement, donc après authentification — contrairement
 	// au reste de cette structure, qui est lisible sans mot de passe.
@@ -256,8 +274,31 @@ func (h *header) marshal() []byte {
 		buf = append(buf, h.Comp)
 	}
 	buf = append(buf, h.Salt...)
+	if h.Version >= versionV4 {
+		buf = append(buf, h.Commit...)
+		buf = append(buf, h.Wrapped...)
+	}
 	h.Raw = buf
 	return buf
+}
+
+// marshalScelle rend les octets d'en-tête qui précèdent l'enveloppe : tout sauf
+// la clé scellée elle-même.
+//
+// Ce sont eux qui servent de données authentifiées (AAD) au scellement de la
+// clé de fichier. En modifier un seul — la version, l'algorithme, le sel,
+// l'engagement — fait échouer l'ouverture de l'enveloppe, donc le
+// déchiffrement. C'est ce qui remplace, en v4, le liage de l'en-tête à la clé
+// que faisaient les v2 et v3 en le passant à HKDF.
+func (h *header) marshalScelle() []byte {
+	// Une copie dont l'enveloppe est vide, plutôt qu'une troncature de l'en-tête
+	// complet : tronquer marchait, mais seulement parce que Wrapped est nil au
+	// moment du scellement. Le jour où il ne le serait plus — un champ ajouté
+	// après lui, une valeur par défaut —, l'AAD aurait changé en silence, et
+	// avec elle la garantie que l'en-tête est authentifié.
+	sansEnveloppe := *h
+	sansEnveloppe.Wrapped = nil
+	return sansEnveloppe.marshal()
 }
 
 // prefixSize couvre magic + version + flags + algo : la partie commune à
@@ -290,9 +331,11 @@ func readHeader(r io.Reader) (*header, error) {
 		remaining = argonParamsSize + saltSize
 	case versionV3:
 		remaining = argonParamsSize + compAlgoSize + saltSize
+	case versionV4:
+		remaining = argonParamsSize + compAlgoSize + saltSize + commitSize + wrappedSize
 	default:
 		return nil, fmt.Errorf("version de format non supportée : %d (ce binaire lit les versions %d à %d)",
-			h.Version, versionV1, versionV3)
+			h.Version, versionV1, versionV4)
 	}
 
 	rest := make([]byte, remaining)
@@ -316,7 +359,22 @@ func readHeader(r io.Reader) (*header, error) {
 	} else if h.Flags&FlagCompressed != 0 {
 		h.Comp = CompGzip
 	}
-	h.Salt = rest[remaining-saltSize:]
+	// Le sel est repéré par sa position, pas depuis la fin : en v4 il est suivi
+	// de l'engagement et de l'enveloppe, et compter à rebours rendrait ici seize
+	// octets de clé scellée en guise de sel.
+	debutSel := 0
+	if h.Version >= versionV2 {
+		debutSel += argonParamsSize
+	}
+	if h.Version >= versionV3 {
+		debutSel += compAlgoSize
+	}
+	h.Salt = rest[debutSel : debutSel+saltSize]
+	if h.Version >= versionV4 {
+		apresSel := debutSel + saltSize
+		h.Commit = rest[apresSel : apresSel+commitSize]
+		h.Wrapped = rest[apresSel+commitSize:]
+	}
 	h.Raw = append(prefix, rest...)
 
 	if err := h.finalize(); err != nil {

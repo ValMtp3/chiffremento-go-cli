@@ -91,7 +91,7 @@ func TestCompatibiliteV2Dossier(t *testing.T) {
 	}
 }
 
-func TestEncryptEcritDuV3(t *testing.T) {
+func TestEncryptEcritLaVersionCourante(t *testing.T) {
 	dir := t.TempDir()
 	in := write(t, dir, "clair.txt", []byte("x"))
 	enc := filepath.Join(dir, "out.chto")
@@ -102,8 +102,8 @@ func TestEncryptEcritDuV3(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if d.Version != versionV3 {
-		t.Errorf("version écrite %d, attendu %d", d.Version, versionV3)
+	if d.Version != currentVersion {
+		t.Errorf("version écrite %d, attendu %d", d.Version, currentVersion)
 	}
 	if d.Comp != "zstd" {
 		t.Errorf("compression annoncée %q, attendu zstd", d.Comp)
@@ -156,7 +156,7 @@ func TestPadme(t *testing.T) {
 	// surcoût reste sous les ~12 % annoncés par le schéma.
 	var precedent int64
 	for _, taille := range []int64{1, 2, 7, 8, 100, 1000, 1024, 5000, 1 << 20, (1 << 20) + 1, 1 << 30} {
-		got := padme(taille)
+		got := padme(taille, PadStandard)
 		if got < taille {
 			t.Errorf("padme(%d) = %d, inférieur à la taille demandée", taille, got)
 		}
@@ -168,7 +168,7 @@ func TestPadme(t *testing.T) {
 			t.Errorf("padme(%d) = %d, surcoût de %.1f %% (attendu ≤ 12 %%)", taille, got, surcout*100)
 		}
 	}
-	if padme(0) != 0 {
+	if padme(0, PadStandard) != 0 {
 		t.Error("padme(0) devrait valoir 0")
 	}
 
@@ -179,7 +179,7 @@ func TestPadme(t *testing.T) {
 	// poignée de paliers, soit un fichier noyé parmi des milliers d'autres.
 	paliers := map[int64]struct{}{}
 	for taille := int64(65536); taille < 131072; taille += 37 {
-		paliers[padme(taille)] = struct{}{}
+		paliers[padme(taille, PadStandard)] = struct{}{}
 	}
 	if len(paliers) > 40 {
 		t.Errorf("%d paliers distincts entre 64 et 128 Kio : le remplissage ne masque presque rien", len(paliers))
@@ -214,7 +214,7 @@ func TestRemplissageMasqueLaTaille(t *testing.T) {
 	// 98 400 et 100 000 octets tombent dans le même palier Padmé : à cette
 	// échelle, le palier fait 2 Kio, donc deux tailles séparées de moins de
 	// ~2 % se confondent.
-	if got, want := padme(98400+padHeaderSize), padme(100000+padHeaderSize); got != want {
+	if got, want := padme(98400+padHeaderSize, PadStandard), padme(100000+padHeaderSize, PadStandard); got != want {
 		t.Fatalf("prémisse du test fausse : paliers %d et %d, attendus égaux", got, want)
 	}
 	a, b := tailleChto(98400), tailleChto(100000)
@@ -267,9 +267,9 @@ func TestRemplissageDossierViseLePalier(t *testing.T) {
 	if err := Encrypt(src, enc, []byte("pw"), Options{Pad: true}); err != nil {
 		t.Fatal(err)
 	}
-	payload := attendu + padHeaderSize + paddingFor(attendu)
-	if payload != padme(attendu+padHeaderSize) {
-		t.Errorf("charge utile de %d octets, palier attendu %d", payload, padme(attendu+padHeaderSize))
+	payload := attendu + padHeaderSize + paddingFor(attendu, PadStandard)
+	if payload != padme(attendu+padHeaderSize, PadStandard) {
+		t.Errorf("charge utile de %d octets, palier attendu %d", payload, padme(attendu+padHeaderSize, PadStandard))
 	}
 }
 
@@ -510,7 +510,7 @@ func TestFichierTronque(t *testing.T) {
 	// clair vide. On documente donc le comportement au lieu de prétendre le
 	// détecter.
 	sous := t.TempDir()
-	path := write(t, sous, "entete_seul.chto", raw[:headerSizeV3])
+	path := write(t, sous, "entete_seul.chto", raw[:headerSizeV4])
 	out := filepath.Join(sous, "out")
 	if err := Decrypt(path, out, []byte("pw"), Options{}); err != nil {
 		t.Fatalf("un fichier réduit à son en-tête devrait se lire comme un clair vide: %v", err)
@@ -746,5 +746,118 @@ func TestGzipResteLisibleEnV3(t *testing.T) {
 	}
 	if !bytes.Equal(clair, got) {
 		t.Error("le contenu relu diffère de l'original")
+	}
+}
+
+// TestPadProfils : chaque cran élargit le palier, donc le nombre de fichiers
+// qui sortent à la même taille, et personne ne rend une taille inférieure à
+// celle demandée.
+func TestPadProfils(t *testing.T) {
+	tailles := []int64{1 << 13, 100_000, 7_500_000, 1 << 30}
+
+	for _, taille := range tailles {
+		standard := padme(taille, PadStandard)
+		fort := padme(taille, PadFort)
+		maximum := padme(taille, PadMaximum)
+
+		for nom, got := range map[string]int64{"standard": standard, "fort": fort, "maximum": maximum} {
+			if got < taille {
+				t.Errorf("padme(%d, %s) = %d, inférieur à la taille demandée", taille, nom, got)
+			}
+		}
+		// Chaque cran arrondit au moins aussi haut que le précédent : c'est ce
+		// qui fait qu'il masque au moins autant.
+		if fort < standard || maximum < fort {
+			t.Errorf("taille %d : paliers %d/%d/%d, attendus croissants", taille, standard, fort, maximum)
+		}
+		// « maximum » est exactement la puissance de deux supérieure.
+		if maximum&(maximum-1) != 0 {
+			t.Errorf("padme(%d, maximum) = %d, qui n'est pas une puissance de deux", taille, maximum)
+		}
+		if surcout := float64(fort-taille) / float64(taille); surcout > 0.26 {
+			t.Errorf("padme(%d, fort) = %d, surcoût de %.1f %% (attendu ≤ 25 %%)", taille, fort, surcout*100)
+		}
+	}
+
+	// La mesure qui compte : combien de tailles distinctes restent possibles sur
+	// une octave. Moins il y en a, plus l'ensemble où se cacher est grand.
+	compte := func(p PadProfile) int {
+		paliers := map[int64]struct{}{}
+		// On démarre après la borne : une taille déjà égale à une puissance de
+		// deux n'est pas gonflée, et compterait pour un palier de plus.
+		for taille := int64(1<<22) + 1; taille < 1<<23; taille += 4093 {
+			paliers[padme(taille, p)] = struct{}{}
+		}
+		return len(paliers)
+	}
+	standard, fort, maximum := compte(PadStandard), compte(PadFort), compte(PadMaximum)
+	if !(standard > fort && fort > maximum) {
+		t.Errorf("paliers distincts par octave : standard=%d fort=%d maximum=%d, attendus décroissants",
+			standard, fort, maximum)
+	}
+	if maximum != 1 {
+		t.Errorf("« maximum » laisse %d tailles possibles sur une octave, attendu 1", maximum)
+	}
+}
+
+// TestParsePadProfile : une valeur inconnue doit être refusée, pas ramenée en
+// silence au défaut — le remplissage ne serait pas celui demandé.
+func TestParsePadProfile(t *testing.T) {
+	for _, bon := range []string{"", "standard", "fort", "maximum"} {
+		if _, err := ParsePadProfile(bon); err != nil {
+			t.Errorf("ParsePadProfile(%q) refusé: %v", bon, err)
+		}
+	}
+	if _, err := ParsePadProfile("enorme"); err == nil {
+		t.Error("un niveau inconnu devrait être refusé")
+	}
+}
+
+// TestRemplissageMaximumConfondPlusLarge est le test qui répond au reproche fait
+// au réglage par défaut : à 7,6 et 7,9 Mo, « standard » laisse deux tailles
+// distinctes, « maximum » n'en laisse qu'une.
+func TestRemplissageMaximumConfondPlusLarge(t *testing.T) {
+	password := []byte("pw")
+	tailleChto := func(clair int, p PadProfile) int64 {
+		t.Helper()
+		sous := t.TempDir()
+		in := write(t, sous, "clair.bin", bytes.Repeat([]byte("a"), clair))
+		enc := filepath.Join(sous, "out.chto")
+		if err := Encrypt(in, enc, password, Options{Pad: true, PadProfile: p}); err != nil {
+			t.Fatal(err)
+		}
+		st, err := os.Stat(enc)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return st.Size()
+	}
+
+	const a, b = 7_600_000, 7_900_000
+	if tailleChto(a, PadStandard) == tailleChto(b, PadStandard) {
+		t.Fatal("prémisse fausse : ces deux tailles se confondent déjà en standard")
+	}
+	if x, y := tailleChto(a, PadMaximum), tailleChto(b, PadMaximum); x != y {
+		t.Errorf("en maximum, %d et %d octets sortent à %d et %d : ils devraient se confondre", a, b, x, y)
+	}
+}
+
+// TestPadFenetre : la fenêtre annoncée à l'utilisateur doit être exacte — toute
+// taille qu'elle couvre sort au même palier, et la taille juste en dessous en
+// sort différente.
+func TestPadFenetre(t *testing.T) {
+	for _, profile := range AllPadProfiles() {
+		for _, taille := range []int64{100_000, 7_500_000, 1 << 22, (1 << 22) + 1} {
+			bas, haut := PadFenetre(taille, profile)
+			if bas > taille || haut < taille {
+				t.Errorf("%s : fenêtre [%d, %d] ne contient pas %d", profile, bas, haut, taille)
+			}
+			if PadPalier(bas, profile) != PadPalier(haut, profile) {
+				t.Errorf("%s : les bornes %d et %d ne partagent pas le même palier", profile, bas, haut)
+			}
+			if bas > 1 && PadPalier(bas-1, profile) == PadPalier(bas, profile) {
+				t.Errorf("%s : la borne basse %d n'est pas la première du palier", profile, bas)
+			}
+		}
 	}
 }

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"cmp"
 	"errors"
 	"flag"
 	"fmt"
@@ -42,11 +43,12 @@ func main() {
 
 func run() error {
 	showVersion := flag.Bool("version", false, "afficher la version")
-	mode := flag.String("mode", "", "enc (chiffrer), dec (déchiffrer), verify (contrôler), info (inspecter) ou bench (mesurer)")
+	mode := flag.String("mode", "", "enc (chiffrer), dec (déchiffrer), verify (contrôler), info (inspecter), passwd (changer le mot de passe) ou bench (mesurer)")
 	fileIn := flag.String("in", "", "fichier ou dossier d'entrée, ou - pour l'entrée standard (dossier en mode enc uniquement)")
 	fileOut := flag.String("out", "", "destination (défaut : entrée + "+extension+" en enc, entrée sans l'extension en dec) ; - pour la sortie standard")
 	compress := flag.Bool("comp", false, "compresser les données en zstd avant chiffrement")
 	pad := flag.Bool("pad", false, "masquer la taille réelle en ajoutant du remplissage ; s'exclut avec -comp")
+	padNiveau := flag.String("pad-niveau", "", "largeur du palier de remplissage : standard (défaut), fort ou maximum ; exige -pad")
 	chacha := flag.Bool("chacha", false, "utiliser ChaCha20-Poly1305 au lieu d'AES-GCM")
 	parano := flag.Bool("parano", false, "mode parano : double chiffrement en cascade (chacha20 + aes), plus lent")
 	kdf := flag.String("kdf", "", "coût de la dérivation de clé : standard (défaut), fort ou maximum")
@@ -82,16 +84,16 @@ func run() error {
 		return errors.New("-mode et -in sont obligatoires")
 	}
 
-	if *mode != "enc" && (*compress || *chacha || *parano || *pad || *kdf != "" || *meta != "") {
+	if *mode != "enc" && (*compress || *chacha || *parano || *pad || *padNiveau != "" || *kdf != "" || *meta != "") {
 		fmt.Fprintln(os.Stderr, styleDim.Render(
-			"note : -comp, -pad, -chacha, -parano, -kdf et -meta n'ont d'effet qu'en mode enc, ils sont ignorés ici"))
+			"note : -comp, -pad, -pad-niveau, -chacha, -parano, -kdf et -meta n'ont d'effet qu'en mode enc, ils sont ignorés ici"))
 	}
 	if *mode != "enc" && *mode != "dec" && *force {
 		fmt.Fprintln(os.Stderr, styleDim.Render(
 			"note : -force n'a d'effet qu'en mode enc et dec, il est ignoré ici"))
 	}
-	if *mode == "info" && *fileOut != "" {
-		fmt.Fprintln(os.Stderr, styleDim.Render("note : -out n'a pas d'effet en mode info, il est ignoré"))
+	if (*mode == "info" || *mode == "passwd") && *fileOut != "" {
+		fmt.Fprintln(os.Stderr, styleDim.Render("note : -out n'a pas d'effet dans ce mode, il est ignoré"))
 	}
 
 	switch *mode {
@@ -108,8 +110,15 @@ func run() error {
 		if err != nil {
 			return err
 		}
+		padProfile, err := pkg.ParsePadProfile(*padNiveau)
+		if err != nil {
+			return err
+		}
+		if err := checkPadFlags(*pad, *padNiveau); err != nil {
+			return err
+		}
 		return doEncrypt(*fileIn, *fileOut, pkg.Options{
-			Algo: algo, Comp: chooseComp(*compress), Pad: *pad,
+			Algo: algo, Comp: chooseComp(*compress), Pad: *pad, PadProfile: padProfile,
 			KDF: profile, Metadata: metaMode, Force: *force,
 		})
 	case "dec":
@@ -118,8 +127,10 @@ func run() error {
 		return doVerify(*fileIn)
 	case "info":
 		return doInfo(*fileIn)
+	case "passwd":
+		return doPasswd(*fileIn)
 	default:
-		return fmt.Errorf("mode inconnu %q (attendu enc, dec, verify, info ou bench)", *mode)
+		return fmt.Errorf("mode inconnu %q (attendu enc, dec, verify, info, passwd ou bench)", *mode)
 	}
 }
 
@@ -209,7 +220,8 @@ func doEncrypt(in, out string, opts pkg.Options) error {
 		fmt.Fprintf(os.Stderr, "%s %s\n", styleDim.Render("compression  "), pkg.CompName(comp))
 	}
 	if pad {
-		fmt.Fprintf(os.Stderr, "%s %s\n", styleDim.Render("remplissage  "), "taille arrondie au palier supérieur")
+		fmt.Fprintf(os.Stderr, "%s %s (%s)\n", styleDim.Render("remplissage  "),
+			"taille arrondie au palier supérieur", cmp.Or(opts.PadProfile, pkg.PadStandard))
 	}
 	if meta == pkg.MetadataMinimal {
 		fmt.Fprintf(os.Stderr, "%s %s\n", styleDim.Render("métadonnées  "),
@@ -387,8 +399,67 @@ func doVerify(in string) error {
 	return nil
 }
 
-// doInfo affiche l'en-tête d'un .chto sans le déchiffrer : ni mot de passe, ni
-// écriture sur le disque.
+// checkPadFlags refuse un niveau de remplissage demandé sans remplissage.
+//
+// Un niveau seul ne fait rien : plutôt que de l'ignorer en silence — et de
+// laisser croire à une taille masquée qui ne l'est pas — on le dit. Le deviner
+// en activant -pad à la place de l'utilisateur serait pire : activer une option
+// que personne n'a demandée.
+func checkPadFlags(pad bool, niveau string) error {
+	if niveau != "" && !pad {
+		return errors.New("-pad-niveau ne s'applique qu'avec -pad")
+	}
+	return nil
+}
+
+// doPasswd change le mot de passe d'un .chto sans le re-chiffrer.
+//
+// Deux saisies successives : l'actuelle, puis la nouvelle avec sa confirmation.
+// La première est vérifiée par l'engagement de l'en-tête avant qu'un seul octet
+// ne soit écrit — un mot de passe faux laisse le fichier exactement tel quel.
+func doPasswd(in string) error {
+	if isStream(in) {
+		return errors.New("le changement de mot de passe demande un fichier, pas un flux : l'en-tête est réécrit sur place")
+	}
+	if !strings.HasSuffix(in, extension) {
+		return fmt.Errorf("un fichier dont on change le mot de passe doit porter l'extension %s", extension)
+	}
+
+	d, err := pkg.Inspect(in)
+	if err != nil {
+		return err
+	}
+	// Le refus vient avant les saisies : faire taper deux mots de passe pour
+	// annoncer ensuite que le format ne s'y prête pas serait une perte de temps.
+	if d.Version < pkg.VersionEnveloppe {
+		return fmt.Errorf("ce fichier est au format v%d, où la clé du contenu vient directement du mot de passe : "+
+			"il faut le déchiffrer puis le rechiffrer pour en changer", d.Version)
+	}
+	fmt.Fprintf(os.Stderr, "%s %s\n", styleDim.Render("fichier      "),
+		fmt.Sprintf("format v%d · %s · %s", d.Version, d.Algo, d.KDF))
+
+	fmt.Fprintln(os.Stderr, styleDim.Render("mot de passe actuel"))
+	ancien, err := readPassword(false, false)
+	if err != nil {
+		return err
+	}
+	defer zero(ancien)
+
+	fmt.Fprintln(os.Stderr, styleDim.Render("nouveau mot de passe"))
+	nouveau, err := readPassword(true, false)
+	if err != nil {
+		return err
+	}
+	defer zero(nouveau)
+
+	if err := pkg.ChangePassword(in, ancien, nouveau); err != nil {
+		return err
+	}
+	fmt.Fprintf(os.Stderr, "%s %s\n", styleAccent.Render("✓"),
+		"mot de passe changé, le contenu n'a pas été retouché")
+	return nil
+}
+
 func doInfo(in string) error {
 	if isStream(in) {
 		return errors.New("info a besoin d'un fichier : l'en-tête d'un flux ne peut pas être relu sans le consommer")
@@ -552,6 +623,7 @@ func usage() {
   chiffremento -mode dec    -in FICHIER%s      [-out CHEMIN]
   chiffremento -mode verify -in FICHIER%s      contrôle sans rien écrire
   chiffremento -mode info   -in FICHIER%s      en-tête, sans mot de passe
+  chiffremento -mode passwd -in FICHIER%s      change le mot de passe, sans re-chiffrer
 
 Un dossier est empaqueté en tar au fil du chiffrement, et recréé à l'identique
 au déchiffrement.
@@ -569,7 +641,7 @@ Le mot de passe n'est jamais passé en argument : il est demandé de façon
 masquée, ou lu sur l'entrée standard si celle-ci n'est pas un terminal.
 
 Options :
-`, version, extension, extension, extension, extension)
+`, version, extension, extension, extension, extension, extension)
 	flag.PrintDefaults()
 }
 

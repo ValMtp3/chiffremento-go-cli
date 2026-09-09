@@ -33,35 +33,64 @@ func isInteractive() bool {
 // évite tout un nid de guêpes — un champ dont la configuration dépend d'un choix
 // pas encore fait, et un explorateur que huh replie dès qu'on tente de revenir
 // en arrière, laissant l'utilisateur devant une liste disparue.
+//
+// Le prix de ce découpage, c'est que la marche arrière est à notre charge :
+// huh ne recule qu'à l'intérieur d'un formulaire. D'où les deux boucles — un
+// écran qui rend errRetour renvoie à celui d'avant, et les réponses déjà
+// données restent dans les variables, donc à l'écran.
 func runTUI() error {
 	action := "enc"
 	mode := "saisie"
-	if err := choixForm(&action, &mode).Run(); err != nil {
-		return err
-	}
-
 	path := ""
-	// La boucle est là parce que l'explorateur tolère une sélection vide pour
-	// ne pas bloquer la navigation : le formulaire se termine donc parfois sans
-	// rien proposer, et on le réaffiche au lieu de laisser filer un chemin vide
-	// vers une erreur obscure plus loin.
 	for {
-		if err := cibleForm(action, mode, &path).Run(); err != nil {
+		// Premier écran : rien derrière lui, donc aucune ancre de retour.
+		if err := lancerEtape(choixForm(&action, &mode), nil); err != nil {
 			return err
 		}
-		path = trimTrailingSeparator(strings.TrimSpace(expandHome(devirerGuillemets(path))))
-		if path != "" {
-			break
+
+		for {
+			err := etapeCible(action, mode, &path)
+			if errors.Is(err, errRetour) {
+				break // retour au choix de l'opération
+			}
+			if err != nil {
+				return err
+			}
+
+			switch action {
+			case "dec":
+				err = tuiDecrypt(path)
+			case "verify":
+				err = tuiVerify(path)
+			case "passwd":
+				err = tuiPasswd(path)
+			default:
+				err = tuiEncrypt(path)
+			}
+			if errors.Is(err, errRetour) {
+				continue // retour au choix de la cible
+			}
+			return err
 		}
 	}
+}
 
-	switch action {
-	case "dec":
-		return tuiDecrypt(path)
-	case "verify":
-		return tuiVerify(path)
-	default:
-		return tuiEncrypt(path)
+// etapeCible demande la cible jusqu'à en obtenir une.
+//
+// La boucle est là parce que l'explorateur tolère une sélection vide pour ne
+// pas bloquer la navigation : le formulaire se termine donc parfois sans rien
+// proposer, et on le réaffiche au lieu de laisser filer un chemin vide vers une
+// erreur obscure plus loin.
+func etapeCible(action, mode string, path *string) error {
+	for {
+		form, ancre := cibleForm(action, mode, path)
+		if err := lancerEtape(form, ancre); err != nil {
+			return err
+		}
+		*path = trimTrailingSeparator(strings.TrimSpace(expandHome(devirerGuillemets(*path))))
+		if *path != "" {
+			return nil
+		}
 	}
 }
 
@@ -76,6 +105,7 @@ func choixForm(action *string, mode *string) *huh.Form {
 					huh.NewOption("chiffrer un fichier ou un dossier", "enc"),
 					huh.NewOption("déchiffrer un "+extension+"  (fichier ou dossier)", "dec"),
 					huh.NewOption("vérifier un "+extension+"  (sans rien écrire)", "verify"),
+					huh.NewOption("changer le mot de passe d'un "+extension, "passwd"),
 				).
 				Value(action),
 
@@ -88,12 +118,16 @@ func choixForm(action *string, mode *string) *huh.Form {
 				).
 				Value(mode),
 		),
-	).WithTheme(formTheme()).WithShowHelp(true)
+	).WithTheme(formTheme()).WithKeyMap(formKeyMap()).WithShowHelp(true)
 }
 
 // cibleForm demande la cible, au clavier ou en naviguant. L'opération est déjà
 // connue : le champ peut donc s'annoncer précisément.
-func cibleForm(action, mode string, path *string) *huh.Form {
+//
+// Le champ est rendu avec le formulaire : c'est l'ancre du retour en arrière,
+// et lancerEtape a besoin de le reconnaître pour savoir qu'on est bien au
+// premier champ de l'écran.
+func cibleForm(action, mode string, path *string) (*huh.Form, huh.Field) {
 	var champ huh.Field
 	if mode == "parcourir" {
 		champ = filePickerField(action, path)
@@ -105,7 +139,8 @@ func cibleForm(action, mode string, path *string) *huh.Form {
 			Value(path).
 			Validate(func(s string) error { return validateTarget(s, action) })
 	}
-	return huh.NewForm(huh.NewGroup(champ)).WithTheme(formTheme()).WithShowHelp(true)
+	form := huh.NewForm(huh.NewGroup(champ)).WithTheme(formTheme()).WithKeyMap(formKeyMap()).WithShowHelp(true)
+	return form, champ
 }
 
 // filePickerField construit l'explorateur. Il vient de huh, donc de bubbles :
@@ -171,10 +206,14 @@ func filePickerField(action string, path *string) huh.Field {
 
 // cibleTitre nomme ce qu'on attend selon l'opération.
 func cibleTitre(action string) string {
-	if action == "enc" {
+	switch action {
+	case "enc":
 		return "fichier ou dossier à chiffrer"
+	case "passwd":
+		return "fichier " + extension + " dont changer le mot de passe"
+	default:
+		return "fichier " + extension + " à lire"
 	}
-	return "fichier " + extension + " à lire"
 }
 
 func ciblePlaceholder(action string) string {
@@ -202,7 +241,7 @@ func validateTarget(s, action string) error {
 	if !info.IsDir() && !info.Mode().IsRegular() {
 		return errors.New("ce n'est ni un fichier régulier ni un dossier")
 	}
-	if (action == "dec" || action == "verify") && !strings.HasSuffix(s, extension) {
+	if action != "enc" && !strings.HasSuffix(s, extension) {
 		return errors.New("ce fichier doit porter l'extension " + extension)
 	}
 	if action == "enc" && strings.HasSuffix(s, extension) {
@@ -211,8 +250,126 @@ func validateTarget(s, action string) error {
 	return nil
 }
 
+// optionsChiffrement porte les réponses de l'écran des options. Un struct et
+// non sept variables locales : l'écran est reconstruit à l'identique quand on y
+// revient depuis la confirmation d'écrasement, et il doit alors rouvrir sur les
+// réponses déjà données.
+type optionsChiffrement struct {
+	algo       byte
+	kdf        pkg.KDFProfile
+	compresser bool
+	pad        bool
+	padNiveau  pkg.PadProfile
+	garderMeta bool
+	brouiller  bool
+	password   string
+	confirm    string
+}
+
+// encryptForm construit l'écran des options. Il rend aussi son premier champ :
+// c'est l'ancre du retour vers le choix de la cible.
+func encryptForm(o *optionsChiffrement, estDossier bool, tailleClair int64) (*huh.Form, huh.Field) {
+	algoChamp := huh.NewSelect[byte]().
+		Title("algorithme").
+		Options(
+			huh.NewOption("aes-256-gcm  (défaut)", pkg.AlgoAES),
+			huh.NewOption("chacha20-poly1305", pkg.AlgoChaCha),
+			huh.NewOption("cascade  chacha20 + aes  (parano)", pkg.AlgoCascade),
+		).
+		Value(&o.algo)
+
+	form := huh.NewForm(
+		huh.NewGroup(
+			algoChamp,
+
+			// La description montre la mémoire exigée, parce qu'elle le sera
+			// aussi au déchiffrement : un fichier scellé en « maximum » ici sera
+			// illisible sur une machine qui n'a pas 1 Gio à y consacrer.
+			huh.NewSelect[pkg.KDFProfile]().
+				Title("coût de la dérivation de clé").
+				DescriptionFunc(func() string { return kdfHint(o.kdf) }, &o.kdf).
+				Options(
+					huh.NewOption("standard  (défaut)", pkg.KDFStandard),
+					huh.NewOption("fort", pkg.KDFFort),
+					huh.NewOption("maximum", pkg.KDFMaximum),
+				).
+				Value(&o.kdf),
+
+			ouiNon("compresser avant chiffrement  (zstd)", compressHint(estDossier), &o.compresser),
+		),
+
+		// Le masquage de taille vit dans son propre groupe, escamoté dès qu'une
+		// compression est choisie : proposer une option pour la refuser ensuite
+		// est une impasse, autant ne pas la montrer. Un groupe masqué est aussi
+		// sauté à la navigation, donc l'utilisateur passe directement au mot de
+		// passe.
+		huh.NewGroup(
+			ouiNon("masquer la taille réelle",
+				"arrondit la taille au palier supérieur (jusqu'à ~12 % de disque en plus)",
+				&o.pad),
+		).WithHideFunc(func() bool { return o.compresser }),
+
+		// La largeur du palier est le seul réglage qui compte : elle décide
+		// combien de fichiers sortent à la même taille, et ce que ça coûte. La
+		// description l'exprime sur *ce* fichier — un pourcentage abstrait ne
+		// dit rien, « 7,3 Mio → 8,0 Mio » se lit tout de suite.
+		huh.NewGroup(
+			huh.NewSelect[pkg.PadProfile]().
+				Title("largeur du palier").
+				DescriptionFunc(func() string { return padHint(tailleClair, o.padNiveau) }, &o.padNiveau).
+				Options(
+					huh.NewOption("standard  (défaut)", pkg.PadStandard),
+					huh.NewOption("fort", pkg.PadFort),
+					huh.NewOption("maximum  (puissance de deux)", pkg.PadMaximum),
+				).
+				Value(&o.padNiveau),
+		).WithHideFunc(func() bool { return o.compresser || !o.pad }),
+
+		huh.NewGroup(
+			ouiNon("conserver le nom et la date d'origine",
+				"stockés à l'intérieur du chiffré, donc restituables même sous un nom neutre",
+				&o.garderMeta),
+		).WithHideFunc(func() bool { return estDossier }),
+
+		// Le brouillage dépend de la réponse précédente, d'où son propre groupe :
+		// sans le nom gardé à l'intérieur, un nom tiré au hasard serait une perte
+		// sèche. La question n'apparaît donc qu'une fois les métadonnées
+		// conservées — et jamais pour un dossier, qui n'en porte pas.
+		huh.NewGroup(
+			ouiNon("brouiller le nom et la date du fichier chiffré",
+				"sortie sous un nom tiré au hasard, datée du 1er janvier 2000\n"+
+					"la date de création, elle, reste lisible dans le système de fichiers",
+				&o.brouiller),
+		).WithHideFunc(func() bool { return estDossier || !o.garderMeta }),
+
+		huh.NewGroup(
+			huh.NewInput().
+				Title("mot de passe").
+				// La description se recalcule à chaque frappe : l'utilisateur
+				// voit la robustesse de son mot de passe pendant qu'il le tape.
+				DescriptionFunc(func() string { return strengthHint(o.password) }, &o.password).
+				EchoMode(huh.EchoModePassword).
+				Value(&o.password).
+				Validate(validatePassword),
+
+			huh.NewInput().
+				Title("confirmation").
+				Description("une faute de frappe rendrait le fichier définitivement irrécupérable").
+				EchoMode(huh.EchoModePassword).
+				Value(&o.confirm).
+				Validate(func(s string) error {
+					if s != o.password {
+						return errors.New("les deux saisies diffèrent")
+					}
+					return nil
+				}),
+		),
+	).WithTheme(formTheme()).WithKeyMap(formKeyMap()).WithShowHelp(true)
+
+	return form, algoChamp
+}
+
 func tuiEncrypt(path string) error {
-	algo := pkg.AlgoAES
 	// Un dossier est presque toujours un mélange de texte, de code et de
 	// métadonnées répétitives, et le tar ajoute lui-même beaucoup de zéros de
 	// bourrage : la compression y gagne largement plus que sur un fichier
@@ -225,140 +382,130 @@ func tuiEncrypt(path string) error {
 	// zstd est le seul algorithme proposé : gzip n'est plus produit, seulement
 	// relu pour les anciens fichiers. La question se réduit donc à « compresser
 	// ou pas ».
-	compresser := estDossier
-	pad := false
-	kdf := pkg.KDFStandard
+	//
 	// Les métadonnées ne concernent qu'un fichier : l'archive tar d'un dossier
 	// porte déjà noms, dates et permissions de chaque entrée.
-	garderMeta := false
-	password, confirm := "", ""
+	o := optionsChiffrement{
+		algo: pkg.AlgoAES, kdf: pkg.KDFStandard,
+		compresser: estDossier, padNiveau: pkg.PadStandard,
+	}
+
+	// La taille sert à annoncer ce que coûterait chaque palier. Inconnue — un
+	// dossier, un chemin illisible —, padHint se rabat sur les pourcentages.
+	tailleClair := int64(-1)
+	if taille, err := pkg.InputSize(path); err == nil && !estDossier {
+		tailleClair = taille
+	}
+
+	// La boucle sert au retour depuis la question de l'écrasement : on
+	// réaffiche les options, avec les réponses déjà saisies.
+	for {
+		form, ancre := encryptForm(&o, estDossier, tailleClair)
+		if err := lancerEtape(form, ancre); err != nil {
+			return err
+		}
+
+		// Le groupe du remplissage est masqué quand la compression est active,
+		// mais masquer n'efface pas : un aller-retour dans le formulaire — pad à
+		// oui, retour en arrière, compression à oui — laissait les deux posés, et
+		// l'opération échouait plus loin sur « le remplissage et la compression
+		// s'excluent ». C'est la compression, dernier choix visible, qui tranche.
+		if o.compresser {
+			o.pad = false
+		}
+		// Même raison pour le brouillage : son groupe disparaît si les
+		// métadonnées ne sont plus conservées, mais un « oui » resté derrière
+		// enverrait le fichier sous un nom que plus rien ne permettrait de
+		// retrouver.
+		if !o.garderMeta {
+			o.brouiller = false
+		}
+
+		out := path + extension
+		if o.brouiller {
+			// Un nom tiré au hasard n'entre en collision avec rien : la question
+			// de l'écrasement ne se pose donc pas, et nomBrouille a déjà vérifié
+			// que la place est libre.
+			nom, err := nomBrouille(path)
+			if err != nil {
+				return err
+			}
+			out = nom
+		}
+		ecraser := false
+		if !o.brouiller {
+			var err error
+			ecraser, err = confirmerEcrasement(out)
+			if errors.Is(err, errRetour) {
+				continue // retour aux options
+			}
+			if err != nil {
+				return err
+			}
+		}
+		// La ligne « sel » du cadre reste sur une seule ligne : les mentions
+		// s'y ajoutent plutôt que de casser la mise en page.
+		salt := "16 o aléatoires · en-tête lié à la clé"
+		switch {
+		case estDossier && o.pad:
+			salt = "16 o aléatoires · dossier tar · taille masquée"
+		case estDossier:
+			salt = "16 o aléatoires · dossier empaqueté en tar"
+		case o.pad:
+			salt = "16 o aléatoires · taille réelle masquée"
+		}
+		info := jobInfo{
+			Action: "chiffrement",
+			In:     path,
+			Out:    out,
+			AEAD:   pkg.AlgoName(o.algo),
+			// Le profil choisi, pas le profil par défaut : afficher « m=256MiB »
+			// alors que l'utilisateur venait de sélectionner « maximum » démentait
+			// son propre choix à l'écran.
+			KDF:     o.kdf.KDFLabel(),
+			Salt:    salt,
+			Success: out,
+		}
+		if err := runJob(info, func(p func(int64, int64)) error {
+			return pkg.Encrypt(path, out, []byte(o.password), pkg.Options{
+				Algo: o.algo, Comp: compEncodee(o.compresser), Pad: o.pad, PadProfile: o.padNiveau,
+				KDF: o.kdf, Metadata: metaEncodee(o.garderMeta), Force: ecraser, Progress: p,
+			})
+		}); err != nil {
+			return err
+		}
+		if o.brouiller {
+			// La date se pose après coup : le fichier n'existe pas avant. Un
+			// échec ici ne perd rien — le chiffré est écrit et valide — mais il
+			// laisse la vraie date en place, donc il se dit. Le taire ferait
+			// croire à une protection qui n'a pas eu lieu.
+			if err := brouillerDate(out); err != nil {
+				fmt.Fprintf(os.Stderr, "  %s  %s\n\n", styleError.Render("!"), err)
+			}
+		}
+		return supprimerOriginal(path, out, o.password, estDossier)
+	}
+}
+
+// passwordForm est l'écran commun au déchiffrement et à la vérification : le
+// détail de l'en-tête, lisible sans mot de passe, puis le mot de passe. Il rend
+// aussi le champ de saisie, ancre du retour vers le choix de la cible — la note
+// qui le précède n'est pas sélectionnable, huh la saute.
+func passwordForm(details string, password *string) (*huh.Form, huh.Field) {
+	champ := huh.NewInput().
+		Title("mot de passe").
+		EchoMode(huh.EchoModePassword).
+		Value(password).
+		Validate(validatePassword)
 
 	form := huh.NewForm(
 		huh.NewGroup(
-			huh.NewSelect[byte]().
-				Title("algorithme").
-				Options(
-					huh.NewOption("aes-256-gcm  (défaut)", pkg.AlgoAES),
-					huh.NewOption("chacha20-poly1305", pkg.AlgoChaCha),
-					huh.NewOption("cascade  chacha20 + aes  (parano)", pkg.AlgoCascade),
-				).
-				Value(&algo),
-
-			// La description montre la mémoire exigée, parce qu'elle le sera
-			// aussi au déchiffrement : un fichier scellé en « maximum » ici sera
-			// illisible sur une machine qui n'a pas 1 Gio à y consacrer.
-			huh.NewSelect[pkg.KDFProfile]().
-				Title("coût de la dérivation de clé").
-				DescriptionFunc(func() string { return kdfHint(kdf) }, &kdf).
-				Options(
-					huh.NewOption("standard  (défaut)", pkg.KDFStandard),
-					huh.NewOption("fort", pkg.KDFFort),
-					huh.NewOption("maximum", pkg.KDFMaximum),
-				).
-				Value(&kdf),
-
-			huh.NewConfirm().
-				Title("compresser avant chiffrement  (zstd)").
-				Description(compressHint(estDossier)).
-				Affirmative("oui").
-				Negative("non").
-				Value(&compresser),
+			huh.NewNote().Title("fichier").Description(details),
+			champ,
 		),
+	).WithTheme(formTheme()).WithKeyMap(formKeyMap()).WithShowHelp(true)
 
-		// Le masquage de taille vit dans son propre groupe, escamoté dès qu'une
-		// compression est choisie : proposer une option pour la refuser ensuite
-		// est une impasse, autant ne pas la montrer. Un groupe masqué est aussi
-		// sauté à la navigation, donc l'utilisateur passe directement au mot de
-		// passe.
-		huh.NewGroup(
-			huh.NewConfirm().
-				Title("masquer la taille réelle").
-				Description("arrondit la taille au palier supérieur (jusqu'à ~12 % de disque en plus)").
-				Affirmative("oui").
-				Negative("non").
-				Value(&pad),
-		).WithHideFunc(func() bool { return compresser }),
-
-		huh.NewGroup(
-			huh.NewConfirm().
-				Title("conserver le nom et la date d'origine").
-				Description("stockés à l'intérieur du chiffré, donc restituables même sous un nom neutre").
-				Affirmative("oui").
-				Negative("non").
-				Value(&garderMeta),
-		).WithHideFunc(func() bool { return estDossier }),
-
-		huh.NewGroup(
-			huh.NewInput().
-				Title("mot de passe").
-				// La description se recalcule à chaque frappe : l'utilisateur
-				// voit la robustesse de son mot de passe pendant qu'il le tape.
-				DescriptionFunc(func() string { return strengthHint(password) }, &password).
-				EchoMode(huh.EchoModePassword).
-				Value(&password).
-				Validate(validatePassword),
-
-			huh.NewInput().
-				Title("confirmation").
-				Description("une faute de frappe rendrait le fichier définitivement irrécupérable").
-				EchoMode(huh.EchoModePassword).
-				Value(&confirm).
-				Validate(func(s string) error {
-					if s != password {
-						return errors.New("les deux saisies diffèrent")
-					}
-					return nil
-				}),
-		),
-	).WithTheme(formTheme()).WithShowHelp(true)
-
-	if err := form.Run(); err != nil {
-		return err
-	}
-
-	// Le groupe du remplissage est masqué quand la compression est active, mais
-	// masquer n'efface pas : un aller-retour dans le formulaire — pad à oui,
-	// retour en arrière, compression à oui — laissait les deux posés, et
-	// l'opération échouait plus loin sur « le remplissage et la compression
-	// s'excluent ». C'est la compression, dernier choix visible, qui tranche.
-	if compresser {
-		pad = false
-	}
-
-	out := path + extension
-	ecraser, err := confirmerEcrasement(out)
-	if err != nil {
-		return err
-	}
-	// La ligne « sel » du cadre reste sur une seule ligne : les mentions
-	// s'y ajoutent plutôt que de casser la mise en page.
-	salt := "16 o aléatoires · en-tête lié à la clé"
-	switch {
-	case estDossier && pad:
-		salt = "16 o aléatoires · dossier tar · taille masquée"
-	case estDossier:
-		salt = "16 o aléatoires · dossier empaqueté en tar"
-	case pad:
-		salt = "16 o aléatoires · taille réelle masquée"
-	}
-	info := jobInfo{
-		Action: "chiffrement",
-		In:     path,
-		Out:    out,
-		AEAD:   pkg.AlgoName(algo),
-		// Le profil choisi, pas le profil par défaut : afficher « m=256MiB »
-		// alors que l'utilisateur venait de sélectionner « maximum » démentait
-		// son propre choix à l'écran.
-		KDF:     kdf.KDFLabel(),
-		Salt:    salt,
-		Success: out,
-	}
-	return runJob(info, func(p func(int64, int64)) error {
-		return pkg.Encrypt(path, out, []byte(password), pkg.Options{
-			Algo: algo, Comp: compEncodee(compresser), Pad: pad,
-			KDF: kdf, Metadata: metaEncodee(garderMeta), Force: ecraser, Progress: p,
-		})
-	})
+	return form, champ
 }
 
 func tuiDecrypt(path string) error {
@@ -383,38 +530,172 @@ func tuiDecrypt(path string) error {
 	}
 
 	password := ""
-	form := huh.NewForm(
-		huh.NewGroup(
-			huh.NewNote().Title("fichier").Description(details),
-			huh.NewInput().
-				Title("mot de passe").
-				EchoMode(huh.EchoModePassword).
-				Value(&password).
-				Validate(validatePassword),
-		),
-	).WithTheme(formTheme()).WithShowHelp(true)
+	out := strings.TrimSuffix(path, extension)
+	// La boucle sert au retour depuis la question de l'écrasement : on
+	// redemande le mot de passe, déjà saisi et donc déjà rempli.
+	for {
+		form, ancre := passwordForm(details, &password)
+		if err := lancerEtape(form, ancre); err != nil {
+			return err
+		}
 
-	if err := form.Run(); err != nil {
-		return err
+		ecraser, err := confirmerEcrasement(out)
+		if errors.Is(err, errRetour) {
+			continue // retour au mot de passe
+		}
+		if err != nil {
+			return err
+		}
+		info := jobInfo{
+			Action:  "déchiffrement",
+			In:      path,
+			Out:     out,
+			AEAD:    d.Algo,
+			KDF:     d.KDF,
+			Salt:    fmt.Sprintf("format v%d · lu dans l'en-tête", d.Version),
+			Success: out,
+		}
+		// DecryptTo et non Decrypt : le nom d'origine, quand le fichier en
+		// porte un, ne remonte que par le résultat — Decrypt le jette. La
+		// variable est écrite dans la goroutine de l'opération et lue après,
+		// une fois que runJob a reçu sa fin.
+		var meta *pkg.FileMetadata
+		if err := runJob(info, func(p func(int64, int64)) error {
+			res, err := pkg.DecryptTo(path, out, []byte(password), pkg.Options{Force: ecraser, Progress: p})
+			meta = res.Metadata
+			return err
+		}); err != nil {
+			return err
+		}
+		if err := restituerNom(out, meta); err != nil {
+			return err
+		}
+		return supprimerChiffre(path)
+	}
+}
+
+// restituerNom rend au fichier déchiffré le nom qu'il portait avant d'être
+// chiffré, si son propriétaire le veut bien.
+//
+// Ce nom vit à l'intérieur du chiffré : il n'est lisible qu'une fois le contenu
+// authentifié, donc bien après le choix de la destination — impossible de
+// nommer la sortie avec avant de l'avoir vérifiée. D'où cette question posée
+// après coup plutôt qu'un renommage d'autorité : la sortie porte le nom que
+// l'utilisateur vient de choisir, le remplacer sans un mot serait une surprise.
+// Le CLI, lui, se contente d'annoncer le nom — il n'a personne à qui demander.
+func restituerNom(out string, meta *pkg.FileMetadata) error {
+	if meta == nil || meta.Name == filepath.Base(out) {
+		return nil
+	}
+	fmt.Printf("  %s  %s\n\n", styleDim.Render("nom d'origine"), styleText.Render(meta.Name))
+
+	cible, libre := cibleRestitution(out, meta)
+	if !libre {
+		fmt.Printf("  %s\n\n", styleFaint.Render("un fichier de ce nom existe déjà ici : rien n'a été renommé"))
+		return nil
 	}
 
-	out := strings.TrimSuffix(path, extension)
-	ecraser, err := confirmerEcrasement(out)
+	renommer := true
+	champ := questionFermee(
+		"lui rendre son nom ?",
+		"il est pour l'instant enregistré sous "+filepath.Base(out),
+		"renommer en "+meta.Name, "garder "+filepath.Base(out), &renommer)
+	form := huh.NewForm(huh.NewGroup(champ)).
+		WithTheme(formTheme()).WithKeyMap(formKeyMap()).WithShowHelp(true)
+	// Pas d'ancre : le fichier est déchiffré, il n'y a plus d'écran où revenir.
+	if err := lancerEtape(form, nil); err != nil {
+		return err
+	}
+	if !renommer {
+		return nil
+	}
+	if err := os.Rename(out, cible); err != nil {
+		return fmt.Errorf("renommage en %s: %w", meta.Name, err)
+	}
+	fmt.Printf("  %s  %s\n\n", styleAccent.Render("✓"), styleText.Render(cible))
+	return nil
+}
+
+// cibleRestitution dit où irait le fichier s'il reprenait son nom d'origine, et
+// si la place y est libre. Le nom a été assaini à la relecture — il ne porte
+// plus ni séparateur ni « .. » — donc il reste dans le dossier de la sortie.
+//
+// Un nom déjà pris ne déclenche pas de proposition d'écrasement : personne ne
+// veut se voir offrir de détruire un fichier juste après en avoir sauvé un.
+func cibleRestitution(out string, meta *pkg.FileMetadata) (cible string, libre bool) {
+	if meta == nil || meta.Name == "" || meta.Name == filepath.Base(out) {
+		return "", false
+	}
+	cible = filepath.Join(filepath.Dir(out), meta.Name)
+	if _, err := os.Lstat(cible); err == nil {
+		return cible, false
+	}
+	return cible, true
+}
+
+// tuiPasswd change le mot de passe sans re-chiffrer le contenu.
+//
+// Les trois champs tiennent sur un seul écran : l'actuel, le nouveau et sa
+// confirmation. Le contrôle de l'actuel n'a lieu qu'à la validation, dans pkg —
+// le vérifier champ par champ coûterait une dérivation Argon2 à chaque frappe.
+func tuiPasswd(path string) error {
+	d, err := pkg.Inspect(path)
 	if err != nil {
 		return err
 	}
-	info := jobInfo{
-		Action:  "déchiffrement",
-		In:      path,
-		Out:     out,
-		AEAD:    d.Algo,
-		KDF:     d.KDF,
-		Salt:    fmt.Sprintf("format v%d · lu dans l'en-tête", d.Version),
-		Success: out,
+	if d.Version < pkg.VersionEnveloppe {
+		return fmt.Errorf("ce fichier est au format v%d : son contenu est chiffré par une clé tirée du mot de passe, "+
+			"il faut donc le déchiffrer puis le rechiffrer pour en changer", d.Version)
 	}
-	return runJob(info, func(p func(int64, int64)) error {
-		return pkg.Decrypt(path, out, []byte(password), pkg.Options{Force: ecraser, Progress: p})
-	})
+
+	details := fmt.Sprintf("format v%d · %s · %s\nle contenu ne sera pas rechiffré : seul l'en-tête change", d.Version, d.Algo, d.KDF)
+	ancien, nouveau, confirme := "", "", ""
+
+	champ := huh.NewInput().
+		Title("mot de passe actuel").
+		EchoMode(huh.EchoModePassword).
+		Value(&ancien).
+		Validate(func(s string) error {
+			if s == "" {
+				return errors.New("indique le mot de passe actuel")
+			}
+			return nil
+		})
+
+	form := huh.NewForm(
+		huh.NewGroup(
+			huh.NewNote().Title("fichier").Description(details),
+			champ,
+			huh.NewInput().
+				Title("nouveau mot de passe").
+				DescriptionFunc(func() string { return strengthHint(nouveau) }, &nouveau).
+				EchoMode(huh.EchoModePassword).
+				Value(&nouveau).
+				Validate(validatePassword),
+			huh.NewInput().
+				Title("confirmation").
+				Description("une faute de frappe rendrait le fichier définitivement irrécupérable").
+				EchoMode(huh.EchoModePassword).
+				Value(&confirme).
+				Validate(func(s string) error {
+					if s != nouveau {
+						return errors.New("les deux saisies diffèrent")
+					}
+					return nil
+				}),
+		),
+	).WithTheme(formTheme()).WithKeyMap(formKeyMap()).WithShowHelp(true)
+
+	if err := lancerEtape(form, champ); err != nil {
+		return err
+	}
+
+	if err := pkg.ChangePassword(path, []byte(ancien), []byte(nouveau)); err != nil {
+		return err
+	}
+	fmt.Printf("  %s  %s\n\n", styleAccent.Render("✓"),
+		styleText.Render("mot de passe changé, le contenu n'a pas été retouché"))
+	return nil
 }
 
 func tuiVerify(path string) error {
@@ -433,18 +714,8 @@ func tuiVerify(path string) error {
 	details += "\nrien ne sera écrit sur le disque"
 
 	password := ""
-	form := huh.NewForm(
-		huh.NewGroup(
-			huh.NewNote().Title("fichier").Description(details),
-			huh.NewInput().
-				Title("mot de passe").
-				EchoMode(huh.EchoModePassword).
-				Value(&password).
-				Validate(validatePassword),
-		),
-	).WithTheme(formTheme()).WithShowHelp(true)
-
-	if err := form.Run(); err != nil {
+	form, ancre := passwordForm(details, &password)
+	if err := lancerEtape(form, ancre); err != nil {
 		return err
 	}
 
@@ -528,7 +799,7 @@ func readPassword(confirm bool, stdinTaken bool) ([]byte, error) {
 	}
 
 	if !term.IsTerminal(int(os.Stdin.Fd())) {
-		line, err := bufio.NewReader(os.Stdin).ReadString('\n')
+		line, err := lecteurStdin().ReadString('\n')
 		if err != nil && line == "" {
 			return nil, errors.New("aucun mot de passe reçu sur l'entrée standard")
 		}
@@ -577,6 +848,34 @@ func readPassword(confirm bool, stdinTaken bool) ([]byte, error) {
 // huh n'est pas utilisable ici : il lit os.Stdin. On passe donc directement par
 // term.ReadPassword sur /dev/tty, ce qui donne la même saisie masquée sans
 // habillage.
+// lecteurStdin rend un lecteur bufferisé partagé entre les appels.
+//
+// Un bufio.Reader neuf à chaque lecture avalait jusqu'à 4 Kio d'entrée pour n'en
+// rendre qu'une ligne, et jetait le reste avec lui : la deuxième lecture ne
+// trouvait plus rien. Invisible tant qu'une commande ne demandait qu'un mot de
+// passe, fatal dès qu'elle en demande deux — c'est le cas de passwd.
+//
+// La source est comparée à chaque appel parce que les tests remplacent
+// os.Stdin : un lecteur figé au démarrage lirait le mauvais descripteur.
+//
+// Sans garde de concurrence, volontairement : le parcours d'une commande est
+// séquentiel, et deux saisies de mot de passe en parallèle n'auraient de toute
+// façon aucun sens sur une entrée standard unique. Un futur mode qui lirait
+// stdin depuis plusieurs goroutines devrait passer ce lecteur en paramètre
+// plutôt que d'ajouter un verrou ici.
+var (
+	stdinLecteur *bufio.Reader
+	stdinSource  *os.File
+)
+
+func lecteurStdin() *bufio.Reader {
+	if stdinLecteur == nil || stdinSource != os.Stdin {
+		stdinSource = os.Stdin
+		stdinLecteur = bufio.NewReader(os.Stdin)
+	}
+	return stdinLecteur
+}
+
 func readPasswordFromTTY(confirm bool) ([]byte, error) {
 	tty, err := os.OpenFile(ttyDevice, os.O_RDWR, 0)
 	if err != nil {
@@ -749,17 +1048,16 @@ func confirmerEcrasement(dest string) (bool, error) {
 	}
 
 	ecraser := false
-	form := huh.NewForm(
-		huh.NewGroup(
-			huh.NewConfirm().
-				Title(dest + " existe déjà — l'écraser ?").
-				Description("son contenu actuel sera définitivement perdu").
-				Affirmative("écraser").
-				Negative("annuler").
-				Value(&ecraser),
-		),
-	).WithTheme(formTheme()).WithShowHelp(true)
-	if err := form.Run(); err != nil {
+	champ := questionFermee(
+		dest+" existe déjà — l'écraser ?",
+		"son contenu actuel sera définitivement perdu",
+		"écraser", "annuler", &ecraser)
+	form := huh.NewForm(huh.NewGroup(champ)).
+		WithTheme(formTheme()).WithKeyMap(formKeyMap()).WithShowHelp(true)
+	// L'ancre rend errRetour quand l'utilisateur recule : l'appelant réaffiche
+	// alors ses options plutôt que d'abandonner l'opération. Reculer et annuler
+	// ne disent pas la même chose — annuler arrête tout.
+	if err := lancerEtape(form, champ); err != nil {
 		return false, err
 	}
 	if !ecraser {
@@ -828,6 +1126,32 @@ func expandHome(p string) string {
 func kdfHint(p pkg.KDFProfile) string {
 	return fmt.Sprintf("%s · %d Mio de mémoire, exigés aussi au déchiffrement",
 		p.KDFLabel(), p.MemoryMiB())
+}
+
+// padHint décrit un palier de remplissage. Sur un fichier de taille connue, il
+// montre le résultat plutôt qu'une règle : c'est le seul moyen de choisir en
+// connaissance de cause, le coût d'un même profil allant de quelques pour cent
+// à un doublement selon la taille.
+func padHint(tailleClair int64, p pkg.PadProfile) string {
+	if tailleClair <= 0 {
+		return padRegle(p)
+	}
+	bas, haut := pkg.PadFenetre(tailleClair, p)
+	surcout := float64(haut-tailleClair) / float64(tailleClair) * 100
+	return fmt.Sprintf("%s → environ %s  (+%.1f %%) · tout ce qui pèse de %s à %s sort identique",
+		humanSize(tailleClair), humanSize(haut), surcout, humanSize(bas), humanSize(haut))
+}
+
+// padRegle dit ce que le profil garantit, indépendamment d'un fichier donné.
+func padRegle(p pkg.PadProfile) string {
+	switch p {
+	case pkg.PadFort:
+		return "palier deux fois plus large, surcoût plafonné à ~25 %"
+	case pkg.PadMaximum:
+		return "tous les fichiers d'une octave sortent à la même taille, jusqu'à +100 %"
+	default:
+		return "surcoût plafonné à ~12 %"
+	}
 }
 
 // metaEncodee traduit la réponse de la TUI en mode de métadonnées.

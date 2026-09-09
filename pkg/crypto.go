@@ -42,6 +42,13 @@ type Options struct {
 	// s'exclut avec la compression. Ignoré au déchiffrement.
 	Pad bool
 
+	// PadProfile règle la largeur du palier — donc combien de fichiers sortent
+	// à la même taille, et ce que ça coûte en disque. Vide vaut PadStandard.
+	// Sans effet si Pad est faux, et rien n'en est écrit dans le fichier : le
+	// déchiffrement lit la longueur du remplissage, pas la règle qui l'a
+	// choisie.
+	PadProfile PadProfile
+
 	// KDF choisit le coût de la dérivation de clé. Le profil vide vaut
 	// KDFStandard. Ignoré au déchiffrement : les paramètres réels sont lus dans
 	// l'en-tête du fichier.
@@ -557,7 +564,13 @@ func encrypt(dst io.Writer, src source, password []byte, opts Options) error {
 		if !known {
 			return errors.New("le remplissage exige une taille d'entrée connue : impossible sur un flux")
 		}
-		padding = paddingFor(payload + int64(len(metaBlock)))
+		// Le profil est validé ici, comme celui du KDF : une valeur inconnue
+		// doit arrêter le chiffrement, pas retomber en silence sur le défaut.
+		padProfile, err := ParsePadProfile(string(opts.PadProfile))
+		if err != nil {
+			return err
+		}
+		padding = paddingFor(payload+int64(len(metaBlock)), padProfile)
 	}
 
 	salt := make([]byte, saltSize)
@@ -586,11 +599,35 @@ func encrypt(dst io.Writer, src source, password []byte, opts Options) error {
 	if metaBlock != nil {
 		h.Flags |= FlagMetadata
 	}
+
+	// Scellement de la clé de fichier. L'ordre est imposé par les données
+	// authentifiées : l'engagement doit être posé dans l'en-tête *avant* de
+	// sceller, puisqu'il en fait partie, et l'en-tête ne peut être écrit
+	// qu'ensuite, une fois l'enveloppe connue.
+	m, err := deriveMasterV4(password, h)
+	if err != nil {
+		return err
+	}
+	defer m.wipe()
+	h.Commit = m.commit
+
+	dek, err := newDEK()
+	if err != nil {
+		return err
+	}
+	defer wipe(dek)
+
+	wrapped, err := wrapDEK(m, h, dek)
+	if err != nil {
+		return err
+	}
+	h.Wrapped = wrapped
+
 	if _, err := dst.Write(h.marshal()); err != nil {
 		return fmt.Errorf("écriture du header: %w", err)
 	}
 
-	keys, err := deriveKeys(password, h)
+	keys, err := keysFromDEK(dek, algo)
 	if err != nil {
 		return err
 	}
