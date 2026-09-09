@@ -193,10 +193,37 @@ func BenchmarkArchive(b *testing.B) {
 // pour être optimisé mais surveillé : s'il s'effondre, c'est que les paramètres
 // Argon2 ont été affaiblis par accident.
 func BenchmarkDeriveKeys(b *testing.B) {
+	const motDePasse = "motdepasse"
 	h := &header{Version: currentVersion, Algo: AlgoAES, Argon: defaultArgonParams(), Salt: make([]byte, saltSize)}
+
+	// Depuis la v4, un en-tête ne se dérive qu'une fois scellé : deriveKeys
+	// compare l'engagement de clé puis ouvre l'enveloppe, et les deux champs
+	// doivent donc être en place. Un en-tête laissé à zéro suffisait en v3, où la
+	// clé sortait directement du mot de passe.
+	//
+	// L'ordre compte : l'engagement entre dans les données associées du
+	// scellement, il se pose donc avant wrapDEK.
+	maitre, err := deriveMasterV4([]byte(motDePasse), h)
+	if err != nil {
+		b.Fatal(err)
+	}
+	h.Commit = maitre.commit
+	dek, err := newDEK()
+	if err != nil {
+		b.Fatal(err)
+	}
+	wrapped, err := wrapDEK(maitre, h, dek)
+	if err != nil {
+		b.Fatal(err)
+	}
+	h.Wrapped = wrapped
 	h.marshal()
+
+	// La préparation ci-dessus contient un Argon2 complet : sans remise à zéro,
+	// elle compterait dans la mesure qu'on surveille.
+	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		keys, err := deriveKeys([]byte("motdepasse"), h)
+		keys, err := deriveKeys([]byte(motDePasse), h)
 		if err != nil {
 			b.Fatal(err)
 		}
