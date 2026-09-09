@@ -4,7 +4,7 @@
 > - 🔥 **Priorité haute** · ⭐️ **Priorité moyenne** · ☁️ **Idées futures**
 > - 🟢 **Facile** | 🟡 **Moyen** | 🔴 **Difficile**
 
-Dernière version publiée : **v2.1.1**. Le format de fichier en est à la **v4**, non encore publié.
+Dernière version publiée : **v2.2.0**. Le format de fichier en est à la **v4**.
 
 ---
 
@@ -26,7 +26,7 @@ Interface guidée (`huh` + `bubbletea`) lancée sans argument, barre de progress
 - **Force du mot de passe** par zxcvbn, qui reconnaît les motifs de clavier et les mots du dictionnaire
 - **Refus d'écraser** une destination existante sans `-force`
 
-### En attente de publication *(v2.2)*
+### v2.2 — format v4, marche arrière et suppression après coup
 
 - **Retour arrière dans l'interface guidée** : `↑↓` pour choisir, `→` pour valider, `←` pour revenir — d'un écran à l'autre, en gardant les réponses
 - **Restitution du nom d'origine** au déchiffrement : il était stocké mais jamais ressorti

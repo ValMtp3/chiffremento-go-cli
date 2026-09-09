@@ -19,7 +19,7 @@
 **Chiffremento CLI** est un outil en ligne de commande écrit en Go pour chiffrer et déchiffrer des fichiers. Il s'utilise soit via une interface guidée, soit avec des flags pour les scripts.
 
 ```
-  chiffremento chiffrement  v2.1.1
+  chiffremento chiffrement  v2.2.0
 ┌────────────────────────────────────────────────────┐
 │  entrée    rapport-annuel.pdf             14.2 Mo  │
 │  sortie    rapport-annuel.pdf.chto                 │
@@ -33,9 +33,22 @@
 └────────────────────────────────────────────────────┘
 ```
 
+## ✨ Nouveautés v2.2
+
+> Le **format de fichier** est passé en v4 dans cette version. Les deux numéros sont indépendants : la version du programme suit ses fonctionnalités, celle du format sa structure binaire. `chiffremento -mode info` affiche celle d'un fichier donné. Les `.chto` en v1, v2 et v3 restent déchiffrables.
+
+- **🔐 Format v4 — engagement de clé** : un témoin de 32 octets sur la clé maîtresse, comparé avant tout déchiffrement. Un mot de passe faux est annoncé comme tel, au lieu d'une erreur d'authentification en fin de lecture, et l'attaque par oracle de partitionnement n'a plus de prise.
+- **📦 Format v4 — enveloppe DEK/KEK** : la clé qui chiffre le contenu est tirée au hasard puis scellée dans l'en-tête. Elle ne dépend plus du mot de passe, ce qui rend possible le point suivant.
+- **🔑 `-mode passwd`** : changer le mot de passe en réécrivant 117 octets d'en-tête, quelle que soit la taille du fichier. Le contenu n'est pas relu.
+- **↩️ Marche arrière dans l'interface guidée** : `↑↓` parcourent les réponses, `→` valide, `←` revient à la décision précédente — d'un écran à l'autre, en gardant les réponses déjà données. Dans un champ texte et dans l'explorateur, où `←` sert déjà, le retour se fait avec `shift+tab`.
+- **🏷️ Restitution du nom d'origine** : conservé par `-meta minimal`, il était stocké mais jamais ressorti. Il n'est lisible qu'une fois le contenu authentifié.
+- **🎭 Brouillage du nom et de la date** du fichier produit : sortie sous un nom tiré au hasard — `3fb8db8ee5db3891.chto` — et datée du 1ᵉʳ janvier 2000. Le déchiffrement restitue les deux.
+- **🗑️ Suppression après coup** de ce que l'opération remplace : l'original après un chiffrement, le `.chto` après un déchiffrement. Effacer un original n'a lieu qu'après relecture et authentification complète du chiffré. « Garder » est toujours la réponse sous le curseur.
+- **📏 `-pad-niveau standard|fort|maximum`** : largeur du palier de remplissage, de « quelques pour cent » à « toute une octave sort à la même taille ».
+
 ## ✨ Nouveautés v2.1
 
-> Le **format de fichier** est passé en v4 dans cette version. Les deux numéros sont indépendants : la version du programme suit ses fonctionnalités, celle du format sa structure binaire. `chiffremento -mode info` affiche celle d'un fichier donné.
+> Le **format de fichier** était passé en v3 dans cette version.
 
 - **📁 Dossiers** : chiffrer un dossier entier, empaqueté en tar au fil du chiffrement et recréé à l'identique au déchiffrement.
 - **🗜️ zstd** : remplace gzip, mesuré ~8× plus rapide à ratio comparable. gzip n'est plus produit, seulement relu : les `.chto` v1 et v2 compressés restent déchiffrables. La compression est désormais décrite par un champ de l'en-tête plutôt que par un simple bit.
@@ -332,9 +345,22 @@ Le mode parano ne remplace pas un bon mot de passe : il protège contre la déco
 
 **Chiffremento CLI** is a command-line tool written in Go for encrypting and decrypting files. It offers a guided interface, or flags for scripting.
 
+## ✨ New in v2.2
+
+> The **file format** moved to v4 in this release. The two numbers are independent: the program version tracks its features, the format version tracks its binary layout. `chiffremento -mode info` shows a given file's format version. v1, v2 and v3 `.chto` files stay decryptable.
+
+- **🔐 Format v4 — key commitment**: a 32-byte tag over the master key, checked before any decryption. A wrong password is reported as such instead of surfacing as an authentication failure at the end of the read, and partitioning-oracle attacks lose their footing.
+- **📦 Format v4 — DEK/KEK envelope**: the key that encrypts the contents is drawn at random and sealed inside the header. It no longer depends on the password, which is what makes the next item possible.
+- **🔑 `-mode passwd`**: change the password by rewriting 117 header bytes, whatever the file size. The contents are not read back.
+- **↩️ Going back in the guided interface**: `↑↓` move through the answers, `→` confirms, `←` returns to the previous decision — across screens, keeping the answers already given. In a text field and in the file browser, where `←` is already taken, `shift+tab` goes back.
+- **🏷️ Original name restored**: kept by `-meta minimal`, it was stored but never surfaced. It is only readable once the contents are authenticated.
+- **🎭 Name and date scrambling** for the produced file: written under a random name — `3fb8db8ee5db3891.chto` — and dated 1 January 2000. Decryption restores both.
+- **🗑️ Delete what was replaced**, once the operation is done: the original after an encryption, the `.chto` after a decryption. An original is only erased after the ciphertext has been fully read back and authenticated. “Keep” is always the answer under the cursor.
+- **📏 `-pad-niveau standard|fort|maximum`**: padding bucket width, from “a few percent” to “a whole octave comes out at the same size”.
+
 ## ✨ New in v2.1
 
-> The **file format** moved to v4 in this release. The two numbers are independent: the program version tracks its features, the format version tracks its binary layout. `chiffremento -mode info` shows a given file's format version.
+> The **file format** had moved to v3 in that release.
 
 - **📁 Folders**: encrypt a whole folder, packed into a tar stream as it is encrypted and recreated as-is on decryption.
 - **🗜️ zstd**: replaces gzip, measured ~8× faster at a comparable ratio. gzip is no longer produced, only read back: compressed v1 and v2 `.chto` files stay decryptable. Compression is now described by a header field rather than a single bit.
