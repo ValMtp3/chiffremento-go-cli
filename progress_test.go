@@ -23,7 +23,7 @@ func demoModel(ratio float64) *progressModel {
 		Size:   total,
 		AEAD:   "aes-256-gcm",
 		KDF:    "argon2id  m=256MiB t=3 p=4",
-		Salt:   "16 o aléatoires · en-tête lié à la clé",
+		Salt:   "16 o aléatoires · en-tête authentifié",
 	}, &done)
 	return m
 }

@@ -42,6 +42,17 @@ func runTUI() error {
 	action := "enc"
 	mode := "saisie"
 	path := ""
+	// Les options de chiffrement vivent ici, et non dans tuiEncrypt : un « ← » de
+	// trop sur la première question repasse par la boucle ci-dessous, et des
+	// options déclarées plus bas seraient reconstruites à zéro — les neuf
+	// réponses déjà données, mot de passe compris, disparaîtraient alors que la
+	// grammaire de navigation promet le contraire.
+	//
+	// Elles sont en revanche remises à neuf quand la cible change : le choix de
+	// compresser suit le fait que ce soit un dossier ou un fichier, et le nom du
+	// fichier a pu peser sur les autres réponses.
+	var options optionsChiffrement
+	optionsPour := ""
 	for {
 		// Premier écran : rien derrière lui, donc aucune ancre de retour.
 		if err := lancerEtape(choixForm(&action, &mode), nil); err != nil {
@@ -65,7 +76,10 @@ func runTUI() error {
 			case "passwd":
 				err = tuiPasswd(path)
 			default:
-				err = tuiEncrypt(path)
+				if path != optionsPour {
+					options, optionsPour = optionsChiffrement{}, path
+				}
+				err = tuiEncrypt(path, &options)
 			}
 			if errors.Is(err, errRetour) {
 				continue // retour au choix de la cible
@@ -369,7 +383,22 @@ func encryptForm(o *optionsChiffrement, estDossier bool, tailleClair int64) (*hu
 	return form, algoChamp
 }
 
-func tuiEncrypt(path string) error {
+// appliquerDefauts renseigne des options neuves, et ne touche à rien d'autre.
+//
+// La distinction compte pour le retour en arrière : revenir sur cet écran doit
+// retrouver les réponses déjà données, pas les remettre à zéro. Aucune valeur
+// par défaut n'est le zéro de son type — AlgoAES vaut 1, les profils sont des
+// chaînes non vides — donc la struct zéro désigne sans ambiguïté des options
+// jamais renseignées.
+func appliquerDefauts(o *optionsChiffrement, estDossier bool) {
+	if *o != (optionsChiffrement{}) {
+		return
+	}
+	o.algo, o.kdf, o.padNiveau = pkg.AlgoAES, pkg.KDFStandard, pkg.PadStandard
+	o.compresser = estDossier
+}
+
+func tuiEncrypt(path string, o *optionsChiffrement) error {
 	// Un dossier est presque toujours un mélange de texte, de code et de
 	// métadonnées répétitives, et le tar ajoute lui-même beaucoup de zéros de
 	// bourrage : la compression y gagne largement plus que sur un fichier
@@ -385,10 +414,7 @@ func tuiEncrypt(path string) error {
 	//
 	// Les métadonnées ne concernent qu'un fichier : l'archive tar d'un dossier
 	// porte déjà noms, dates et permissions de chaque entrée.
-	o := optionsChiffrement{
-		algo: pkg.AlgoAES, kdf: pkg.KDFStandard,
-		compresser: estDossier, padNiveau: pkg.PadStandard,
-	}
+	appliquerDefauts(o, estDossier)
 
 	// La taille sert à annoncer ce que coûterait chaque palier. Inconnue — un
 	// dossier, un chemin illisible —, padHint se rabat sur les pourcentages.
@@ -400,7 +426,7 @@ func tuiEncrypt(path string) error {
 	// La boucle sert au retour depuis la question de l'écrasement : on
 	// réaffiche les options, avec les réponses déjà saisies.
 	for {
-		form, ancre := encryptForm(&o, estDossier, tailleClair)
+		form, ancre := encryptForm(o, estDossier, tailleClair)
 		if err := lancerEtape(form, ancre); err != nil {
 			return err
 		}
@@ -445,7 +471,7 @@ func tuiEncrypt(path string) error {
 		}
 		// La ligne « sel » du cadre reste sur une seule ligne : les mentions
 		// s'y ajoutent plutôt que de casser la mise en page.
-		salt := "16 o aléatoires · en-tête lié à la clé"
+		salt := "16 o aléatoires · en-tête authentifié"
 		switch {
 		case estDossier && o.pad:
 			salt = "16 o aléatoires · dossier tar · taille masquée"
@@ -474,16 +500,23 @@ func tuiEncrypt(path string) error {
 		}); err != nil {
 			return err
 		}
+		errSuppression := supprimerOriginal(path, out, o.password, estDossier)
 		if o.brouiller {
-			// La date se pose après coup : le fichier n'existe pas avant. Un
-			// échec ici ne perd rien — le chiffré est écrit et valide — mais il
+			// La date se pose après coup : le fichier n'existe pas avant. Elle se
+			// pose surtout en dernier, après supprimerOriginal — celui-ci relit le
+			// chiffré en entier pour l'authentifier avant d'effacer l'original, et
+			// cette lecture remet la date d'accès à l'heure réelle. Poser la date
+			// neutre avant revenait à la faire défaire aussitôt : « ls -lu »
+			// rendait l'heure du chiffrement.
+			//
+			// Un échec ici ne perd rien — le chiffré est écrit et valide — mais il
 			// laisse la vraie date en place, donc il se dit. Le taire ferait
 			// croire à une protection qui n'a pas eu lieu.
 			if err := brouillerDate(out); err != nil {
 				fmt.Fprintf(os.Stderr, "  %s  %s\n\n", styleError.Render("!"), err)
 			}
 		}
-		return supprimerOriginal(path, out, o.password, estDossier)
+		return errSuppression
 	}
 }
 
@@ -609,8 +642,17 @@ func restituerNom(out string, meta *pkg.FileMetadata) error {
 	if !renommer {
 		return nil
 	}
+	// Un renommage raté ne perd rien : le clair est écrit, authentifié et
+	// complet, seul son nom reste celui de la sortie. Le remonter comme une
+	// erreur ferait sortir en code 1 sur un déchiffrement réussi — et le cas
+	// n'est pas théorique sous Windows, qui refuse « < > : " | ? * » et les noms
+	// de périphériques réservés là où l'assainissement du nom d'origine, pensé
+	// pour les séparateurs, les laisse passer.
 	if err := os.Rename(out, cible); err != nil {
-		return fmt.Errorf("renommage en %s: %w", meta.Name, err)
+		fmt.Fprintf(os.Stderr, "  %s  %s\n\n", styleError.Render("!"),
+			fmt.Sprintf("renommage en %s impossible (%v) : le fichier reste sous %s",
+				meta.Name, err, filepath.Base(out)))
+		return nil
 	}
 	fmt.Printf("  %s  %s\n\n", styleAccent.Render("✓"), styleText.Render(cible))
 	return nil
@@ -693,8 +735,9 @@ func tuiPasswd(path string) error {
 	if err := pkg.ChangePassword(path, []byte(ancien), []byte(nouveau)); err != nil {
 		return err
 	}
-	fmt.Printf("  %s  %s\n\n", styleAccent.Render("✓"),
+	fmt.Printf("  %s  %s\n", styleAccent.Render("✓"),
 		styleText.Render("mot de passe changé, le contenu n'a pas été retouché"))
+	fmt.Printf("  %s\n\n", styleFaint.Render(avertissementRevocation))
 	return nil
 }
 
@@ -767,6 +810,10 @@ func runJob(info jobInfo, op func(progress func(done, total int64)) error) error
 			fmt.Fprintln(os.Stderr, "\ninterrompu")
 			os.Exit(exitInterrompu)
 		}
+		// Toute autre panne de l'affichage laisse l'opération en cours : la même
+		// sortie franche s'impose, sinon le processus meurt sur le retour d'erreur
+		// en abandonnant un .chto-tmp-* dans le dossier de l'utilisateur.
+		pkg.CleanupTemporaries()
 		return err
 	}
 	if err := <-errCh; err != nil {

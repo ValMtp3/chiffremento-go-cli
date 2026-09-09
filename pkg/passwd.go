@@ -112,35 +112,79 @@ func ChangePassword(path string, oldPassword, newPassword []byte) error {
 	// qu'une fois le nouveau sur le disque. Sa création est exclusive : elle sert
 	// du même coup de verrou, et deux changements lancés en même temps sur le
 	// même fichier ne peuvent plus s'entrelacer.
-	if err := ecrireSauvegarde(path, ancienEntete); err != nil {
+	sauvegarde := path + suffixeSauvegarde
+	if err := ecrireSauvegarde(sauvegarde, ancienEntete); err != nil {
 		return err
 	}
 
-	if _, err := f.WriteAt(entete, 0); err != nil {
+	// À partir d'ici la sauvegarde sort du registre des temporaires : elle devient
+	// le seul en-tête dont on soit sûr, et un Ctrl+C ne doit surtout plus
+	// l'effacer. Le prix est qu'une interruption la laisse sur le disque — voir
+	// l'avertissement de révocation en tête de fichier.
+	untrackTemp(sauvegarde)
+
+	if _, err := ecrireAOctetZero(f, entete); err != nil {
 		// Tentative de retour en arrière avec ce qu'on a encore en mémoire.
-		// Réussie, elle rend le fichier à son ancien mot de passe ; échouée, la
-		// sauvegarde reste sur le disque et le message dit quoi en faire.
-		if _, errRetour := f.WriteAt(ancienEntete, 0); errRetour == nil {
-			f.Sync()
-			os.Remove(path + suffixeSauvegarde)
-			return fmt.Errorf("réécriture de l'en-tête: %w (le fichier a été remis dans son état d'origine)", err)
+		//
+		// Le Sync compte autant que le WriteAt : sans lui les octets ne sont que
+		// dans le cache du système, et retirer la sauvegarde sur la foi d'une
+		// écriture non confirmée détruirait le seul en-tête encore valide. Tant
+		// que le retour en arrière n'est pas confirmé, la sauvegarde reste.
+		if _, errRetour := ecrireAOctetZero(f, ancienEntete); errRetour == nil {
+			if errSync := syncFichier(f); errSync == nil {
+				if errRm := os.Remove(sauvegarde); errRm != nil {
+					return fmt.Errorf("réécriture de l'en-tête: %w\n  le fichier a été remis dans son état d'origine ; "+
+						"la sauvegarde %s n'a pas pu être retirée (%v) et peut être supprimée", err, sauvegarde, errRm)
+				}
+				return fmt.Errorf("réécriture de l'en-tête: %w (le fichier a été remis dans son état d'origine)", err)
+			}
 		}
-		return fmt.Errorf("réécriture de l'en-tête: %w\n  l'en-tête d'origine est dans %s%s : "+
-			"le remettre en place avec « dd if=%s%s of=%s bs=%d count=1 conv=notrunc »",
-			err, path, suffixeSauvegarde, path, suffixeSauvegarde, path, headerSizeV4)
+		return fmt.Errorf("réécriture de l'en-tête: %w\n  l'en-tête d'origine est dans %s : "+
+			"le remettre en place avec « dd if=%s of=%s bs=%d count=1 conv=notrunc »",
+			err, sauvegarde, sauvegarde, path, headerSizeV4)
 	}
-	if err := f.Sync(); err != nil {
-		return fmt.Errorf("synchronisation sur disque: %w", err)
+	if err := syncFichier(f); err != nil {
+		return fmt.Errorf("synchronisation sur disque: %w\n%s", err, conseilSauvegarde(path, sauvegarde))
 	}
 	ferme = false
 	if err := f.Close(); err != nil {
-		return err
+		return fmt.Errorf("fermeture de %s: %w\n%s", path, err, conseilSauvegarde(path, sauvegarde))
 	}
 	// Le nouvel en-tête est sur le disque : la sauvegarde n'a plus lieu d'être.
-	if err := os.Remove(path + suffixeSauvegarde); err != nil {
-		return fmt.Errorf("suppression de la sauvegarde d'en-tête: %w", err)
+	// C'est aussi ce qui retire du disque l'en-tête que l'ancien mot de passe
+	// ouvrait, et donc la seule copie que ce changement pouvait révoquer.
+	if err := os.Remove(sauvegarde); err != nil {
+		return fmt.Errorf("suppression de la sauvegarde d'en-tête: %w\n  "+
+			"le mot de passe est bien changé, mais %s reste sur le disque : "+
+			"l'ancien mot de passe l'ouvre encore, à supprimer", err, sauvegarde)
 	}
 	return nil
+}
+
+// syncFichier et ecrireAOctetZero enveloppent les deux appels dont l'échec
+// décide du sort du fichier. Indirections de paquet pour que les tests puissent
+// simuler la panne : une clé USB retirée au bon millième de seconde ne se
+// reproduit pas à la demande, et c'est précisément le chemin où une sauvegarde
+// retirée trop tôt rend le fichier illisible avec les deux mots de passe.
+var (
+	syncFichier      = func(f *os.File) error { return f.Sync() }
+	ecrireAOctetZero = func(f *os.File, b []byte) (int, error) { return f.WriteAt(b, 0) }
+)
+
+// conseilSauvegarde dit quoi faire quand le nouvel en-tête est écrit sans avoir
+// été confirmé sur le disque, et que la sauvegarde est donc encore là.
+//
+// L'ordre des questions n'est pas indifférent : conseiller de remettre l'ancien
+// en-tête sans vérifier d'abord annulerait un changement peut-être abouti, et
+// ferait redemander un mot de passe que l'utilisateur croit avoir remplacé.
+func conseilSauvegarde(path, sauvegarde string) string {
+	return fmt.Sprintf("  l'en-tête d'origine est encore dans %s, et le nouveau est peut-être déjà en place.\n"+
+		"  Vérifie d'abord lequel ouvre le fichier avec « chiffremento -mode verify -in %s » :\n"+
+		"    — le nouveau mot de passe fonctionne : le changement est allé au bout, supprimer %s ;\n"+
+		"    — l'ancien fonctionne : le fichier est intact, supprimer %s ;\n"+
+		"    — aucun des deux : l'en-tête est incomplet, le restaurer avec\n"+
+		"      « dd if=%s of=%s bs=%d count=1 conv=notrunc »",
+		sauvegarde, path, sauvegarde, sauvegarde, sauvegarde, path, headerSizeV4)
 }
 
 // ecrireSauvegarde dépose l'ancien en-tête à côté du fichier, en refusant
@@ -149,26 +193,48 @@ func ChangePassword(path string, oldPassword, newPassword []byte) error {
 // O_EXCL fait les deux à la fois : il protège une sauvegarde laissée par un
 // changement interrompu — elle contient peut-être le seul en-tête encore valide
 // — et il empêche deux processus de réécrire le même fichier en même temps.
-func ecrireSauvegarde(path string, entete []byte) error {
-	nom := path + suffixeSauvegarde
+func ecrireSauvegarde(nom string, entete []byte) error {
 	f, err := os.OpenFile(nom, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
 	if errors.Is(err, os.ErrExist) {
 		return fmt.Errorf("%s existe déjà : soit un changement de mot de passe est en cours, "+
-			"soit le précédent a été interrompu — dans ce cas ce fichier contient l'en-tête d'origine, "+
-			"à remettre en place avant de réessayer", nom)
+			"soit le précédent a été interrompu.\n"+
+			"  Dans le second cas, vérifie lequel des deux mots de passe ouvre le fichier "+
+			"(« chiffremento -mode verify ») avant d'y toucher : si c'est le nouveau, "+
+			"le changement est allé au bout et ce fichier est à supprimer", nom)
 	}
 	if err != nil {
 		return fmt.Errorf("sauvegarde de l'en-tête: %w", err)
 	}
-	defer f.Close()
+	// Suivi le temps de l'écriture seulement : ici le fichier chiffré est encore
+	// intact, donc une sauvegarde à moitié écrite ne sert à rien et vaut mieux
+	// nettoyée qu'abandonnée. L'appelant la sort du registre avant de toucher au
+	// fichier, quand elle devient le filet.
+	trackTempFile(nom, f)
 
+	// Le Close vient avant le Remove, et non par un defer : Windows refuse de
+	// supprimer un fichier encore ouvert, et l'erreur passerait inaperçue —
+	// laissant derrière une sauvegarde tronquée que le message d'erreur ci-dessus
+	// présenterait comme un en-tête valide.
+	abandon := func(cause error) error {
+		f.Close()
+		if err := os.Remove(nom); err != nil {
+			untrackTemp(nom)
+			return fmt.Errorf("sauvegarde de l'en-tête: %w (le fichier incomplet %s n'a pas pu être retiré : "+
+				"le supprimer avant de réessayer)", cause, nom)
+		}
+		untrackTemp(nom)
+		return fmt.Errorf("sauvegarde de l'en-tête: %w", cause)
+	}
 	if _, err := f.Write(entete); err != nil {
-		os.Remove(nom)
-		return fmt.Errorf("sauvegarde de l'en-tête: %w", err)
+		return abandon(err)
 	}
-	if err := f.Sync(); err != nil {
-		os.Remove(nom)
-		return fmt.Errorf("sauvegarde de l'en-tête: %w", err)
+	if err := syncFichier(f); err != nil {
+		return abandon(err)
 	}
+	if err := f.Close(); err != nil {
+		return abandon(err)
+	}
+	// Le descripteur est fermé : le registre garde le chemin, plus le descripteur.
+	trackTempFile(nom, nil)
 	return nil
 }

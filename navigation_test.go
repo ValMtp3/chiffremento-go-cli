@@ -281,3 +281,61 @@ func TestOuiNonEstUneListe(t *testing.T) {
 		t.Error("↑ ne change pas la réponse")
 	}
 }
+
+// TestOptionsSurviventAuRetour : un « ← » de trop sur la première question de
+// l'écran des options renvoie au choix de la cible, et l'écran est réaffiché
+// ensuite. Les réponses déjà données doivent s'y retrouver — c'est ce que
+// promet la grammaire de navigation, et ce que les options perdaient quand
+// elles étaient déclarées dans tuiEncrypt plutôt que dans runTUI.
+func TestOptionsSurviventAuRetour(t *testing.T) {
+	saisi := optionsChiffrement{
+		algo:       pkg.AlgoChaCha,
+		kdf:        pkg.KDFMaximum,
+		pad:        true,
+		padNiveau:  pkg.PadFort,
+		garderMeta: true,
+		brouiller:  true,
+		password:   "phrase de passe déjà tapée",
+		confirm:    "phrase de passe déjà tapée",
+	}
+	o := saisi
+
+	// Le réaffichage de l'écran repasse par appliquerDefauts.
+	appliquerDefauts(&o, false)
+
+	if o != saisi {
+		t.Errorf("les réponses ont été réinitialisées au retour :\n  avant %+v\n  après %+v", saisi, o)
+	}
+}
+
+// TestOptionsNeuvesPrennentLesDefauts : à l'inverse, une cible qu'on aborde
+// pour la première fois part des valeurs par défaut — et la compression suit le
+// fait que ce soit un dossier, où le tar et les métadonnées répétitives la
+// rendent nettement plus payante.
+func TestOptionsNeuvesPrennentLesDefauts(t *testing.T) {
+	for _, cas := range []struct {
+		nom        string
+		estDossier bool
+	}{
+		{"fichier", false},
+		{"dossier", true},
+	} {
+		t.Run(cas.nom, func(t *testing.T) {
+			var o optionsChiffrement
+			appliquerDefauts(&o, cas.estDossier)
+
+			if o.algo != pkg.AlgoAES {
+				t.Errorf("algorithme par défaut = %d, attendu AES (%d)", o.algo, pkg.AlgoAES)
+			}
+			if o.kdf != pkg.KDFStandard {
+				t.Errorf("profil KDF par défaut = %q, attendu %q", o.kdf, pkg.KDFStandard)
+			}
+			if o.padNiveau != pkg.PadStandard {
+				t.Errorf("palier par défaut = %q, attendu %q", o.padNiveau, pkg.PadStandard)
+			}
+			if o.compresser != cas.estDossier {
+				t.Errorf("compression par défaut = %v, attendu %v", o.compresser, cas.estDossier)
+			}
+		})
+	}
+}

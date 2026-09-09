@@ -3,6 +3,7 @@ package pkg
 import (
 	"bytes"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"testing"
@@ -241,5 +242,120 @@ func TestChangePasswordEntreesInvalides(t *testing.T) {
 	}
 	if err := ChangePassword(pasUnChto, []byte("a"), []byte("b")); err == nil {
 		t.Error("un fichier sans en-tête valide a été accepté")
+	}
+}
+
+// TestChangePasswordSyncEnEchecGardeLaSauvegarde : le cas qui coûte le fichier.
+//
+// Une écriture en échec suivie d'un retour en arrière n'est acquise que si le
+// Sync la confirme. Sans lui les octets restent dans le cache du système : la
+// clé USB retirée à cet instant garde un en-tête mi-ancien mi-nouveau, et
+// retirer la sauvegarde sur la foi de ce retour en arrière détruirait le seul
+// en-tête encore valide — le fichier deviendrait illisible avec les deux mots
+// de passe.
+func TestChangePasswordSyncEnEchecGardeLaSauvegarde(t *testing.T) {
+	chto := chiffreV4(t, []byte("contenu"), Options{})
+	sauvegarde := chto + suffixeSauvegarde
+	entete := lireEntete(t, chto)
+
+	// Le Sync échoue pour de bon, mais seulement après que la sauvegarde est
+	// écrite : c'est la fenêtre où le fichier est à découvert.
+	original := syncFichier
+	t.Cleanup(func() { syncFichier = original })
+	var appels int
+	syncFichier = func(f *os.File) error {
+		appels++
+		if appels == 1 {
+			return original(f) // l'écriture de la sauvegarde aboutit
+		}
+		return errors.New("disque retiré")
+	}
+
+	err := ChangePassword(chto, []byte(motDePasseV4), []byte("nouveau-mot-de-passe"))
+	if err == nil {
+		t.Fatal("le changement s'est déclaré réussi malgré un Sync en échec")
+	}
+
+	garde, errLecture := os.ReadFile(sauvegarde)
+	if errLecture != nil {
+		t.Fatalf("la sauvegarde a été supprimée alors que rien n'était confirmé sur le disque: %v", errLecture)
+	}
+	if !bytes.Equal(garde, entete) {
+		t.Error("la sauvegarde ne contient pas l'en-tête d'origine")
+	}
+	// Le message doit conduire à vérifier avant de restaurer : conseiller le dd
+	// d'emblée annulerait un changement peut-être abouti.
+	if !strContains(err.Error(), "verify") {
+		t.Errorf("le message ne dit pas de vérifier quel mot de passe ouvre le fichier: %v", err)
+	}
+}
+
+// lireEntete rend les headerSizeV4 premiers octets du fichier.
+func lireEntete(t *testing.T, path string) []byte {
+	t.Helper()
+	f, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	buf := make([]byte, headerSizeV4)
+	if _, err := io.ReadFull(f, buf); err != nil {
+		t.Fatal(err)
+	}
+	return buf
+}
+
+// TestChangePasswordRetourArriereNonConfirmeGardeLaSauvegarde : le scénario
+// exact de la clé USB retirée.
+//
+// L'écriture du nouvel en-tête échoue, le retour en arrière semble réussir —
+// mais il n'écrit que dans le cache du système, et le Sync qui devait le
+// confirmer échoue à son tour. Rien n'est acquis sur le disque : la sauvegarde
+// est le seul en-tête encore valide, et la supprimer ici perdrait le fichier
+// pour de bon. Le message doit alors donner la commande de restauration.
+func TestChangePasswordRetourArriereNonConfirmeGardeLaSauvegarde(t *testing.T) {
+	chto := chiffreV4(t, []byte("contenu"), Options{})
+	sauvegarde := chto + suffixeSauvegarde
+	entete := lireEntete(t, chto)
+
+	origineSync, origineEcriture := syncFichier, ecrireAOctetZero
+	t.Cleanup(func() { syncFichier, ecrireAOctetZero = origineSync, origineEcriture })
+
+	// L'écriture du nouvel en-tête échoue ; celle du retour en arrière passe.
+	var ecritures int
+	ecrireAOctetZero = func(f *os.File, b []byte) (int, error) {
+		ecritures++
+		if ecritures == 1 {
+			return 0, errors.New("disque retiré")
+		}
+		return origineEcriture(f, b)
+	}
+	// Le Sync de la sauvegarde aboutit, celui du retour en arrière échoue.
+	var syncs int
+	syncFichier = func(f *os.File) error {
+		syncs++
+		if syncs == 1 {
+			return origineSync(f)
+		}
+		return errors.New("disque retiré")
+	}
+
+	err := ChangePassword(chto, []byte(motDePasseV4), []byte("nouveau-mot-de-passe"))
+	if err == nil {
+		t.Fatal("le changement s'est déclaré réussi alors que rien n'a été confirmé")
+	}
+	if strContains(err.Error(), "remis dans son état d'origine") {
+		t.Errorf("le message affirme un retour en arrière qui n'a pas été confirmé: %v", err)
+	}
+
+	garde, errLecture := os.ReadFile(sauvegarde)
+	if errLecture != nil {
+		t.Fatalf("la sauvegarde a été supprimée alors qu'elle était le seul en-tête valide: %v", errLecture)
+	}
+	if !bytes.Equal(garde, entete) {
+		t.Error("la sauvegarde ne contient pas l'en-tête d'origine")
+	}
+	if !strContains(err.Error(), "dd if=") {
+		t.Errorf("le message ne donne pas la commande de restauration: %v", err)
 	}
 }

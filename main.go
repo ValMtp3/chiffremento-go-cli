@@ -457,8 +457,26 @@ func doPasswd(in string) error {
 	}
 	fmt.Fprintf(os.Stderr, "%s %s\n", styleAccent.Render("✓"),
 		"mot de passe changé, le contenu n'a pas été retouché")
+	// Ce que le changement ne fait pas. La clé du contenu, elle, ne change pas :
+	// seule l'enveloppe qui la scelle est refermée sous un autre mot de passe.
+	// Quiconque a gardé les 117 octets d'en-tête d'avant rouvre donc le fichier
+	// avec l'ancien mot de passe. Le taire tromperait précisément l'utilisateur
+	// qui change son mot de passe parce qu'il le croit compromis.
+	fmt.Fprintf(os.Stderr, "%s %s\n", styleDim.Render(" "), styleDim.Render(avertissementRevocation))
 	return nil
 }
+
+// avertissementRevocation dit ce que le changement de mot de passe ne fait pas.
+//
+// L'enveloppe scelle une clé de contenu tirée au hasard : changer de mot de
+// passe la rescelle sans la remplacer. Toute copie de l'ancien en-tête — une
+// sauvegarde, un instantané de système de fichiers — rouvre donc le fichier
+// avec l'ancien mot de passe. C'est le prix de l'opération instantanée, et
+// l'utilisateur qui change son mot de passe parce qu'il le croit compromis doit
+// le savoir.
+const avertissementRevocation = "l'ancien mot de passe ouvre encore toute copie de ce fichier " +
+	"antérieure au changement (sauvegarde, instantané) : pour une révocation complète, " +
+	"déchiffrer puis rechiffrer"
 
 func doInfo(in string) error {
 	if isStream(in) {
@@ -488,9 +506,15 @@ func doInfo(in string) error {
 		true:  "oui, nom et date à l'intérieur du chiffré",
 		false: "non",
 	}[d.Metadata])
-	if d.Version < 3 {
+	if d.Version < pkg.VersionEnveloppe {
+		// Le seuil est celui de l'enveloppe et non celui de la lecture seule : un
+		// v3 s'écrit encore mais n'a pas d'engagement de clé, donc rien n'y
+		// distingue un mot de passe faux d'un fichier abîmé avant la fin de la
+		// lecture. C'est la différence qui compte pour qui inspecte un fichier.
 		fmt.Println(styleDim.Render(fmt.Sprintf(
-			"  produit par un format v%d : lecture seule, les nouveaux fichiers sont en v3", d.Version)))
+			"  produit par un format v%d : lecture seule, les nouveaux fichiers sont en v%d "+
+				"— sans engagement de clé ni enveloppe, donc sans changement de mot de passe possible",
+			d.Version, pkg.VersionCourante)))
 	}
 	return nil
 }

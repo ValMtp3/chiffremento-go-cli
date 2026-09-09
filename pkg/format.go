@@ -65,6 +65,12 @@ const (
 	currentVersion = versionV4
 )
 
+// VersionCourante est la version de format écrite par ce binaire.
+//
+// Exportée pour que l'interface l'annonce sans la recopier : un « les nouveaux
+// fichiers sont en v3 » figé dans un message a survécu au passage à la v4.
+const VersionCourante = currentVersion
+
 // Drapeaux du header. Tout bit non listé dans knownFlags est refusé à la
 // lecture : ça garde la place libre pour de futures options sans qu'un vieux
 // binaire n'interprète un fichier récent de travers.

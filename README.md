@@ -26,7 +26,7 @@
 │                                                    │
 │  aead      aes-256-gcm                             │
 │  kdf       argon2id  m=256MiB t=3 p=4              │
-│  sel       16 o aléatoires · en-tête lié à la clé  │
+│  sel       16 o aléatoires · en-tête authentifié   │
 │                                                    │
 │  ██ ██ ██ ██ ██ d6 23 76 e5 47 23 67 8b 1d         │
 │  ████████████░░░░░░░░░░░░░░░░░░  42%      38 Mo/s  │
@@ -39,11 +39,11 @@
 
 - **🔐 Format v4 — engagement de clé** : un témoin de 32 octets sur la clé maîtresse, comparé avant tout déchiffrement. Un mot de passe faux est annoncé comme tel, au lieu d'une erreur d'authentification en fin de lecture, et l'attaque par oracle de partitionnement n'a plus de prise.
 - **📦 Format v4 — enveloppe DEK/KEK** : la clé qui chiffre le contenu est tirée au hasard puis scellée dans l'en-tête. Elle ne dépend plus du mot de passe, ce qui rend possible le point suivant.
-- **🔑 `-mode passwd`** : changer le mot de passe en réécrivant 117 octets d'en-tête, quelle que soit la taille du fichier. Le contenu n'est pas relu.
+- **🔑 `-mode passwd`** : changer le mot de passe en réécrivant 117 octets d'en-tête, quelle que soit la taille du fichier. Le contenu n'est pas relu. Réservé aux fichiers en v4 : avant, la clé du contenu venait du mot de passe, donc en changer imposait de tout re-chiffrer. Attention, l'ancien mot de passe continue d'ouvrir toute **copie** du fichier antérieure au changement — sauvegarde, instantané : pour une révocation complète, déchiffrer puis rechiffrer.
 - **↩️ Marche arrière dans l'interface guidée** : `↑↓` parcourent les réponses, `→` valide, `←` revient à la décision précédente — d'un écran à l'autre, en gardant les réponses déjà données. Dans un champ texte et dans l'explorateur, où `←` sert déjà, le retour se fait avec `shift+tab`.
 - **🏷️ Restitution du nom d'origine** : conservé par `-meta minimal`, il était stocké mais jamais ressorti. Il n'est lisible qu'une fois le contenu authentifié.
-- **🎭 Brouillage du nom et de la date** du fichier produit : sortie sous un nom tiré au hasard — `3fb8db8ee5db3891.chto` — et datée du 1ᵉʳ janvier 2000. Le déchiffrement restitue les deux.
-- **🗑️ Suppression après coup** de ce que l'opération remplace : l'original après un chiffrement, le `.chto` après un déchiffrement. Effacer un original n'a lieu qu'après relecture et authentification complète du chiffré. « Garder » est toujours la réponse sous le curseur.
+- **🎭 Brouillage du nom et de la date** du fichier produit, dans l'interface guidée : sortie sous un nom tiré au hasard — `3fb8db8ee5db3891.chto` — et datée du 1ᵉʳ janvier 2000. Le déchiffrement restitue les deux.
+- **🗑️ Suppression après coup** de ce que l'opération remplace, dans l'interface guidée : l'original après un chiffrement, le `.chto` après un déchiffrement. Effacer un original n'a lieu qu'après relecture et authentification complète du chiffré. « Garder » est toujours la réponse sous le curseur.
 - **📏 `-pad-niveau standard|fort|maximum`** : largeur du palier de remplissage, de « quelques pour cent » à « toute une octave sort à la même taille ».
 
 ## ✨ Nouveautés v2.1
@@ -80,7 +80,7 @@
 - **🔗 Composable** : `-in -` et `-out -` lisent et écrivent sur les flux standard.
 - **📊 Indicateur de force réaliste** : la robustesse du mot de passe est évaluée par [`zxcvbn`](https://github.com/trustelem/zxcvbn), qui reconnaît les mots de dictionnaire, les prénoms, les dates et les suites de touches. `azerty123` est annoncé à ~13 bits, pas à ~60.
 - **😱 Mode parano** : double chiffrement en cascade (ChaCha20 à l'extérieur, AES à l'intérieur), avec deux clés dérivées indépendamment par HKDF.
-- **🔗 En-tête lié à la clé** : version, drapeaux, algorithme, paramètres Argon2 et sel entrent tous dans la dérivation. Modifier un seul octet de l'en-tête fait échouer le déchiffrement.
+- **🔗 En-tête authentifié** : version, drapeaux, algorithme, paramètres Argon2, sel et engagement de clé servent tous de données associées au scellement de l'enveloppe. Modifier un seul octet de l'en-tête empêche le déchiffrement. Jusqu'au format v3, ce liage passait par la dérivation de la clé elle-même.
 
 ## 📥 Installation
 
@@ -222,6 +222,12 @@ Changer le mot de passe sans re-chiffrer le contenu — l'ancien est demandé, p
 chiffremento -mode passwd -in document.txt.chto
 ```
 
+Le fichier doit être en format v4 : dans les formats précédents la clé du contenu vient du mot de passe, donc en changer revient à tout re-chiffrer. `-mode info` dit de quel format il s'agit.
+
+Le temps du remplacement, l'ancien en-tête est déposé à côté sous `document.txt.chto.entete-precedent`, puis retiré. C'est le filet contre une écriture interrompue : une coupure au mauvais moment laisserait sinon un en-tête ni ancien ni nouveau, et un fichier qu'aucun mot de passe n'ouvrirait. S'il subsiste après une interruption, ne pas le remettre en place à l'aveugle — vérifier d'abord lequel des deux mots de passe ouvre le fichier avec `-mode verify`.
+
+⚠️ Ce changement ne révoque pas l'ancien mot de passe sur les **copies** déjà faites. La clé du contenu ne change pas : elle est simplement rescellée. Qui possède une sauvegarde de l'en-tête d'avant — instantané de système de fichiers, historique d'un service de synchronisation — rouvre le fichier avec l'ancien mot de passe. Pour une révocation réelle, déchiffrer puis rechiffrer.
+
 Mode parano avec compression :
 
 ```bash
@@ -244,9 +250,9 @@ Trois largeurs de palier au choix. Ce qui compte n'est pas la taille du palier, 
 
 | `-pad-niveau` | tailles distinctes obtenues | surcoût maximal |
 |---|---|---|
-| `standard` *(défaut)* | 7 605 925 · 7 737 061 · 7 999 333 | ~12 % |
-| `fort` | 7 605 925 · 7 868 197 · 8 130 469 | ~25 % |
-| `maximum` | 8 392 741 — **une seule** | ~100 % |
+| `standard` *(défaut)* | 7 606 005 · 7 737 141 · 7 868 277 · 7 999 413 | ~12 % |
+| `fort` | 7 606 005 · 7 868 277 · 8 130 549 | ~25 % |
+| `maximum` | 8 392 821 — **une seule** | ~100 % |
 
 ```bash
 chiffremento -mode enc -in contrat.pdf -pad -pad-niveau maximum
@@ -351,11 +357,11 @@ Le mode parano ne remplace pas un bon mot de passe : il protège contre la déco
 
 - **🔐 Format v4 — key commitment**: a 32-byte tag over the master key, checked before any decryption. A wrong password is reported as such instead of surfacing as an authentication failure at the end of the read, and partitioning-oracle attacks lose their footing.
 - **📦 Format v4 — DEK/KEK envelope**: the key that encrypts the contents is drawn at random and sealed inside the header. It no longer depends on the password, which is what makes the next item possible.
-- **🔑 `-mode passwd`**: change the password by rewriting 117 header bytes, whatever the file size. The contents are not read back.
+- **🔑 `-mode passwd`**: change the password by rewriting 117 header bytes, whatever the file size. The contents are not read back. v4 files only: before that, the content key came from the password, so changing it meant re-encrypting everything. Note that the old password still opens any **copy** of the file predating the change — a backup, a snapshot: for a complete revocation, decrypt and re-encrypt.
 - **↩️ Going back in the guided interface**: `↑↓` move through the answers, `→` confirms, `←` returns to the previous decision — across screens, keeping the answers already given. In a text field and in the file browser, where `←` is already taken, `shift+tab` goes back.
 - **🏷️ Original name restored**: kept by `-meta minimal`, it was stored but never surfaced. It is only readable once the contents are authenticated.
-- **🎭 Name and date scrambling** for the produced file: written under a random name — `3fb8db8ee5db3891.chto` — and dated 1 January 2000. Decryption restores both.
-- **🗑️ Delete what was replaced**, once the operation is done: the original after an encryption, the `.chto` after a decryption. An original is only erased after the ciphertext has been fully read back and authenticated. “Keep” is always the answer under the cursor.
+- **🎭 Name and date scrambling** for the produced file, in the guided interface: written under a random name — `3fb8db8ee5db3891.chto` — and dated 1 January 2000. Decryption restores both.
+- **🗑️ Delete what was replaced**, once the operation is done, in the guided interface: the original after an encryption, the `.chto` after a decryption. An original is only erased after the ciphertext has been fully read back and authenticated. “Keep” is always the answer under the cursor.
 - **📏 `-pad-niveau standard|fort|maximum`**: padding bucket width, from “a few percent” to “a whole octave comes out at the same size”.
 
 ## ✨ New in v2.1
@@ -392,7 +398,7 @@ Le mode parano ne remplace pas un bon mot de passe : il protège contre la déco
 - **🔗 Composable**: `-in -` and `-out -` read from and write to the standard streams.
 - **📊 Realistic strength meter**: password strength is scored by [`zxcvbn`](https://github.com/trustelem/zxcvbn), which recognises dictionary words, names, dates and keyboard patterns. `azerty123` is reported at ~13 bits, not ~60.
 - **😱 Parano mode**: cascaded double encryption (ChaCha20 outside, AES inside) with two independently derived keys via HKDF.
-- **🔗 Key-bound header**: version, flags, algorithm, Argon2 parameters and salt all feed the key derivation. Changing a single header byte makes decryption fail.
+- **🔗 Authenticated header**: version, flags, algorithm, Argon2 parameters, salt and key commitment all act as associated data for the envelope seal. Changing a single header byte makes decryption fail. Up to format v3, that binding went through key derivation itself.
 
 ## 📥 Installation
 
@@ -534,6 +540,12 @@ Change the password without re-encrypting the contents — the old one is asked 
 chiffremento -mode passwd -in document.txt.chto
 ```
 
+The file must be in format v4: in earlier formats the content key comes from the password, so changing it amounts to re-encrypting everything. `-mode info` reports the format.
+
+While the header is being replaced, the previous one is written next to the file as `document.txt.chto.entete-precedent`, then removed. It is the safety net against an interrupted write: without it, a badly timed power cut would leave a header that is neither the old nor the new one, and a file no password could open. If it survives an interruption, do not restore it blindly — first check which of the two passwords opens the file, with `-mode verify`.
+
+⚠️ This change does not revoke the old password on **copies** already made. The content key does not change: it is merely resealed. Anyone holding a backup of the earlier header — a filesystem snapshot, a sync service's version history — reopens the file with the old password. For a real revocation, decrypt and re-encrypt.
+
 Parano mode with compression:
 
 ```bash
@@ -556,9 +568,9 @@ Three bucket widths. What matters is not the bucket size but how many files come
 
 | `-pad-niveau` | distinct sizes produced | maximum overhead |
 |---|---|---|
-| `standard` *(default)* | 7,605,925 · 7,737,061 · 7,999,333 | ~12 % |
-| `fort` | 7,605,925 · 7,868,197 · 8,130,469 | ~25 % |
-| `maximum` | 8,392,741 — **a single one** | ~100 % |
+| `standard` *(default)* | 7,606,005 · 7,737,141 · 7,868,277 · 7,999,413 | ~12 % |
+| `fort` | 7,606,005 · 7,868,277 · 8,130,549 | ~25 % |
+| `maximum` | 8,392,821 — **a single one** | ~100 % |
 
 ```bash
 chiffremento -mode enc -in contract.pdf -pad -pad-niveau maximum

@@ -147,8 +147,13 @@ func chiffresSignificatifs(e int, profile PadProfile) int {
 // abstrait. La taille du .chto y ajoute encore l'en-tête et les tampons des
 // paquets scellés : c'est un ordre de grandeur, pas une promesse à l'octet.
 func PadPalier(size int64, profile PadProfile) int64 {
-	total := size + padHeaderSize
-	return padme(total, profile)
+	// Le calcul passe par paddingFor, et non par padme directement : c'est
+	// paddingFor qui écrit le remplissage, et lui seul connaît le plafond de
+	// maxPadding. Les court-circuiter ferait annoncer à l'écran un palier que le
+	// chiffrement ne produit pas — au-delà de 4 Gio de remplissage, un fichier
+	// sortait à une taille intermédiaire qu'aucun palier ne produit, donc plus
+	// reconnaissable que sans remplissage du tout.
+	return size + padHeaderSize + paddingFor(size, profile)
 }
 
 // PadFenetre donne l'intervalle de tailles de clair qui sortent exactement à la
@@ -164,20 +169,27 @@ func PadFenetre(size int64, profile PadProfile) (bas, haut int64) {
 	if total <= padHeaderSize {
 		return 0, 0
 	}
-	lo, hi := int64(1), total
+	// La dichotomie interroge PadPalier et non padme : elle suit ainsi le même
+	// plafond que le remplissage réellement écrit.
+	lo, hi := int64(0), size
 	for lo < hi {
 		mid := lo + (hi-lo)/2
-		if padme(mid, profile) >= total {
+		if PadPalier(mid, profile) >= total {
 			hi = mid
 		} else {
 			lo = mid + 1
 		}
 	}
-	bas = lo - padHeaderSize
-	if bas < 0 {
-		bas = 0
+	bas = lo
+	haut = total - padHeaderSize
+	// Quand le plafond mord, PadPalier croît strictement : deux tailles voisines
+	// ne sortent plus jamais identiques, et la fenêtre se réduit au fichier
+	// lui-même. Le dire est le seul choix honnête — un palier ne protège que par
+	// le nombre de fichiers qu'il confond.
+	if PadPalier(haut, profile) != total {
+		haut = size
 	}
-	return bas, total - padHeaderSize
+	return bas, haut
 }
 
 // paddingFor renvoie le nombre d'octets de remplissage à insérer pour qu'une
