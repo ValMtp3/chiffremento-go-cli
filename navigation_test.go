@@ -339,3 +339,92 @@ func TestOptionsNeuvesPrennentLesDefauts(t *testing.T) {
 		})
 	}
 }
+
+// TestFlecheDroiteValideLeDernierChamp : la grammaire annoncée est « → valide »
+// partout. huh désactive pourtant Next sur le dernier champ d'un écran et n'y
+// laisse que Submit : → n'y déclenchait donc rien du tout.
+//
+// Le cas se voyait sur le premier écran, dont le dernier champ est le choix de
+// la cible : valider « parcourir les fichiers » avec → ne faisait rien, et
+// l'explorateur restait inaccessible à qui n'essayait pas entrée.
+func TestFlecheDroiteValideLeDernierChamp(t *testing.T) {
+	action, mode := "enc", "saisie"
+	form := choixForm(&action, &mode)
+	m := ouvrirEtape(t, form, nil)
+
+	envoyerEtape(t, m, touche("right")) // valide l'opération, descend à la cible
+	envoyerEtape(t, m, touche("down"))  // « parcourir les fichiers »
+	envoyerEtape(t, m, touche("right")) // doit soumettre l'écran
+
+	if m.form.State != huh.StateCompleted {
+		t.Error("→ ne valide pas le dernier champ de l'écran : l'écran suivant ne s'ouvrira jamais")
+	}
+	if mode != "parcourir" {
+		t.Errorf("mode retenu = %q, attendu « parcourir »", mode)
+	}
+}
+
+// TestFlecheDroiteValideUneQuestionUnique : même cause, portée plus large. Un
+// écran qui ne pose qu'une question n'a qu'un champ, donc son unique champ est
+// le dernier — l'écrasement, la restitution du nom, la suppression après coup et
+// le brouillage sont tous dans ce cas.
+func TestFlecheDroiteValideUneQuestionUnique(t *testing.T) {
+	var reponse bool
+	champ := questionFermee("supprimer l'original ?", "il vient d'être chiffré",
+		"supprimer", "garder", &reponse)
+	form := huh.NewForm(huh.NewGroup(champ)).
+		WithTheme(formTheme()).WithKeyMap(formKeyMap()).WithShowHelp(true)
+	m := ouvrirEtape(t, form, champ)
+
+	envoyerEtape(t, m, touche("right"))
+
+	if m.form.State != huh.StateCompleted {
+		t.Error("→ ne valide pas une question fermée isolée")
+	}
+}
+
+// TestEntreeValideAussiLeDernierChamp : le correctif ajoute → sans retirer
+// entrée, qui reste la touche de validation universelle.
+func TestEntreeValideAussiLeDernierChamp(t *testing.T) {
+	var reponse bool
+	champ := questionFermee("supprimer l'original ?", "il vient d'être chiffré",
+		"supprimer", "garder", &reponse)
+	form := huh.NewForm(huh.NewGroup(champ)).
+		WithTheme(formTheme()).WithKeyMap(formKeyMap()).WithShowHelp(true)
+	m := ouvrirEtape(t, form, champ)
+
+	envoyerEtape(t, m, touche("enter"))
+
+	if m.form.State != huh.StateCompleted {
+		t.Error("entrée ne valide plus une question fermée isolée")
+	}
+}
+
+// TestFlecheDroiteNeSoumetPasTropTot garde le revers du correctif précédent :
+// puisque Submit porte désormais les mêmes touches que Next, → ne doit pas
+// sauter par-dessus les questions restantes. huh s'en charge en n'activant
+// jamais les deux à la fois, et ce test le vérifie plutôt que de le supposer.
+func TestFlecheDroiteNeSoumetPasTropTot(t *testing.T) {
+	action, mode := "enc", "saisie"
+	form := choixForm(&action, &mode)
+	m := ouvrirEtape(t, form, nil)
+
+	envoyerEtape(t, m, touche("right")) // valide l'opération seulement
+
+	if m.form.State == huh.StateCompleted {
+		t.Fatal("→ a soumis l'écran entier alors que le choix de la cible restait à faire")
+	}
+	// Le focus doit être descendu sur la seconde question, dont la valeur par
+	// défaut est encore celle d'origine.
+	if mode != "saisie" {
+		t.Errorf("mode = %q avant d'avoir été choisi", mode)
+	}
+	envoyerEtape(t, m, touche("down"))
+	envoyerEtape(t, m, touche("right"))
+	if m.form.State != huh.StateCompleted {
+		t.Error("le second → ne soumet pas l'écran")
+	}
+	if mode != "parcourir" {
+		t.Errorf("mode retenu = %q, attendu « parcourir »", mode)
+	}
+}

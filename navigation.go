@@ -31,7 +31,17 @@ func formKeyMap() *huh.KeyMap {
 	k.Select.Down = key.NewBinding(key.WithKeys("down", "j", "ctrl+j", "ctrl+n"), key.WithHelp("↓", "descendre"))
 	k.Select.Prev = key.NewBinding(key.WithKeys("left", "shift+tab"), key.WithHelp("←", "revenir"))
 	k.Select.Next = key.NewBinding(key.WithKeys("right", "enter", "tab"), key.WithHelp("→", "valider"))
-	k.Select.Submit = key.NewBinding(key.WithKeys("enter"), key.WithHelp("entrée", "valider"))
+	// Submit porte les mêmes touches que Next, sans quoi → cesse d'avancer sur le
+	// dernier champ d'un écran. huh y désactive Next et n'active que Submit
+	// (field_select.go : Next.SetEnabled(!p.IsLast()), Submit.SetEnabled(p.IsLast())),
+	// et les deux mènent à la même branche : jamais les deux à la fois, donc
+	// aucun conflit à les lier à la même touche.
+	//
+	// Sans ça, → ne faisait rien là où il n'y a qu'une question — l'écrasement, la
+	// suppression après coup, le brouillage — ni sur le choix de la cible, qui
+	// termine le premier écran : « parcourir les fichiers » validé avec → laissait
+	// l'écran en place, et l'explorateur restait hors d'atteinte.
+	k.Select.Submit = key.NewBinding(key.WithKeys("right", "enter", "tab"), key.WithHelp("→", "valider"))
 	// Le filtre n'apporte rien sur deux ou trois options, et il coûterait cher :
 	// une fois sa saisie ouverte, ← lui appartiendrait et la touche de retour
 	// cesserait de reculer sans que rien ne l'explique. On le prive de touche
@@ -41,7 +51,7 @@ func formKeyMap() *huh.KeyMap {
 
 	k.Note.Prev = key.NewBinding(key.WithKeys("left", "shift+tab"), key.WithHelp("←", "revenir"))
 	k.Note.Next = key.NewBinding(key.WithKeys("right", "enter", "tab"), key.WithHelp("→", "continuer"))
-	k.Note.Submit = key.NewBinding(key.WithKeys("enter"), key.WithHelp("entrée", "valider"))
+	k.Note.Submit = key.NewBinding(key.WithKeys("right", "enter", "tab"), key.WithHelp("→", "continuer"))
 
 	// Dans un champ texte, ← et → appartiennent au curseur : le retour y reste
 	// shift+tab, et l'écran le rappelle.
