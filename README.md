@@ -208,7 +208,7 @@ Conserver le nom et la date d'origine à l'intérieur du chiffré, pour pouvoir 
 chiffremento -mode enc -in rapport-medical.pdf -out a3f9c2.chto -meta minimal
 ```
 
-Au déchiffrement, le nom n'est lisible qu'une fois le contenu authentifié : la ligne de commande l'affiche sans renommer d'autorité, l'interface guidée propose de rendre son nom au fichier.
+Au déchiffrement, le nom n'est lisible qu'une fois le contenu authentifié : la ligne de commande l'affiche sans renommer d'autorité, l'interface guidée propose de rendre son nom au fichier. Sous Windows, un nom légal ailleurs — `rapport 2024?.pdf`, `aux.txt` — est adapté aux règles du système, et l'interface montre le nom exact avant de renommer.
 
 Inspecter un fichier sans le déchiffrer ni saisir de mot de passe :
 
@@ -526,7 +526,7 @@ Keep the original name and date inside the ciphertext, so you can output under a
 chiffremento -mode enc -in medical-report.pdf -out a3f9c2.chto -meta minimal
 ```
 
-On decryption the name is only readable once the content is authenticated: the command line prints it without renaming anything, while the guided interface offers to give the file its name back.
+On decryption the name is only readable once the content is authenticated: the command line prints it without renaming anything, while the guided interface offers to give the file its name back. On Windows, a name that is legal elsewhere — `rapport 2024?.pdf`, `aux.txt` — is adapted to the system's rules, and the interface shows the exact name before renaming.
 
 Inspect a file without decrypting it or entering a password:
 

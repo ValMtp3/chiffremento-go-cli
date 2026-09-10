@@ -492,15 +492,31 @@ func tuiEncrypt(path string, o *optionsChiffrement) error {
 			Salt:    salt,
 			Success: out,
 		}
+		// Une seule copie du mot de passe, en []byte, effacée à la sortie.
+		//
+		// La saisie elle-même reste une string : huh n'expose que ce type, et une
+		// string Go est immuable — impossible de l'écraser sur place. On limite donc
+		// ce qui est limitable : une copie unique au lieu d'une par appel, effacée
+		// pour de bon, et la référence de la struct relâchée juste après. Le CLI,
+		// lui, travaille en []byte de bout en bout (main.go).
+		//
+		// L'effacement n'a lieu qu'ici, après le lancement de l'opération : plus
+		// haut, un retour en arrière doit encore retrouver la saisie à l'écran.
+		motDePasse := []byte(o.password)
+		defer func() {
+			zero(motDePasse)
+			o.password, o.confirm = "", ""
+		}()
+
 		if err := runJob(info, func(p func(int64, int64)) error {
-			return pkg.Encrypt(path, out, []byte(o.password), pkg.Options{
+			return pkg.Encrypt(path, out, motDePasse, pkg.Options{
 				Algo: o.algo, Comp: compEncodee(o.compresser), Pad: o.pad, PadProfile: o.padNiveau,
 				KDF: o.kdf, Metadata: metaEncodee(o.garderMeta), Force: ecraser, Progress: p,
 			})
 		}); err != nil {
 			return err
 		}
-		errSuppression := supprimerOriginal(path, out, o.password, estDossier)
+		errSuppression := supprimerOriginal(path, out, motDePasse, estDossier)
 		if o.brouiller {
 			// La date se pose après coup : le fichier n'existe pas avant. Elle se
 			// pose surtout en dernier, après supprimerOriginal — celui-ci relit le
@@ -592,9 +608,19 @@ func tuiDecrypt(path string) error {
 		// porte un, ne remonte que par le résultat — Decrypt le jette. La
 		// variable est écrite dans la goroutine de l'opération et lue après,
 		// une fois que runJob a reçu sa fin.
+		// Copie unique et effaçable du mot de passe, comme au chiffrement : la
+		// saisie reste une string imposée par huh, mais rien n'oblige à en semer
+		// des copies. L'effacement vient après la boucle de retour en arrière, qui
+		// doit encore pouvoir réafficher la saisie.
+		motDePasse := []byte(password)
+		defer func() {
+			zero(motDePasse)
+			password = ""
+		}()
+
 		var meta *pkg.FileMetadata
 		if err := runJob(info, func(p func(int64, int64)) error {
-			res, err := pkg.DecryptTo(path, out, []byte(password), pkg.Options{Force: ecraser, Progress: p})
+			res, err := pkg.DecryptTo(path, out, motDePasse, pkg.Options{Force: ecraser, Progress: p})
 			meta = res.Metadata
 			return err
 		}); err != nil {
@@ -628,11 +654,20 @@ func restituerNom(out string, meta *pkg.FileMetadata) error {
 		return nil
 	}
 
+	// Le nom proposé est celui de la cible, pas celui d'origine : sous Windows il
+	// a pu être adapté, et annoncer un nom que le renommage ne produira pas serait
+	// mentir sur l'action. Quand les deux diffèrent, on le dit.
+	nomCible := filepath.Base(cible)
+	description := "il est pour l'instant enregistré sous " + filepath.Base(out)
+	if nomCible != meta.Name {
+		description += "\nson nom d'origine contient des caractères que ce système refuse : il sera adapté"
+	}
+
 	renommer := true
 	champ := questionFermee(
 		"lui rendre son nom ?",
-		"il est pour l'instant enregistré sous "+filepath.Base(out),
-		"renommer en "+meta.Name, "garder "+filepath.Base(out), &renommer)
+		description,
+		"renommer en "+nomCible, "garder "+filepath.Base(out), &renommer)
 	form := huh.NewForm(huh.NewGroup(champ)).
 		WithTheme(formTheme()).WithKeyMap(formKeyMap()).WithShowHelp(true)
 	// Pas d'ancre : le fichier est déchiffré, il n'y a plus d'écran où revenir.
@@ -651,7 +686,7 @@ func restituerNom(out string, meta *pkg.FileMetadata) error {
 	if err := os.Rename(out, cible); err != nil {
 		fmt.Fprintf(os.Stderr, "  %s  %s\n\n", styleError.Render("!"),
 			fmt.Sprintf("renommage en %s impossible (%v) : le fichier reste sous %s",
-				meta.Name, err, filepath.Base(out)))
+				nomCible, err, filepath.Base(out)))
 		return nil
 	}
 	fmt.Printf("  %s  %s\n\n", styleAccent.Render("✓"), styleText.Render(cible))
@@ -665,10 +700,17 @@ func restituerNom(out string, meta *pkg.FileMetadata) error {
 // Un nom déjà pris ne déclenche pas de proposition d'écrasement : personne ne
 // veut se voir offrir de détruire un fichier juste après en avoir sauvé un.
 func cibleRestitution(out string, meta *pkg.FileMetadata) (cible string, libre bool) {
-	if meta == nil || meta.Name == "" || meta.Name == filepath.Base(out) {
+	if meta == nil || meta.Name == "" {
 		return "", false
 	}
-	cible = filepath.Join(filepath.Dir(out), meta.Name)
+	// Le nom est adapté aux règles du système avant tout le reste : sous Windows,
+	// « rapport 2024?.pdf » n'est pas un nom de fichier possible, et le renommage
+	// échouerait après coup. Sous Unix, nomUtilisable est l'identité.
+	nom := nomUtilisable(meta.Name)
+	if nom == "" || nom == filepath.Base(out) {
+		return "", false
+	}
+	cible = filepath.Join(filepath.Dir(out), nom)
 	if _, err := os.Lstat(cible); err == nil {
 		return cible, false
 	}
@@ -732,7 +774,17 @@ func tuiPasswd(path string) error {
 		return err
 	}
 
-	if err := pkg.ChangePassword(path, []byte(ancien), []byte(nouveau)); err != nil {
+	// Copies effaçables des deux secrets, et les strings relâchées ensuite. Trois
+	// saisies vivent sur cet écran, dont deux fois le nouveau mot de passe : c'est
+	// le formulaire qui en concentre le plus.
+	ancienOctets, nouveauOctets := []byte(ancien), []byte(nouveau)
+	defer func() {
+		zero(ancienOctets)
+		zero(nouveauOctets)
+		ancien, nouveau, confirme = "", "", ""
+	}()
+
+	if err := pkg.ChangePassword(path, ancienOctets, nouveauOctets); err != nil {
 		return err
 	}
 	fmt.Printf("  %s  %s\n", styleAccent.Render("✓"),
@@ -771,8 +823,13 @@ func tuiVerify(path string) error {
 		Salt:    fmt.Sprintf("format v%d · lu dans l'en-tête", d.Version),
 		Success: verifySucces(d.Archive),
 	}
+	motDePasse := []byte(password)
+	defer func() {
+		zero(motDePasse)
+		password = ""
+	}()
 	return runJob(info, func(p func(int64, int64)) error {
-		return pkg.Verify(path, []byte(password), pkg.Options{Progress: p})
+		return pkg.Verify(path, motDePasse, pkg.Options{Progress: p})
 	})
 }
 

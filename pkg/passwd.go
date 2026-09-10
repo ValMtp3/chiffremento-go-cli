@@ -1,6 +1,7 @@
 package pkg
 
 import (
+	"bytes"
 	"crypto/rand"
 	"errors"
 	"fmt"
@@ -196,11 +197,32 @@ func conseilSauvegarde(path, sauvegarde string) string {
 func ecrireSauvegarde(nom string, entete []byte) error {
 	f, err := os.OpenFile(nom, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
 	if errors.Is(err, os.ErrExist) {
-		return fmt.Errorf("%s existe déjà : soit un changement de mot de passe est en cours, "+
-			"soit le précédent a été interrompu.\n"+
-			"  Dans le second cas, vérifie lequel des deux mots de passe ouvre le fichier "+
-			"(« chiffremento -mode verify ») avant d'y toucher : si c'est le nouveau, "+
-			"le changement est allé au bout et ce fichier est à supprimer", nom)
+		// Une sauvegarde déjà là vient d'un passage interrompu, et tout dépend de
+		// ce qu'elle contient.
+		//
+		// Si elle est identique à l'en-tête actuellement en place, l'interruption a
+		// eu lieu avant que le nouvel en-tête n'atteigne le disque : le fichier est
+		// intact, la sauvegarde ne protège plus rien, et on peut reprendre. Ce cas
+		// se tranche sans mot de passe, donc sans rien demander.
+		//
+		// Sinon, elle est peut-être le seul en-tête valide d'un changement à moitié
+		// écrit. Personne d'autre que l'utilisateur ne peut en juger, et l'écraser
+		// serait le pire choix possible.
+		precedente, errLecture := os.ReadFile(nom)
+		if errLecture == nil && bytes.Equal(precedente, entete) {
+			if errRm := os.Remove(nom); errRm != nil {
+				return fmt.Errorf("sauvegarde d'en-tête à reprendre: %s n'a pas pu être retiré: %w", nom, errRm)
+			}
+			untrackTemp(nom)
+			f, err = os.OpenFile(nom, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+		} else {
+			return fmt.Errorf("%s existe déjà, et son contenu diffère de l'en-tête en place : "+
+				"un changement de mot de passe est en cours ailleurs, ou le précédent a été "+
+				"interrompu après avoir commencé à écrire.\n"+
+				"  Ce fichier est peut-être le seul en-tête encore valide. Vérifie lequel des deux "+
+				"mots de passe ouvre le fichier (« chiffremento -mode verify ») avant d'y toucher : "+
+				"si c'est le nouveau, le changement est allé au bout et ce fichier est à supprimer", nom)
+		}
 	}
 	if err != nil {
 		return fmt.Errorf("sauvegarde de l'en-tête: %w", err)

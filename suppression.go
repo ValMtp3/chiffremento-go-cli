@@ -37,7 +37,7 @@ type suppressionRefusee string
 // La vérification préalable a un coût réel — une seconde dérivation Argon2 et
 // une relecture complète — et c'est délibéré : il achète la certitude que le
 // fichier gardé rendra bien ce que l'original contenait.
-func supprimerOriginal(source, chiffre, password string, estDossier bool) error {
+func supprimerOriginal(source, chiffre string, password []byte, estDossier bool) error {
 	if raison := suppressionPossible(source, chiffre, estDossier); raison != "" {
 		fmt.Printf("  %s\n\n", styleFaint.Render(string(raison)))
 		return nil
@@ -167,7 +167,7 @@ func demanderSuppression(titre, detail string) (bool, error) {
 // verifierAvantSuppression relit le chiffré de bout en bout avec le mot de
 // passe qui vient de servir. L'écran de progression est celui de l'opération
 // « vérifier » : c'est exactement le même travail.
-func verifierAvantSuppression(chiffre, password string) error {
+func verifierAvantSuppression(chiffre string, password []byte) error {
 	d, err := pkg.Inspect(chiffre)
 	if err != nil {
 		return err
@@ -182,7 +182,7 @@ func verifierAvantSuppression(chiffre, password string) error {
 		Success: "chiffré relu et authentifié",
 	}
 	return runJob(info, func(p func(int64, int64)) error {
-		return pkg.Verify(chiffre, []byte(password), pkg.Options{Progress: p})
+		return pkg.Verify(chiffre, password, pkg.Options{Progress: p})
 	})
 }
 

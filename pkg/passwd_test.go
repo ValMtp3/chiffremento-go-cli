@@ -359,3 +359,59 @@ func TestChangePasswordRetourArriereNonConfirmeGardeLaSauvegarde(t *testing.T) {
 		t.Errorf("le message ne donne pas la commande de restauration: %v", err)
 	}
 }
+
+// TestChangePasswordSauvegardeIdentiqueEstReprise : une interruption avant que
+// le nouvel en-tête n'atteigne le disque laisse une sauvegarde identique à
+// l'en-tête du fichier. Ce cas est décidable sans mot de passe — le fichier est
+// intact, la sauvegarde ne protège rien — et refuser d'avancer obligeait
+// l'utilisateur à effacer un fichier à la main sans pouvoir juger s'il était
+// précieux.
+func TestChangePasswordSauvegardeIdentiqueEstReprise(t *testing.T) {
+	chto := chiffreV4(t, []byte("contenu"), Options{})
+	sauvegarde := chto + suffixeSauvegarde
+
+	// La sauvegarde d'un passage interrompu : exactement l'en-tête en place.
+	if err := os.WriteFile(sauvegarde, lireEntete(t, chto), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := ChangePassword(chto, []byte(motDePasseV4), []byte("nouveau-mot-de-passe")); err != nil {
+		t.Fatalf("le changement a été refusé alors que le fichier était intact: %v", err)
+	}
+	if _, err := os.Lstat(sauvegarde); err == nil {
+		t.Error("la sauvegarde reprise n'a pas été retirée")
+	}
+	// Et le changement a bien eu lieu.
+	if err := Verify(chto, []byte("nouveau-mot-de-passe"), Options{}); err != nil {
+		t.Errorf("le nouveau mot de passe n'ouvre pas le fichier: %v", err)
+	}
+}
+
+// TestChangePasswordSauvegardeDifferenteResteRefusee : à l'inverse, une
+// sauvegarde qui ne correspond pas à l'en-tête en place peut être le seul
+// en-tête valide d'un changement à moitié écrit. Là, seul l'utilisateur peut
+// trancher, et l'écraser serait le pire choix.
+func TestChangePasswordSauvegardeDifferenteResteRefusee(t *testing.T) {
+	chto := chiffreV4(t, []byte("contenu"), Options{})
+	sauvegarde := chto + suffixeSauvegarde
+	autre := make([]byte, headerSizeV4)
+	copy(autre, "en-tête d'un autre passage")
+	if err := os.WriteFile(sauvegarde, autre, 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	err := ChangePassword(chto, []byte(motDePasseV4), []byte("nouveau-mot-de-passe"))
+	if err == nil {
+		t.Fatal("le changement a été accepté malgré une sauvegarde étrangère")
+	}
+	if !strContains(err.Error(), "verify") {
+		t.Errorf("le message ne dit pas comment trancher: %v", err)
+	}
+	garde, errLecture := os.ReadFile(sauvegarde)
+	if errLecture != nil {
+		t.Fatal(errLecture)
+	}
+	if !bytes.Equal(garde, autre) {
+		t.Error("la sauvegarde étrangère a été écrasée")
+	}
+}
