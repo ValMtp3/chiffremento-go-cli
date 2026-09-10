@@ -41,6 +41,13 @@ func derouleEtape(t *testing.T, m *etapeModel, cmd tea.Cmd, profondeur int) {
 	if msg == nil {
 		return
 	}
+	// Le curseur d'un champ texte clignote en se réarmant lui-même : sa commande
+	// dort une demi-seconde puis rend un BlinkMsg qui en programme un autre. La
+	// dérouler jusqu'à la profondeur maximale coûtait vingt secondes par test sur
+	// un écran de saisie, pour une animation qu'aucun test ne regarde.
+	if reflect.TypeOf(msg).Name() == "BlinkMsg" {
+		return
+	}
 	if _, quitte := msg.(tea.QuitMsg); quitte {
 		return
 	}
