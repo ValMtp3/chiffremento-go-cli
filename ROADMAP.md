@@ -4,7 +4,7 @@
 > - 🔥 **Priorité haute** · ⭐️ **Priorité moyenne** · ☁️ **Idées futures**
 > - 🟢 **Facile** | 🟡 **Moyen** | 🔴 **Difficile**
 
-Dernière version publiée : **v2.2.0**. Le format de fichier en est à la **v4**.
+Dernière version publiée : **v2.2.1**. Le format de fichier en est à la **v4**.
 
 ---
 
@@ -25,6 +25,10 @@ Interface guidée (`huh` + `bubbletea`) lancée sans argument, barre de progress
 - **Tubes** : `-in -` et `-out -`
 - **Force du mot de passe** par zxcvbn, qui reconnaît les motifs de clavier et les mots du dictionnaire
 - **Refus d'écraser** une destination existante sans `-force`
+
+### v2.2.1 — correctifs
+
+Flèche droite qui ne validait pas la dernière question d'un écran (explorateur inatteignable), perte de fichier possible au changement de mot de passe sur un disque qui décroche, deux défauts Windows (sauvegarde d'en-tête tronquée, nom d'origine refusé par le système), palier de remplissage annoncé mais non produit au-delà du plafond, et quatre écarts de documentation dont le mécanisme d'authentification de l'en-tête v4.
 
 ### v2.2 — format v4, marche arrière et suppression après coup
 

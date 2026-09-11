@@ -19,7 +19,7 @@
 **Chiffremento CLI** est un outil en ligne de commande écrit en Go pour chiffrer et déchiffrer des fichiers. Il s'utilise soit via une interface guidée, soit avec des flags pour les scripts.
 
 ```
-  chiffremento chiffrement  v2.2.0
+  chiffremento chiffrement  v2.2.1
 ┌────────────────────────────────────────────────────┐
 │  entrée    rapport-annuel.pdf             14.2 Mo  │
 │  sortie    rapport-annuel.pdf.chto                 │
@@ -32,6 +32,14 @@
 │  ████████████░░░░░░░░░░░░░░░░░░  42%      38 Mo/s  │
 └────────────────────────────────────────────────────┘
 ```
+
+## 🔧 Correctifs v2.2.1
+
+- **↔️ La flèche droite valide partout.** Elle ne validait pas la dernière question d'un écran, ce qui rendait l'explorateur de fichiers inatteignable : « parcourir les fichiers » en est la dernière question. Les questions à réponse unique — écrasement, suppression après coup, brouillage — étaient dans le même cas.
+- **💾 Changement de mot de passe : plus de perte de fichier possible.** Sur un retour en arrière non confirmé par le disque — clé USB retirée, partage réseau qui décroche — la sauvegarde de l'en-tête était supprimée alors qu'elle était le seul en-tête encore valide. Elle n'est désormais retirée qu'une fois l'écriture confirmée, et une sauvegarde laissée par une interruption est reprise automatiquement quand elle correspond au fichier en place.
+- **🪟 Windows.** Une sauvegarde d'en-tête tronquée ne peut plus rester en place, et un nom d'origine légal ailleurs — `rapport 2024?.pdf`, `aux.txt` — ne fait plus échouer le déchiffrement : il est adapté aux règles du système, et l'interface montre le nom exact avant de renommer.
+- **📏 Masquage de taille.** Au-delà du plafond de remplissage, l'écran annonçait un palier que le chiffrement ne produisait pas — un fichier en sortait à une taille unique, donc plus reconnaissable que sans `-pad`. L'affichage suit maintenant le calcul réel.
+- **📄 Documentation.** L'en-tête v4 est authentifié comme données associées de l'enveloppe, et non plus par la dérivation : le texte le disait encore à l'ancienne. Le tableau des paliers de remplissage a été remesuré sur le format v4, et les limites de `-mode passwd` sont écrites — réservé aux fichiers v4, et sans effet sur les copies déjà faites.
 
 ## ✨ Nouveautés v2.2
 
@@ -350,6 +358,14 @@ Le mode parano ne remplace pas un bon mot de passe : il protège contre la déco
 # 🇬🇧 English
 
 **Chiffremento CLI** is a command-line tool written in Go for encrypting and decrypting files. It offers a guided interface, or flags for scripting.
+
+## 🔧 Fixes in v2.2.1
+
+- **↔️ The right arrow now confirms everywhere.** It did not confirm the last question of a screen, which made the file browser unreachable: « parcourir les fichiers » is that last question. Single-question screens — overwrite, delete-after, scrambling — had the same problem.
+- **💾 Password change: no more possible file loss.** On a rollback the disk never confirmed — USB stick pulled out, network share dropping — the header backup was deleted while being the only valid header left. It is now removed only once the write is confirmed, and a backup left behind by an interruption is picked up automatically when it matches the header in place.
+- **🪟 Windows.** A truncated header backup can no longer linger, and an original name that is legal elsewhere — `rapport 2024?.pdf`, `aux.txt` — no longer fails the decryption: it is adapted to the system's rules, and the interface shows the exact name before renaming.
+- **📏 Size masking.** Past the padding ceiling, the screen announced a bucket the encryption never produced — a file came out at a size of its own, making it more recognisable than with no `-pad` at all. The display now follows the real computation.
+- **📄 Documentation.** The v4 header is authenticated as associated data of the envelope seal, no longer through key derivation: the text still described the old mechanism. The padding bucket table was re-measured on format v4, and the limits of `-mode passwd` are now written down — v4 files only, and no effect on copies already made.
 
 ## ✨ New in v2.2
 
