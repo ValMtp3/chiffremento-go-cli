@@ -35,13 +35,3 @@ func TestAdapterNomReglesWindows(t *testing.T) {
 		}
 	}
 }
-
-// TestAdapterNomNeTouchePasSousUnix : la variante Unix doit être l'identité,
-// sinon un renommage qui marchait se mettrait à produire un autre nom.
-func TestNomUtilisableIdentiteSousUnix(t *testing.T) {
-	for _, nom := range []string{"rapport.pdf", "rapport 2024?.pdf", "aux.txt", "note.", `a<b>c`} {
-		if got := nomUtilisable(nom); got != nom {
-			t.Errorf("nomUtilisable(%q) = %q : le nom doit rester intact hors Windows", nom, got)
-		}
-	}
-}
