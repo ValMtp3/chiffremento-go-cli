@@ -11,7 +11,7 @@ require (
 	github.com/klauspost/compress v1.20.0
 	github.com/minio/sio v0.5.1
 	github.com/trustelem/zxcvbn v1.0.1
-	golang.org/x/crypto v0.56.0
+	golang.org/x/crypto v0.57.0
 	golang.org/x/term v0.46.0
 )
 

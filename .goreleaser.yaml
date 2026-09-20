@@ -70,7 +70,7 @@ changelog:
 #     sous Linux. Le README ne documentait de toute façon Homebrew que pour
 #     macOS, et install.sh couvre Linux ;
 #   - les binaires ne sont pas signés, donc Gatekeeper les met en quarantaine.
-#     Le hook post-install retire l'attribut, comme le faisait déjà install.sh.
+#     L'étape post-install retire l'attribut, comme le faisait déjà install.sh.
 homebrew_casks:
   - name: chiffremento
     binaries:
@@ -86,9 +86,26 @@ homebrew_casks:
     description: "Outil de chiffrement de fichiers en ligne de commande"
     license: "MIT"
 
-    hooks:
-      post:
-        install: |
-          if OS.mac?
-            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/chiffremento"]
-          end
+    # Pourquoi `custom_block` plutôt que `hooks.post.install` : goreleaser écrit
+    # toujours ce hook dans une stanza `postflight`, dépréciée par Homebrew 6.0.0
+    # au profit de `postflight_steps`. Aucune option ne permet de changer ça, le
+    # template du cask étant figé côté goreleaser ; `custom_block` est le seul
+    # point d'injection de Ruby brut, et il écrit la stanza telle quelle.
+    #
+    # Deux détails qui ont l'air arbitraires mais ne le sont pas :
+    #   - `postflight_steps` n'accepte pas du Ruby libre, seulement des étapes
+    #     déclaratives. D'où `run` au lieu de `system_command`, et `on_macos`
+    #     au lieu de `if OS.mac?` ;
+    #   - le chemin du binaire est relatif, avec `chdir: "."`. Un `staged_path`
+    #     s'écrirait ici `{{staged_path}}`, or goreleaser passe le cask entier
+    #     dans son moteur de templates Go et échouerait sur un `staged_path`
+    #     qu'il ne connaît pas. Le dossier de travail par défaut d'une étape de
+    #     cask étant déjà `staged_path`, le chemin relatif dit la même chose.
+    custom_block: |
+      postflight_steps do
+        on_macos do
+          run "/usr/bin/xattr",
+              args: ["-dr", "com.apple.quarantine", "chiffremento"],
+              chdir: "."
+        end
+      end
