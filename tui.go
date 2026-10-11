@@ -496,9 +496,11 @@ func tuiEncrypt(path string, o *optionsChiffrement) error {
 				return err
 			}
 		}
-		// La phrase se tire en dernier, juste avant de chiffrer : un retour
-		// depuis la question de l'écrasement ne doit pas jeter une phrase que
-		// l'utilisateur vient d'enregistrer.
+		// La phrase se tire en dernier, juste avant de chiffrer, après la
+		// question de l'écrasement : un retour depuis celle-ci ne fait donc
+		// jamais tirer de phrase pour rien. Revenir aux options depuis l'écran
+		// de la phrase en tire une nouvelle au passage suivant ; aucune n'est
+		// utilisée avant d'avoir été confirmée comme enregistrée.
 		if o.genererPhrase {
 			phrase, err := etapePhrase()
 			if errors.Is(err, errRetour) {

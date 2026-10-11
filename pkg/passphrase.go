@@ -42,9 +42,12 @@ const (
 	// DefautMotsPhrase donne environ 128 bits.
 	DefautMotsPhrase = 7
 
-	// separateursPhrase : 16 caractères, soit 4 bits par séparateur. Aucun ne
-	// casse une commande shell ni un script (`echo '…' | chiffremento`) : pas
-	// de $ ! ` " ' \ & | < > * ?.
+	// separateursPhrase : 16 caractères, soit 4 bits par séparateur. Entre
+	// apostrophes (`echo '…' | chiffremento`), aucun n'est interprété par le
+	// shell : pas de ' ni de \, et aucun des caractères qui posent problème
+	// même ainsi dans un formulaire ou un script ($ ! ` " & | < > * ?). Sans
+	// apostrophes, certains restent spéciaux (; ( ) # ~) : la phrase se passe
+	// toujours entre apostrophes.
 	separateursPhrase = "-_.,:;+=@#%^~/()"
 
 	tailleListeMots = 7776
