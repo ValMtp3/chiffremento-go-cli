@@ -86,9 +86,14 @@ done
 
 if [ -n "$ARCHIVE" ]; then
     echo "📦 Archive trouvée : $ARCHIVE"
+    # Une archive non vérifiable n'est jamais installée : ce script finit par
+    # un sudo cp, et une installation « non vérifiée » ne vaut pas mieux
+    # qu'aucune vérification. (Une empreinte fausse sort déjà en erreur dans
+    # verify_checksum ; ici, c'est l'absence d'empreinte qui est refusée.)
     verify_checksum "$ARCHIVE" || {
-        echo "⚠️  $(basename "$ARCHIVE") n'est pas listé dans checksums.txt : installation non vérifiée."
-        echo "   Télécharge checksums.txt depuis la même release pour activer la vérification."
+        echo "❌ $(basename "$ARCHIVE") n'est pas listé dans checksums.txt : installation refusée."
+        echo "   Télécharge checksums.txt depuis la même release, dans ce dossier, puis relance."
+        exit 1
     }
     WORKDIR="$(mktemp -d)"
     tar -xzf "$ARCHIVE" -C "$WORKDIR"
