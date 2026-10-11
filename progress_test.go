@@ -163,3 +163,19 @@ func TestDureeEcranReelle(t *testing.T) {
 		})
 	}
 }
+
+// TestCtrlCInterromptLaProgression : un chiffrement de 50 Go doit pouvoir être
+// annulé. Ctrl+C arrivait en mode brut comme une simple touche, et Update
+// l'ignorait : aucun retour visuel, aucune sortie possible. runJob sait déjà
+// traiter tea.ErrInterrupted (temporaires nettoyés, code 130).
+func TestCtrlCInterromptLaProgression(t *testing.T) {
+	var done atomic.Int64
+	m := newProgressModel(jobInfo{Action: "chiffrement", Size: 100}, &done)
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+	if cmd == nil {
+		t.Fatal("Ctrl+C ignoré : aucune commande renvoyée")
+	}
+	if _, ok := cmd().(tea.InterruptMsg); !ok {
+		t.Errorf("Ctrl+C renvoie %T, attendu tea.InterruptMsg", cmd())
+	}
+}
