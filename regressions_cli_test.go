@@ -54,28 +54,28 @@ func TestRefusEcrasementCLI(t *testing.T) {
 	}
 }
 
-// TestOpenDestRefuseFichierExistant : le chemin des flux n'a pas d'écriture
-// atomique — os.Create tronque la cible avant tout. Le refus doit donc aussi
-// valoir ici, où il n'y a aucun retour en arrière possible.
+// TestOpenDestRefuseFichierExistant : le chemin des flux doit refuser une
+// destination existante sans -force, comme le chemin fichier vers fichier.
 func TestOpenDestRefuseFichierExistant(t *testing.T) {
 	dir := t.TempDir()
 	dest := ecrire(t, filepath.Join(dir, "occupe.bin"), []byte("contenu existant"))
 
-	if _, _, err := openDest(dest, false); err == nil {
+	if _, _, _, err := openDest(dest, false); err == nil {
 		t.Error("openDest a tronqué un fichier existant sans -force")
 	}
 	if b, _ := os.ReadFile(dest); string(b) != "contenu existant" {
 		t.Errorf("le fichier a été tronqué malgré le refus: %q", b)
 	}
 
-	w, closeDst, err := openDest(dest, true)
+	w, commit, abort, err := openDest(dest, true)
 	if err != nil {
 		t.Fatalf("-force devrait autoriser: %v", err)
 	}
+	defer abort()
 	if _, err := w.Write([]byte("neuf")); err != nil {
 		t.Fatal(err)
 	}
-	if err := closeDst(); err != nil {
+	if err := commit(); err != nil {
 		t.Fatal(err)
 	}
 	if b, _ := os.ReadFile(dest); string(b) != "neuf" {
@@ -83,7 +83,7 @@ func TestOpenDestRefuseFichierExistant(t *testing.T) {
 	}
 
 	// La sortie standard n'est jamais concernée par le contrôle.
-	if _, _, err := openDest("-", false); err != nil {
+	if _, _, _, err := openDest("-", false); err != nil {
 		t.Errorf("la sortie standard ne devrait pas être contrôlée: %v", err)
 	}
 }

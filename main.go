@@ -6,7 +6,6 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"io/fs"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -241,9 +240,9 @@ func doEncrypt(in, out string, opts pkg.Options) error {
 	return nil
 }
 
-// encryptTo aiguille entre l'écriture atomique sur disque et les flux standard.
-// Le chemin « fichier vers fichier » reste celui de pkg.Encrypt, qui seul offre
-// l'écriture atomique.
+// encryptTo aiguille entre pkg.Encrypt (fichier vers fichier) et les flux
+// standard. Une sortie fichier reste atomique dans les deux cas : openDest
+// passe par pkg.CreateAtomic.
 func encryptTo(in, out string, password []byte, opts pkg.Options) error {
 	if !isStream(in) && !isStream(out) {
 		return pkg.Encrypt(in, out, password, opts)
@@ -255,16 +254,16 @@ func encryptTo(in, out string, password []byte, opts pkg.Options) error {
 	}
 	defer closeSrc()
 
-	dst, closeDst, err := openDest(out, opts.Force)
+	dst, commit, abort, err := openDest(out, opts.Force)
 	if err != nil {
 		return err
 	}
-	defer closeDst()
+	defer abort()
 
 	if err := pkg.EncryptStream(dst, src, size, password, opts); err != nil {
 		return err
 	}
-	return closeDst()
+	return commit()
 }
 
 func doDecrypt(in, out string, force bool) error {
@@ -346,11 +345,11 @@ func decryptTo(in, out string, password []byte, force bool) (*pkg.FileMetadata, 
 	}
 	defer closeSrc()
 
-	dst, closeDst, err := openDest(out, force)
+	dst, commit, abort, err := openDest(out, force)
 	if err != nil {
 		return nil, err
 	}
-	defer closeDst()
+	defer abort()
 
 	// Sur un flux, les métadonnées ne sont pas remontées : il n'y a pas de
 	// fichier de sortie à qui appliquer une date, et l'appelant a déjà choisi
@@ -358,7 +357,7 @@ func decryptTo(in, out string, password []byte, force bool) (*pkg.FileMetadata, 
 	if err := pkg.DecryptStream(dst, src, password, pkg.Options{}); err != nil {
 		return nil, err
 	}
-	return nil, closeDst()
+	return nil, commit()
 }
 
 // doVerify contrôle qu'un fichier est intact et déchiffrable sans rien écrire
@@ -535,10 +534,6 @@ func openSource(in string) (io.Reader, int64, func(), error) {
 	return f, size, func() { f.Close() }, nil
 }
 
-// openDest ouvre la destination. La fonction de fermeture renvoyée est
-// idempotente : on l'appelle explicitement pour remonter l'erreur de fermeture,
-// et en defer pour ne rien laisser ouvert en cas d'échec.
-//
 // indiceForce rhabille ErrDestinationExistante avec le moyen de passer outre.
 // pkg signale le fait sans nommer de drapeau ; c'est ici, et seulement ici,
 // qu'on sait qu'il existe un -force à proposer.
@@ -549,37 +544,23 @@ func indiceForce(err error) error {
 	return err
 }
 
-// Le chemin des flux n'a pas d'écriture atomique : os.Create tronque la cible
-// tout de suite. Le refus d'une destination existante y est donc encore plus
-// nécessaire que dans pkg, où le rename final laisse au moins une chance de
-// s'arrêter avant.
-func openDest(out string, force bool) (io.Writer, func() error, error) {
+// openDest ouvre la destination d'un chemin où l'entrée est un flux. Un
+// fichier passe par l'écriture atomique de pkg : rien n'est créé sous le nom
+// final avant commit, donc un mauvais mot de passe, un en-tête falsifié ou un
+// Ctrl+C laissent la destination intacte — même avec -force. Ce chemin passait
+// par os.Create, qui tronquait la cible avant toute vérification.
+//
+// commit rend l'écriture définitive et remonte son erreur ; abort s'appelle en
+// defer et ne fait rien après un commit réussi.
+func openDest(out string, force bool) (w io.Writer, commit func() error, abort func(), err error) {
 	if isStream(out) {
-		return os.Stdout, func() error { return nil }, nil
+		return os.Stdout, func() error { return nil }, func() {}, nil
 	}
-	if !force {
-		// Même prudence que newAtomicFile, et plus nécessaire encore : ce
-		// chemin n'a aucune écriture atomique, os.Create tronque la cible
-		// tout de suite. Une garde qui sautait sur une erreur de Lstat
-		// coûtait le fichier.
-		if _, err := os.Lstat(out); err == nil {
-			return nil, nil, fmt.Errorf("%w : %s", pkg.ErrDestinationExistante, out)
-		} else if !errors.Is(err, fs.ErrNotExist) {
-			return nil, nil, fmt.Errorf("vérification de %s: %w", out, err)
-		}
-	}
-	f, err := os.Create(out)
+	aw, err := pkg.CreateAtomic(out, force)
 	if err != nil {
-		return nil, nil, fmt.Errorf("création de %s: %w", out, err)
+		return nil, nil, nil, err
 	}
-	closed := false
-	return f, func() error {
-		if closed {
-			return nil
-		}
-		closed = true
-		return f.Close()
-	}, nil
+	return aw, aw.Commit, aw.Abort, nil
 }
 
 func describeDest(out string) string {
@@ -656,8 +637,9 @@ Une destination qui existe déjà est refusée : -force pour l'écraser quand m�
 Un dossier extrait ne s'écrase jamais, quel que soit le drapeau.
 
 -in - lit l'entrée standard, -out - écrit sur la sortie standard : l'outil est
-donc composable. Sur un flux, l'écriture atomique n'existe pas et le clair sort
-avant que la fin du fichier soit authentifiée — à réserver aux tubes.
+donc composable. Sur la sortie standard, l'écriture atomique n'existe pas et le
+clair sort avant que la fin du fichier soit authentifiée — à réserver aux tubes.
+Une sortie fichier (-out f) reste atomique, même quand l'entrée est un flux.
 
   chiffremento -mode dec -in sauvegarde%s -out - | tar tf -
 
