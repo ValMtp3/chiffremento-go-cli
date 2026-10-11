@@ -87,6 +87,7 @@
 - **📏 Taille masquée** : option `-pad`, qui arrondit la taille au palier supérieur ([schéma Padmé](https://petsymposium.org/2019/files/papers/issue4/popets-2019-0056.pdf)) pour qu'un `.chto` ne trahisse plus la taille exacte de son contenu.
 - **🔗 Composable** : `-in -` et `-out -` lisent et écrivent sur les flux standard.
 - **📊 Indicateur de force réaliste** : la robustesse du mot de passe est évaluée par [`zxcvbn`](https://github.com/trustelem/zxcvbn), qui reconnaît les mots de dictionnaire, les prénoms, les dates et les suites de touches. `azerty123` est annoncé à ~13 bits, pas à ~60.
+- **🎲 Phrase de passe générée** : à l'étape du mot de passe, l'interface propose de générer une phrase de 7 mots français, avec majuscules, séparateurs et un chiffre tirés au hasard par `crypto/rand` — environ **128 bits**. Elle s'affiche masquée, se dévoile ou se copie dans le presse-papier, et l'interface demande confirmation qu'elle a été enregistrée avant de chiffrer. Aussi en ligne de commande : `-mode genpass [-mots N]`. Liste de mots : celle compilée par Tango pour Tails et le Tor Project ([CC0](https://github.com/ulif/diceware)).
 - **😱 Mode parano** : double chiffrement en cascade (ChaCha20 à l'extérieur, AES à l'intérieur), avec deux clés dérivées indépendamment par HKDF.
 - **🔗 En-tête authentifié** : version, drapeaux, algorithme, paramètres Argon2, sel et engagement de clé servent tous de données associées au scellement de l'enveloppe. Modifier un seul octet de l'en-tête empêche le déchiffrement. Jusqu'au format v3, ce liage passait par la dérivation de la clé elle-même.
 
@@ -148,7 +149,7 @@ Le mot de passe **n'est jamais un argument**. Il est demandé de façon masquée
 
 | Flag | Description |
 | :--- | :--- |
-| `-mode` | **Obligatoire.** `enc` (chiffrer), `dec` (déchiffrer), `verify` (contrôler sans rien écrire), `info` (inspecter l'en-tête), `passwd` (changer le mot de passe) ou `bench` (mesurer les coûts). |
+| `-mode` | **Obligatoire.** `enc` (chiffrer), `dec` (déchiffrer), `verify` (contrôler sans rien écrire), `info` (inspecter l'en-tête), `passwd` (changer le mot de passe), `bench` (mesurer les coûts) ou `genpass` (générer une phrase de passe, sans `-in`). |
 | `-in` | **Obligatoire.** Fichier ou dossier d'entrée, ou `-` pour l'entrée standard. |
 | `-out` | Destination. Par défaut, l'entrée suivie de `.chto` en `enc`, l'entrée sans l'extension en `dec`. `-` écrit sur la sortie standard. |
 | `-comp` | *(enc)* Active la compression zstd. |
@@ -159,6 +160,7 @@ Le mot de passe **n'est jamais un argument**. Il est demandé de façon masquée
 | `-kdf` | *(enc)* Coût de la dérivation : `standard` (défaut), `fort` ou `maximum`. |
 | `-meta` | *(enc)* Métadonnées conservées : `none` (défaut) ou `minimal` (nom et date). |
 | `-force` | *(enc, dec)* Écrase la destination si elle existe déjà. Sans lui, l'opération est refusée. Ne s'applique jamais à un dossier extrait. |
+| `-mots` | *(genpass)* Nombre de mots de la phrase : 7 par défaut, de 6 à 12. |
 | `-version` | Affiche la version. |
 
 > Une destination qui existe déjà est **refusée par défaut** : déchiffrer
@@ -413,6 +415,7 @@ Le mode parano ne remplace pas un bon mot de passe : il protège contre la déco
 - **📏 Size masking**: the `-pad` option rounds the size up to the next bucket ([Padmé scheme](https://petsymposium.org/2019/files/papers/issue4/popets-2019-0056.pdf)), so a `.chto` no longer betrays the exact size of its contents.
 - **🔗 Composable**: `-in -` and `-out -` read from and write to the standard streams.
 - **📊 Realistic strength meter**: password strength is scored by [`zxcvbn`](https://github.com/trustelem/zxcvbn), which recognises dictionary words, names, dates and keyboard patterns. `azerty123` is reported at ~13 bits, not ~60.
+- **🎲 Generated passphrase**: at the password step, the interface offers to generate a 7-word French passphrase, with capitals, separators and one digit drawn by `crypto/rand` — about **128 bits**. It is shown masked, can be revealed or copied to the clipboard, and the interface asks for confirmation that it has been saved before encrypting. Also on the command line: `-mode genpass [-mots N]`. Word list: the one compiled by Tango for Tails and the Tor Project ([CC0](https://github.com/ulif/diceware)).
 - **😱 Parano mode**: cascaded double encryption (ChaCha20 outside, AES inside) with two independently derived keys via HKDF.
 - **🔗 Authenticated header**: version, flags, algorithm, Argon2 parameters, salt and key commitment all act as associated data for the envelope seal. Changing a single header byte makes decryption fail. Up to format v3, that binding went through key derivation itself.
 
@@ -474,7 +477,7 @@ The password is **never an argument**. It is prompted for with masked input, or 
 
 | Flag | Description |
 | :--- | :--- |
-| `-mode` | **Required.** `enc` (encrypt), `dec` (decrypt), `verify` (check without writing anything), `info` (inspect the header), `passwd` (change the password) or `bench` (measure costs). |
+| `-mode` | **Required.** `enc` (encrypt), `dec` (decrypt), `verify` (check without writing anything), `info` (inspect the header), `passwd` (change the password), `bench` (measure costs) or `genpass` (generate a passphrase, no `-in`). |
 | `-in` | **Required.** Input file or folder, or `-` for standard input. |
 | `-out` | Destination. Defaults to the input plus `.chto` for `enc`, the input without the extension for `dec`. `-` writes to standard output. |
 | `-comp` | *(enc)* Enables zstd compression. |
@@ -485,6 +488,7 @@ The password is **never an argument**. It is prompted for with masked input, or 
 | `-kdf` | *(enc)* Key derivation cost: `standard` (default), `fort` or `maximum`. |
 | `-meta` | *(enc)* Metadata kept: `none` (default) or `minimal` (name and date). |
 | `-force` | *(enc, dec)* Overwrites the destination if it already exists. Without it, the operation is refused. Never applies to an extracted folder. |
+| `-mots` | *(genpass)* Number of words in the passphrase: 7 by default, from 6 to 12. |
 | `-version` | Prints the version. |
 
 > An existing destination is **refused by default**: decrypting `doc.pdf.chto`
