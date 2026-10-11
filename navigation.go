@@ -177,6 +177,29 @@ func (m *etapeModel) View() string {
 	return vue + styleFaint.Render("  "+m.rappel) + "\n"
 }
 
+// imagesParSeconde plafonne la cadence de rendu. bubbletea redessine par
+// défaut à 60 images/s, même quand rien ne change : ~250 réveils par seconde
+// au repos, ce que macOS compte en premier pour la batterie. À 30, les réveils
+// sont divisés par deux, et une frappe s'affiche au pire 33 ms plus tard —
+// imperceptible. L'animation de progression (15 images/s) n'est pas touchée.
+const imagesParSeconde = 30
+
+// optionsProgramme reprend les options que huh pose par défaut — sortie sur
+// stderr, pour ne pas mêler l'interface à ce qu'un appelant lirait sur stdout,
+// et suivi du focus — et y ajoute la cadence. WithProgramOptions remplace les
+// options de huh au lieu de s'y ajouter : les oublier enverrait l'interface
+// sur stdout.
+func optionsProgramme() []tea.ProgramOption {
+	return []tea.ProgramOption{tea.WithOutput(os.Stderr), tea.WithReportFocus(), tea.WithFPS(imagesParSeconde)}
+}
+
+// lancerChamp affiche un champ isolé comme le fait field.Run de huh, mais
+// avec les options du projet.
+func lancerChamp(champ huh.Field) error {
+	return huh.NewForm(huh.NewGroup(champ).WithShowHelp(false)).
+		WithShowHelp(false).WithProgramOptions(optionsProgramme()...).Run()
+}
+
 // lancerEtape affiche un formulaire et distingue trois issues : terminé,
 // abandonné (Ctrl+C), ou retour à l'écran précédent — errRetour.
 //
@@ -187,7 +210,7 @@ func lancerEtape(form *huh.Form, ancre huh.Field) error {
 	// questions en texte brut sans écran à intercepter. On le laisse faire —
 	// mieux vaut pas de retour arrière qu'une interface illisible.
 	if ancre == nil || os.Getenv("TERM") == "dumb" {
-		return form.Run()
+		return form.WithProgramOptions(optionsProgramme()...).Run()
 	}
 
 	// Run() pose ces deux commandes lui-même. Ici c'est nous qui tenons le
@@ -198,7 +221,7 @@ func lancerEtape(form *huh.Form, ancre huh.Field) error {
 	// Les mêmes options que huh : la sortie va sur stderr, pour ne pas mêler
 	// l'interface à ce qu'un appelant pourrait lire sur stdout.
 	m := newEtapeModel(form, ancre)
-	final, err := tea.NewProgram(m, tea.WithOutput(os.Stderr), tea.WithReportFocus()).Run()
+	final, err := tea.NewProgram(m, optionsProgramme()...).Run()
 	if errors.Is(err, tea.ErrInterrupted) {
 		return huh.ErrUserAborted
 	}

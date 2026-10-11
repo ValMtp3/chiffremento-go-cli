@@ -851,7 +851,8 @@ func runJob(info jobInfo, op func(progress func(done, total int64)) error) error
 
 	var done atomic.Int64
 	model := newProgressModel(info, &done)
-	prog := tea.NewProgram(model, teaOptions...)
+	// Même cadence que les formulaires ; la sortie reste celle par défaut.
+	prog := tea.NewProgram(model, append([]tea.ProgramOption{tea.WithFPS(imagesParSeconde)}, teaOptions...)...)
 
 	// L'erreur passe par un canal plutôt que par une variable partagée : elle
 	// est écrite par la goroutine de chiffrement et lue ici après coup.
@@ -927,7 +928,7 @@ func readPassword(confirm bool, stdinTaken bool) ([]byte, error) {
 		Value(&password).
 		Validate(validatePassword).
 		WithTheme(formTheme())
-	if err := field.Run(); err != nil {
+	if err := lancerChamp(field); err != nil {
 		return nil, err
 	}
 
@@ -944,7 +945,7 @@ func readPassword(confirm bool, stdinTaken bool) ([]byte, error) {
 				return nil
 			}).
 			WithTheme(formTheme())
-		if err := check.Run(); err != nil {
+		if err := lancerChamp(check); err != nil {
 			return nil, err
 		}
 	}
