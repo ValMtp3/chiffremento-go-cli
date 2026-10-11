@@ -43,7 +43,7 @@ func main() {
 
 func run() error {
 	showVersion := flag.Bool("version", false, "afficher la version")
-	mode := flag.String("mode", "", "enc (chiffrer), dec (déchiffrer), verify (contrôler), info (inspecter), passwd (changer le mot de passe) ou bench (mesurer)")
+	mode := flag.String("mode", "", "enc (chiffrer), dec (déchiffrer), verify (contrôler), info (inspecter), passwd (changer le mot de passe), bench (mesurer) ou genpass (générer une phrase de passe)")
 	fileIn := flag.String("in", "", "fichier ou dossier d'entrée, ou - pour l'entrée standard (dossier en mode enc uniquement)")
 	fileOut := flag.String("out", "", "destination (défaut : entrée + "+extension+" en enc, entrée sans l'extension en dec) ; - pour la sortie standard")
 	compress := flag.Bool("comp", false, "compresser les données en zstd avant chiffrement")
@@ -54,6 +54,7 @@ func run() error {
 	kdf := flag.String("kdf", "", "coût de la dérivation de clé : standard (défaut), fort ou maximum")
 	meta := flag.String("meta", "", "métadonnées conservées dans le chiffré : none (défaut) ou minimal (nom et date)")
 	force := flag.Bool("force", false, "écraser la destination si elle existe déjà (enc et dec ; jamais pour un dossier extrait)")
+	mots := flag.Int("mots", pkg.DefautMotsPhrase, fmt.Sprintf("nombre de mots de la phrase générée par -mode genpass (de %d à %d)", pkg.MinMotsPhrase, pkg.MaxMotsPhrase))
 	flag.Usage = usage
 
 	// Sans le moindre argument, dans un vrai terminal : interface guidée.
@@ -74,9 +75,16 @@ func run() error {
 		return nil
 	}
 
-	// bench ne prend pas d'entrée : il ne lit ni n'écrit aucun fichier.
+	// bench et genpass ne prennent pas d'entrée : ils ne lisent ni n'écrivent
+	// aucun fichier.
 	if *mode == "bench" {
 		return doBench()
+	}
+	if *mode == "genpass" {
+		return doGenpass(*mots)
+	}
+	if drapeauFourni("mots") {
+		fmt.Fprintln(os.Stderr, styleDim.Render("note : -mots n'a d'effet qu'en mode genpass, il est ignoré ici"))
 	}
 
 	if *mode == "" || *fileIn == "" {
@@ -130,8 +138,20 @@ func run() error {
 	case "passwd":
 		return doPasswd(*fileIn)
 	default:
-		return fmt.Errorf("mode inconnu %q (attendu enc, dec, verify, info, passwd ou bench)", *mode)
+		return fmt.Errorf("mode inconnu %q (attendu enc, dec, verify, info, passwd, bench ou genpass)", *mode)
 	}
+}
+
+// drapeauFourni dit si nom a été passé sur la ligne de commande, même avec sa
+// valeur par défaut.
+func drapeauFourni(nom string) bool {
+	fourni := false
+	flag.Visit(func(f *flag.Flag) {
+		if f.Name == nom {
+			fourni = true
+		}
+	})
+	return fourni
 }
 
 // installSignalHandler évite qu'un Ctrl+C laisse un .chto-tmp-* orphelin :
@@ -648,6 +668,7 @@ func usage() {
   chiffremento -mode verify -in FICHIER%s      contrôle sans rien écrire
   chiffremento -mode info   -in FICHIER%s      en-tête, sans mot de passe
   chiffremento -mode passwd -in FICHIER%s      change le mot de passe, sans re-chiffrer
+  chiffremento -mode genpass [-mots N]               phrase de passe française, ≈128 bits
 
 Un dossier est empaqueté en tar au fil du chiffrement, et recréé à l'identique
 au déchiffrement.
@@ -663,6 +684,11 @@ avant que la fin du fichier soit authentifiée — à réserver aux tubes.
 
 Le mot de passe n'est jamais passé en argument : il est demandé de façon
 masquée, ou lu sur l'entrée standard si celle-ci n'est pas un terminal.
+
+-mode genpass tire une phrase de 7 mots (crypto/rand), avec majuscules,
+séparateurs et un chiffre au hasard, et l'écrit seule sur la sortie standard :
+
+  chiffremento -mode genpass | pbcopy
 
 Options :
 `, version, extension, extension, extension, extension, extension)

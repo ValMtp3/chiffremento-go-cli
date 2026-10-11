@@ -77,6 +77,24 @@ func ecransDeLInterface() []ecranTeste {
 			valideAuClavier: false, // se termine par les saisies de mot de passe
 		},
 		{
+			// Choisir la phrase générée escamote les saisies : l'écran se
+			// termine alors sur la question du choix, qui doit se valider
+			// au clavier comme toute liste.
+			nom: "options de chiffrement, phrase générée",
+			monter: func(t *testing.T) (*huh.Form, huh.Field, []string) {
+				o := optionsChiffrement{}
+				appliquerDefauts(&o, false)
+				o.genererPhrase = true
+				form, ancre := encryptForm(&o, false, 1024)
+				// algorithme, coût, compression, taille masquée, métadonnées.
+				return form, ancre, []string{"enter", "enter", "enter", "enter", "enter"}
+			},
+			// Depuis la dernière question, ← remonte d'une question : le retour
+			// à l'écran précédent part de l'ancre, déjà couvert plus haut.
+			toucheRetour:    "",
+			valideAuClavier: true,
+		},
+		{
 			nom: "mot de passe au déchiffrement",
 			monter: func(t *testing.T) (*huh.Form, huh.Field, []string) {
 				password := ""
@@ -103,6 +121,17 @@ func ecransDeLInterface() []ecranTeste {
 				var rep bool
 				champ := questionFermee("supprimer l'original ?", "il vient d'être chiffré",
 					"supprimer", "garder", &rep)
+				return formulaireQuestion(champ), champ, nil
+			},
+			toucheRetour:    "left",
+			valideAuClavier: true,
+		},
+		{
+			nom: "question fermée : phrase enregistrée",
+			monter: func(t *testing.T) (*huh.Form, huh.Field, []string) {
+				var rep bool
+				champ := questionFermee("as-tu enregistré cette phrase ?", "sans elle, le fichier est perdu",
+					"oui, je l'ai enregistrée", "pas encore", &rep)
 				return formulaireQuestion(champ), champ, nil
 			},
 			toucheRetour:    "left",
