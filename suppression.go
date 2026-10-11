@@ -37,7 +37,15 @@ type suppressionRefusee string
 // La vérification préalable a un coût réel — une seconde dérivation Argon2 et
 // une relecture complète — et c'est délibéré : il achète la certitude que le
 // fichier gardé rendra bien ce que l'original contenait.
-func supprimerOriginal(source, chiffre string, password []byte, estDossier bool) error {
+//
+// avant est l'instantané de la source pris avant le chiffrement. Sans lui
+// (relevé impossible), la question n'est pas posée : rien ne permettrait de
+// savoir si la source contient encore ce qui a été chiffré.
+func supprimerOriginal(source, chiffre string, password []byte, estDossier bool, avant instantane) error {
+	if avant == nil {
+		fmt.Printf("  %s\n\n", styleFaint.Render("suppression non proposée : la source n'a pas pu être relevée avant le chiffrement"))
+		return nil
+	}
 	if raison := suppressionPossible(source, chiffre, estDossier); raison != "" {
 		fmt.Printf("  %s\n\n", styleFaint.Render(string(raison)))
 		return nil
@@ -57,6 +65,17 @@ func supprimerOriginal(source, chiffre string, password []byte, estDossier bool)
 			filepath.Base(chiffre), err, filepath.Base(source))
 	}
 
+	return effacerSiInchange(avant, source, chiffre, estDossier)
+}
+
+// effacerSiInchange efface la source seulement si elle est restée telle que
+// relevée avant le chiffrement. La comparaison vient en dernier, juste avant
+// d'effacer : c'est l'état à cet instant qui compte.
+func effacerSiInchange(avant instantane, source, chiffre string, estDossier bool) error {
+	if err := verifierInchange(avant, source); err != nil {
+		return fmt.Errorf("%w\n  rien n'a été supprimé : ces changements ne sont pas dans %s",
+			err, filepath.Base(chiffre))
+	}
 	return effacer(source, estDossier)
 }
 
