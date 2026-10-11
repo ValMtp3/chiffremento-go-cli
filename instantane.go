@@ -88,3 +88,10 @@ func verifierInchange(avant *instantane, chemin string) error {
 	}
 	return nil
 }
+
+// raisonSansReleve explique pourquoi la suppression n'est pas proposée quand
+// la source n'a pas pu être relevée avant le chiffrement : sans relevé, rien
+// ne permettrait de savoir si elle contient encore ce qui a été chiffré.
+func raisonSansReleve(err error) string {
+	return "suppression non proposée : la source n'a pas pu être relevée avant le chiffrement (" + err.Error() + ")"
+}

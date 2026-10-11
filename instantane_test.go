@@ -148,3 +148,17 @@ func TestInstantaneMemoireConstante(t *testing.T) {
 		t.Errorf("le relevé de 3 000 fichiers garde %d octets en mémoire, attendu une taille constante", garde)
 	}
 }
+
+// TestRaisonSansReleve : quand la source n'a pas pu être relevée, la
+// suppression n'est pas proposée — et l'écran doit dire pourquoi (droits,
+// fichier disparu…), pas seulement que ça a échoué.
+func TestRaisonSansReleve(t *testing.T) {
+	_, err := photographier(filepath.Join(t.TempDir(), "absent"))
+	if err == nil {
+		t.Fatal("relevé d'un chemin absent accepté")
+	}
+	raison := raisonSansReleve(err)
+	if !strings.Contains(raison, "suppression non proposée") || !strings.Contains(raison, err.Error()) {
+		t.Errorf("raison %q : doit dire que la suppression n'est pas proposée, et pourquoi (%v)", raison, err)
+	}
+}

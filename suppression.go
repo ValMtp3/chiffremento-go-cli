@@ -38,9 +38,9 @@ type suppressionRefusee string
 // une relecture complète — et c'est délibéré : il achète la certitude que le
 // fichier gardé rendra bien ce que l'original contenait.
 //
-// avant est l'instantané de la source pris avant le chiffrement. Sans lui
-// (relevé impossible), la question n'est pas posée : rien ne permettrait de
-// savoir si la source contient encore ce qui a été chiffré.
+// avant est l'instantané de la source pris avant le chiffrement ; l'appelant
+// ne propose pas la suppression sans lui (raisonSansReleve). Le contrôle nil
+// ci-dessous n'est qu'un garde-fou.
 func supprimerOriginal(source, chiffre string, password []byte, estDossier bool, avant *instantane) error {
 	if avant == nil {
 		fmt.Printf("  %s\n\n", styleFaint.Render("suppression non proposée : la source n'a pas pu être relevée avant le chiffrement"))
