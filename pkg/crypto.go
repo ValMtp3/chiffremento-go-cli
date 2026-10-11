@@ -195,13 +195,20 @@ func (a *atomicFile) commit() error {
 	// Le rename doit être rendu durable lui aussi : les données sont sur le
 	// disque après le Sync, mais l'entrée de répertoire ne l'est pas forcément.
 	// Une coupure de courant juste après pourrait laisser la destination
-	// absente. Best effort : tous les systèmes ne permettent pas d'ouvrir un
-	// répertoire (Windows), et l'échec ici n'invalide pas l'écriture.
-	if dir, err := os.Open(filepath.Dir(a.dest)); err == nil {
+	// absente.
+	syncDir(filepath.Dir(a.dest))
+	return nil
+}
+
+// syncDir rend durables les entrées d'un répertoire (créations, renommages).
+// Best effort : tous les systèmes ne permettent pas de synchroniser un
+// répertoire (Windows), et l'échec ici n'invalide pas une écriture dont le
+// contenu est déjà synchronisé.
+func syncDir(path string) {
+	if dir, err := os.Open(path); err == nil {
 		dir.Sync()
 		dir.Close()
 	}
-	return nil
 }
 
 // cleanup s'appelle en defer : sans commit, le temporaire disparaît.
@@ -249,12 +256,20 @@ func newAtomicDir(dest string) (*atomicDir, error) {
 	return &atomicDir{path: p, dest: dest}, nil
 }
 
+// commit rend l'arborescence durable puis la renomme. Sans ça, une coupure
+// après le ✓ pourrait laisser des fichiers vides ou introuvables — alors que
+// l'interface propose ensuite de supprimer le .chto. rendreDurable prend la
+// voie la plus légère du système (durabilite_*.go).
 func (a *atomicDir) commit() error {
+	if err := rendreDurable(a.path); err != nil {
+		return err
+	}
 	if err := os.Rename(a.path, a.dest); err != nil {
 		return fmt.Errorf("renommage vers %s: %w", a.dest, err)
 	}
 	a.committed = true
 	untrackTemp(a.path)
+	syncDir(filepath.Dir(a.dest))
 	return nil
 }
 

@@ -598,21 +598,36 @@ func TestOpenSourceEtOpenDest(t *testing.T) {
 		t.Errorf("taille d'un flux annoncée %d, attendu -1", size)
 	}
 
-	// La fermeture de la destination doit être idempotente : elle est appelée
-	// explicitement pour remonter l'erreur, puis en defer.
+	// commit rend la sortie définitive ; abort, appelé ensuite en defer, ne
+	// doit pas la retirer.
 	dest := filepath.Join(dir, "sortie")
-	w, closeDst, err := openDest(dest, false)
+	w, commit, abort, err := openDest(dest, false)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err := w.Write([]byte("ok")); err != nil {
 		t.Fatal(err)
 	}
-	if err := closeDst(); err != nil {
-		t.Fatalf("première fermeture: %v", err)
+	if err := commit(); err != nil {
+		t.Fatalf("commit: %v", err)
 	}
-	if err := closeDst(); err != nil {
-		t.Errorf("seconde fermeture: %v (elle devrait être sans effet)", err)
+	abort()
+	if got, err := os.ReadFile(dest); err != nil || string(got) != "ok" {
+		t.Errorf("après commit puis abort : %q, %v", got, err)
+	}
+
+	// Sans commit, abort ne laisse rien sous le nom final.
+	jamais := filepath.Join(dir, "jamais")
+	w, _, abort, err = openDest(jamais, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.Write([]byte("partiel")); err != nil {
+		t.Fatal(err)
+	}
+	abort()
+	if _, err := os.Lstat(jamais); err == nil {
+		t.Error("une sortie abandonnée existe sous son nom final")
 	}
 }
 

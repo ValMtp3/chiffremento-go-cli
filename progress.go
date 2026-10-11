@@ -146,10 +146,12 @@ func (m *progressModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// relancer une seconde doublerait le nombre de rendus par seconde.
 		return m, nil
 	case tea.KeyMsg:
-		// On n'interrompt pas une opération en cours : un .chto à moitié écrit
-		// n'aurait aucune valeur, et l'écriture atomique attend le commit.
+		// En mode brut, Ctrl+C arrive comme une touche et non comme un signal.
+		// On le transforme en interruption : runJob nettoie alors les
+		// temporaires et sort en 130. Rien n'est perdu — l'écriture atomique
+		// n'a pas encore touché la destination.
 		if msg.Type == tea.KeyCtrlC {
-			return m, nil
+			return m, tea.Interrupt
 		}
 	}
 	return m, nil

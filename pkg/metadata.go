@@ -88,6 +88,11 @@ func marshalMetadata(m *FileMetadata) ([]byte, error) {
 	if len(name) > maxMetaName {
 		return nil, fmt.Errorf("métadonnées : nom de %d octets, maximum %d", len(name), maxMetaName)
 	}
+	// Ce que la relecture refuserait est refusé ici : sinon le chiffrement
+	// annonce un succès pour un fichier qu'aucun déchiffrement n'ouvrira.
+	if _, err := sanitizeMetaName(m.Name); err != nil {
+		return nil, err
+	}
 	buf := make([]byte, 0, metaPrefixSize+len(name))
 	buf = append(buf, metaMagic...)
 	buf = binary.BigEndian.AppendUint16(buf, uint16(len(name)))
@@ -152,10 +157,13 @@ func sanitizeMetaName(name string) (string, error) {
 	}
 
 	// Ceinture et bretelles : après Base, il ne doit plus rester de séparateur.
-	// Un octet nul tronquerait le nom pour tout appelant en C, et un « : »
-	// ouvrirait la porte aux chemins relatifs au lecteur sous Windows
-	// (« C:evil » désigne le répertoire courant de C:).
-	if strings.ContainsAny(name, `/\:`) || strings.ContainsRune(name, 0) {
+	// Un octet nul tronquerait le nom pour tout appelant en C.
+	//
+	// « : » reste accepté : il est légal sous macOS et Linux, et le refuser
+	// rendait indéchiffrable un fichier comme « Capture 10:30.png ». Le risque
+	// est propre à Windows (« C:evil » relatif au lecteur, flux NTFS) et s'y
+	// traite à l'usage : nomUtilisable le remplace avant tout renommage.
+	if strings.ContainsAny(name, `/\`) || strings.ContainsRune(name, 0) {
 		return "", invalide
 	}
 	return name, nil

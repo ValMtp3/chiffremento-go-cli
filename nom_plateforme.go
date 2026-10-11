@@ -17,9 +17,11 @@ import "strings"
 // l'interface propose le nom adapté, que l'utilisateur voit avant d'accepter.
 
 // caracteresInterditsWindows liste ce que Win32 refuse dans un nom de fichier.
-// Le « / », le « \ », le « : » et l'octet nul sont déjà écartés par
-// sanitizeMetaName, qui les traite comme un risque et non comme une gêne.
-const caracteresInterditsWindows = `<>"|?*`
+// Le « / », le « \ » et l'octet nul sont déjà écartés par sanitizeMetaName,
+// qui les traite comme un risque et non comme une gêne. Le « : », légal sous
+// Unix, n'est écarté qu'ici : sous Windows il désigne un lecteur (« C:evil »)
+// ou un flux NTFS, et ne doit jamais atteindre filepath.Join.
+const caracteresInterditsWindows = `<>:"|?*`
 
 // nomsReservesWindows sont des noms de périphériques : un fichier qui les porte
 // est inaccessible, extension comprise — « aux.txt » ouvre le périphérique aux.

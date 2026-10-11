@@ -551,6 +551,12 @@ func tuiEncrypt(path string, o *optionsChiffrement) error {
 			o.password, o.confirm, o.phrase = "", "", ""
 		}()
 
+		// Relevé de la source avant le chiffrement : la suppression proposée
+		// ensuite refusera d'effacer si quoi que ce soit a changé entre-temps.
+		// Un échec ici n'empêche pas de chiffrer, seulement de supprimer : la
+		// raison s'affiche à la place de la question.
+		avant, errReleve := photographier(path)
+
 		if err := runJob(info, func(p func(int64, int64)) error {
 			return pkg.Encrypt(path, out, motDePasse, pkg.Options{
 				Algo: o.algo, Comp: compEncodee(o.compresser), Pad: o.pad, PadProfile: o.padNiveau,
@@ -559,7 +565,12 @@ func tuiEncrypt(path string, o *optionsChiffrement) error {
 		}); err != nil {
 			return err
 		}
-		errSuppression := supprimerOriginal(path, out, motDePasse, estDossier)
+		var errSuppression error
+		if errReleve != nil {
+			fmt.Printf("  %s\n\n", styleFaint.Render(raisonSansReleve(errReleve)))
+		} else {
+			errSuppression = supprimerOriginal(path, out, motDePasse, estDossier, avant)
+		}
 		if o.brouiller {
 			// La date se pose après coup : le fichier n'existe pas avant. Elle se
 			// pose surtout en dernier, après supprimerOriginal — celui-ci relit le
@@ -888,7 +899,8 @@ func runJob(info jobInfo, op func(progress func(done, total int64)) error) error
 
 	var done atomic.Int64
 	model := newProgressModel(info, &done)
-	prog := tea.NewProgram(model, teaOptions...)
+	// Même cadence que les formulaires ; la sortie reste celle par défaut.
+	prog := tea.NewProgram(model, append([]tea.ProgramOption{tea.WithFPS(imagesParSeconde)}, teaOptions...)...)
 
 	// L'erreur passe par un canal plutôt que par une variable partagée : elle
 	// est écrite par la goroutine de chiffrement et lue ici après coup.
@@ -964,7 +976,7 @@ func readPassword(confirm bool, stdinTaken bool) ([]byte, error) {
 		Value(&password).
 		Validate(validatePassword).
 		WithTheme(formTheme())
-	if err := field.Run(); err != nil {
+	if err := lancerChamp(field); err != nil {
 		return nil, err
 	}
 
@@ -981,7 +993,7 @@ func readPassword(confirm bool, stdinTaken bool) ([]byte, error) {
 				return nil
 			}).
 			WithTheme(formTheme())
-		if err := check.Run(); err != nil {
+		if err := lancerChamp(check); err != nil {
 			return nil, err
 		}
 	}
@@ -1039,6 +1051,7 @@ func readPasswordFromTTY(confirm bool) ([]byte, error) {
 
 	ask := func(prompt string) ([]byte, error) {
 		fmt.Fprintf(tty, "%s ", styleDim.Render(prompt))
+		defer surveillerTerminal(int(tty.Fd()))()
 		pw, err := term.ReadPassword(int(tty.Fd()))
 		fmt.Fprintln(tty)
 		if err != nil {

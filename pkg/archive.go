@@ -224,6 +224,10 @@ func roundUpBlock(n int64) int64 {
 func writeArchive(w io.Writer, plan *archivePlan, progress func(done, total int64)) error {
 	tw := tar.NewWriter(w)
 
+	// Un seul tampon pour toute l'archive : io.Copy en allouait un de 32 Kio
+	// par fichier, soit 640 Mo de déchets pour 20 000 fichiers.
+	tampon := make([]byte, tailleTamponCopie)
+
 	var done int64
 	count := func(n int64) {
 		done += n
@@ -240,7 +244,7 @@ func writeArchive(w io.Writer, plan *archivePlan, progress func(done, total int6
 		if hdr.Typeflag != tar.TypeReg {
 			continue
 		}
-		if err := copyEntry(tw, e, count); err != nil {
+		if err := copyEntry(tw, e, count, tampon); err != nil {
 			return err
 		}
 	}
@@ -254,14 +258,16 @@ func writeArchive(w io.Writer, plan *archivePlan, progress func(done, total int6
 // copyEntry recopie un fichier dans le tar. La taille annoncée dans l'en-tête
 // tar a été lue au scan : si le fichier a changé entre-temps, l'archive serait
 // silencieusement incohérente. On préfère échouer.
-func copyEntry(tw *tar.Writer, e archiveEntry, count func(int64)) error {
+func copyEntry(tw *tar.Writer, e archiveEntry, count func(int64), tampon []byte) error {
 	f, err := os.Open(e.abs)
 	if err != nil {
 		return fmt.Errorf("lecture de %s: %w", e.rel, err)
 	}
 	defer f.Close()
 
-	n, err := io.Copy(&progressWriter{w: tw, fn: count}, f)
+	// os.File implémente WriteTo, qu'io.CopyBuffer préfère au tampon fourni
+	// (et qui en alloue un). L'enveloppe le masque.
+	n, err := io.CopyBuffer(&progressWriter{w: tw, fn: count}, struct{ io.Reader }{f}, tampon)
 	if err != nil {
 		if errors.Is(err, tar.ErrWriteTooLong) {
 			return fmt.Errorf("%s a grossi pendant l'archivage", e.rel)
@@ -274,6 +280,9 @@ func copyEntry(tw *tar.Writer, e archiveEntry, count func(int64)) error {
 	}
 	return nil
 }
+
+// tailleTamponCopie est celle qu'io.Copy aurait allouée pour chaque fichier.
+const tailleTamponCopie = 32 << 10
 
 // walkArchive parcourt un tar en validant chaque entrée, et délègue le
 // traitement à handle. Toute la validation vit ici, pour que l'extraction et la
@@ -311,6 +320,8 @@ func walkArchive(r io.Reader, handle func(hdr *tar.Header, rel string, body io.R
 // Chaque nom est validé avant d'être joint à dest : une archive ne peut donc
 // rien écrire ailleurs que sous dest, même si elle a été fabriquée pour ça.
 func extractArchive(r io.Reader, dest string) error {
+	// Un seul tampon pour toute l'extraction, comme writeArchive.
+	tampon := make([]byte, tailleTamponCopie)
 	return walkArchive(r, func(hdr *tar.Header, rel string, body io.Reader) error {
 		target := filepath.Join(dest, filepath.FromSlash(rel))
 		if hdr.Typeflag == tar.TypeDir {
@@ -322,7 +333,7 @@ func extractArchive(r io.Reader, dest string) error {
 		if err := os.MkdirAll(filepath.Dir(target), 0700); err != nil {
 			return fmt.Errorf("création du dossier parent de %s: %w", rel, err)
 		}
-		return extractFile(body, target, rel, hdr)
+		return extractFile(body, target, rel, hdr, tampon)
 	})
 }
 
@@ -336,16 +347,26 @@ func checkArchive(r io.Reader) error {
 	})
 }
 
-func extractFile(tr io.Reader, target, rel string, hdr *tar.Header) error {
+func extractFile(tr io.Reader, target, rel string, hdr *tar.Header, tampon []byte) error {
 	// O_EXCL : une archive qui décrit deux fois le même chemin ne doit pas
 	// écraser en silence ce que la première entrée a écrit.
 	f, err := os.OpenFile(target, os.O_WRONLY|os.O_CREATE|os.O_EXCL, filePerm(hdr.FileInfo().Mode()))
 	if err != nil {
 		return fmt.Errorf("création de %s: %w", rel, err)
 	}
-	if _, err := io.Copy(f, tr); err != nil {
+	// os.File implémente ReadFrom : l'enveloppe force l'usage du tampon fourni.
+	if _, err := io.CopyBuffer(struct{ io.Writer }{f}, tr, tampon); err != nil {
 		f.Close()
 		return fmt.Errorf("extraction de %s: %w", rel, err)
+	}
+	// Sans synchronisation, le contenu peut rester dans le cache du système.
+	// Une coupure après le ✓ — et après la suppression du .chto que l'interface
+	// propose — laisserait des fichiers vides ou tronqués. syncExtrait prend la
+	// voie la plus légère du système (durabilite_*.go) ; atomicDir.commit pose
+	// ensuite la barrière qui couvre toute l'arborescence.
+	if err := syncExtrait(f); err != nil {
+		f.Close()
+		return fmt.Errorf("synchronisation de %s: %w", rel, err)
 	}
 	if err := f.Close(); err != nil {
 		return fmt.Errorf("fermeture de %s: %w", rel, err)
