@@ -278,6 +278,22 @@ type optionsChiffrement struct {
 	brouiller  bool
 	password   string
 	confirm    string
+
+	// genererPhrase remplace la saisie par une phrase de passe générée
+	// (phrase_tui.go) ; phrase la porte une fois l'utilisateur certain de
+	// l'avoir enregistrée.
+	genererPhrase bool
+	phrase        string
+}
+
+// secretChoisi rend le secret qui chiffrera le fichier : la phrase générée si
+// elle a été choisie, la saisie sinon. Un mot de passe tapé puis abandonné au
+// profit d'une phrase ne doit jamais servir à sa place.
+func secretChoisi(o *optionsChiffrement) string {
+	if o.genererPhrase {
+		return o.phrase
+	}
+	return o.password
 }
 
 // encryptForm construit l'écran des options. Il rend aussi son premier champ :
@@ -356,6 +372,17 @@ func encryptForm(o *optionsChiffrement, estDossier bool, tailleClair int64) (*hu
 				&o.brouiller),
 		).WithHideFunc(func() bool { return estDossier || !o.garderMeta }),
 
+		// Générer plutôt qu'inventer : la phrase proposée vaut environ 128 bits,
+		// bien au-delà de ce qu'un mot de passe tapé à la main atteint. Le
+		// groupe de saisie disparaît alors, et l'écran de la phrase vient après
+		// les options (etapePhrase).
+		huh.NewGroup(
+			questionFermee("mot de passe",
+				fmt.Sprintf("une phrase de %d mots tirée au hasard (≈%.0f bits), ou un mot de passe de ton choix",
+					pkg.DefautMotsPhrase, pkg.EntropiePhrase(pkg.DefautMotsPhrase)),
+				"générer une phrase de passe", "le saisir moi-même", &o.genererPhrase),
+		),
+
 		huh.NewGroup(
 			huh.NewInput().
 				Title("mot de passe").
@@ -377,7 +404,7 @@ func encryptForm(o *optionsChiffrement, estDossier bool, tailleClair int64) (*hu
 					}
 					return nil
 				}),
-		),
+		).WithHideFunc(func() bool { return o.genererPhrase }),
 	).WithTheme(formTheme()).WithKeyMap(formKeyMap()).WithShowHelp(true)
 
 	return form, algoChamp
@@ -469,6 +496,22 @@ func tuiEncrypt(path string, o *optionsChiffrement) error {
 				return err
 			}
 		}
+		// La phrase se tire en dernier, juste avant de chiffrer, après la
+		// question de l'écrasement : un retour depuis celle-ci ne fait donc
+		// jamais tirer de phrase pour rien. Revenir aux options depuis l'écran
+		// de la phrase en tire une nouvelle au passage suivant ; aucune n'est
+		// utilisée avant d'avoir été confirmée comme enregistrée.
+		if o.genererPhrase {
+			phrase, err := etapePhrase()
+			if errors.Is(err, errRetour) {
+				continue // retour aux options
+			}
+			if err != nil {
+				return err
+			}
+			o.phrase = phrase
+		}
+
 		// La ligne « sel » du cadre reste sur une seule ligne : les mentions
 		// s'y ajoutent plutôt que de casser la mise en page.
 		salt := "16 o aléatoires · en-tête authentifié"
@@ -502,10 +545,10 @@ func tuiEncrypt(path string, o *optionsChiffrement) error {
 		//
 		// L'effacement n'a lieu qu'ici, après le lancement de l'opération : plus
 		// haut, un retour en arrière doit encore retrouver la saisie à l'écran.
-		motDePasse := []byte(o.password)
+		motDePasse := []byte(secretChoisi(o))
 		defer func() {
 			zero(motDePasse)
-			o.password, o.confirm = "", ""
+			o.password, o.confirm, o.phrase = "", "", ""
 		}()
 
 		if err := runJob(info, func(p func(int64, int64)) error {
