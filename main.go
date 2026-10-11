@@ -10,12 +10,14 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
 	"chiffremento-cli/pkg"
 
 	"github.com/charmbracelet/huh"
+	"golang.org/x/term"
 )
 
 var version = "dev"
@@ -140,10 +142,48 @@ func installSignalHandler() {
 	signal.Notify(c, os.Interrupt, syscall.SIGTERM)
 	go func() {
 		<-c
+		restaurerTerminal()
 		pkg.CleanupTemporaries()
 		fmt.Fprintln(os.Stderr, "\ninterrompu")
 		os.Exit(exitInterrompu)
 	}()
+}
+
+// Restauration du terminal sur interruption.
+//
+// term.ReadPassword coupe l'écho et laisse SIGINT actif : un Ctrl+C pendant la
+// saisie arrive au gestionnaire de signal, qui sort par os.Exit sans que le
+// defer de ReadPassword ait pu rendre l'écho. Le shell restait alors muet. La
+// saisie déclare donc ici l'état à rendre, et le gestionnaire le restaure.
+var (
+	restaurationMu       sync.Mutex
+	restaurationTerminal func()
+)
+
+// surveillerTerminal mémorise l'état de fd pour qu'une interruption le rende.
+// relacher s'appelle en defer, une fois la saisie terminée normalement.
+func surveillerTerminal(fd int) (relacher func()) {
+	etat, err := term.GetState(fd)
+	if err != nil {
+		return func() {}
+	}
+	restaurationMu.Lock()
+	restaurationTerminal = func() { term.Restore(fd, etat) }
+	restaurationMu.Unlock()
+	return func() {
+		restaurationMu.Lock()
+		restaurationTerminal = nil
+		restaurationMu.Unlock()
+	}
+}
+
+// restaurerTerminal rend l'état mémorisé, s'il y en a un.
+func restaurerTerminal() {
+	restaurationMu.Lock()
+	defer restaurationMu.Unlock()
+	if restaurationTerminal != nil {
+		restaurationTerminal()
+	}
 }
 
 // chooseAlgo refuse les combinaisons contradictoires. La v1 laissait -parano

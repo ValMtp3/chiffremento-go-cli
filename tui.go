@@ -996,6 +996,7 @@ func readPasswordFromTTY(confirm bool) ([]byte, error) {
 
 	ask := func(prompt string) ([]byte, error) {
 		fmt.Fprintf(tty, "%s ", styleDim.Render(prompt))
+		defer surveillerTerminal(int(tty.Fd()))()
 		pw, err := term.ReadPassword(int(tty.Fd()))
 		fmt.Fprintln(tty)
 		if err != nil {

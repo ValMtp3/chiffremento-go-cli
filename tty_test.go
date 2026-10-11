@@ -4,11 +4,13 @@ package main
 
 import (
 	"os"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/creack/pty"
+	"golang.org/x/term"
 )
 
 // TestReadPasswordDepuisTTY couvre le chemin ouvert par -in - : l'entrée
@@ -84,6 +86,75 @@ func TestReadPasswordDepuisTTY(t *testing.T) {
 		}
 	case <-time.After(15 * time.Second):
 		t.Fatal("readPassword n'a pas rendu la main : la saisie au terminal est bloquée")
+	}
+}
+
+// TestCtrlCPendantSaisieRestaureLeTerminal : term.ReadPassword coupe l'écho et
+// laisse SIGINT actif. Le gestionnaire de signal sortait par os.Exit sans
+// restaurer le terminal : après un Ctrl+C pendant la saisie, le shell restait
+// sans écho, l'utilisateur tapait sans rien voir. Le gestionnaire appelle
+// restaurerTerminal ; ce test vérifie qu'elle rend bien l'état d'origine
+// pendant une saisie en cours.
+func TestCtrlCPendantSaisieRestaureLeTerminal(t *testing.T) {
+	maitre, esclave, err := pty.Open()
+	if err != nil {
+		t.Skipf("pseudo-terminal indisponible ici: %v", err)
+	}
+	defer maitre.Close()
+	defer esclave.Close() // voir TestReadPasswordDepuisTTY
+
+	precedent := ttyDevice
+	ttyDevice = esclave.Name()
+	defer func() { ttyDevice = precedent }()
+
+	origine, err := term.GetState(int(esclave.Fd()))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	res := make(chan error, 1)
+	go func() {
+		_, err := readPassword(false, true)
+		res <- err
+	}()
+
+	// Attendre que la saisie ait basculé le terminal (écho coupé).
+	limite := time.Now().Add(10 * time.Second)
+	for {
+		etat, err := term.GetState(int(esclave.Fd()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !reflect.DeepEqual(etat, origine) {
+			break
+		}
+		if time.Now().After(limite) {
+			t.Fatal("la saisie n'a jamais coupé l'écho")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	restaurerTerminal()
+
+	etat, err := term.GetState(int(esclave.Fd()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(etat, origine) {
+		t.Error("restaurerTerminal n'a pas rendu l'état d'origine pendant la saisie")
+	}
+
+	// Débloquer la saisie pour ne pas laisser la goroutine pendante.
+	fin := time.After(10 * time.Second)
+	for {
+		maitre.WriteString("motdepassetube\n")
+		select {
+		case <-res:
+			return
+		case <-fin:
+			t.Fatal("la saisie n'a pas rendu la main")
+		case <-time.After(20 * time.Millisecond):
+		}
 	}
 }
 
