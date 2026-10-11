@@ -29,6 +29,18 @@ pas terminée.
   (`F_FULLFSYNC` sous macOS) — à ne jamais réintroduire dans une boucle.
 - Relevé avant suppression (`instantane.go`) : empreinte SHA-256 en mémoire
   constante ; une liste par entrée coûtait 14,8 Mo pour 100 000 fichiers.
+- Mémoire : le pic d'une opération est le bloc d'Argon2 (~272 Mo en profil
+  standard), rendu au système dès la dérivation finie (`debug.FreeOSMemory`
+  dans `pkg/keys.go`) : ~17 Mo pendant le traitement. Avant, le bloc restait
+  gardé et doublait quand deux dérivations se suivaient (`passwd` : 528 Mo).
+  Mesurer avec le « peak memory footprint » de `/usr/bin/time -l`, pas le
+  RSS, qui compte encore les pages rendues.
+- Archivage et extraction : un seul tampon de copie par opération, jamais un
+  par fichier (`io.Copy` en alloue un de 32 Kio à chaque appel).
+- Interface : 30 images/s (`imagesParSeconde`, `navigation.go`) : ~110 à 150
+  réveils par seconde au repos au lieu de ~250 ; premier écran en ~62 ms.
+- zxcvbn construit ses dictionnaires au démarrage du programme : ~13 Mo et
+  ~7 ms à chaque lancement, et ~3 Mo de binaire.
 - Binaire : ~8,3 Mo (`-s -w`).
 - L'écran de progression dure au moins 4 s : c'est un choix esthétique, pas un
   coût de calcul.
