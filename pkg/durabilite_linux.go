@@ -24,7 +24,10 @@ func rendreDurable(racine string) error {
 		return fmt.Errorf("synchronisation de l'arborescence: %w", err)
 	}
 	defer dir.Close()
-	if err := unix.Syncfs(int(dir.Fd())); err != nil {
+	err = sansEINTR(func() error { return unix.Syncfs(int(dir.Fd())) })
+	// Certains systèmes FUSE refusent syncfs : best effort, comme avant que
+	// l'extraction ne soit synchronisée.
+	if err != nil && !syncNonSupporte(err) {
 		return fmt.Errorf("synchronisation de l'arborescence: %w", err)
 	}
 	return nil
