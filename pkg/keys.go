@@ -9,6 +9,7 @@ import (
 	"crypto/subtle"
 	"errors"
 	"fmt"
+	"runtime/debug"
 
 	"golang.org/x/crypto/argon2"
 )
@@ -67,7 +68,14 @@ func deriveKey(password, salt []byte, p argonParams) ([]byte, error) {
 	if err := p.validate(); err != nil {
 		return nil, err
 	}
-	return argon2.IDKey(password, salt, p.Time, p.Memory, p.Threads, argonKeyLen), nil
+	cle := argon2.IDKey(password, salt, p.Time, p.Memory, p.Threads, argonKeyLen)
+	// Les 256 Mio (ou plus) d'Argon2 sont inutiles dès ici, mais le runtime Go
+	// ne les rend pas de lui-même : l'empreinte restait à ~272 Mo pendant tout
+	// le chiffrement, et doublait quand deux dérivations se suivaient
+	// (changement de mot de passe, relecture avant suppression). Rendre la
+	// mémoire coûte ~1 ms, contre ~150 ms pour la dérivation.
+	debug.FreeOSMemory()
+	return cle, nil
 }
 
 // deriveKeys produit le matériel de chiffrement correspondant à un en-tête,
