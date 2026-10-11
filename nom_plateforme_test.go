@@ -19,6 +19,8 @@ func TestAdapterNomReglesWindows(t *testing.T) {
 		{"rapport.pdf", "rapport.pdf", "un nom ordinaire ne doit pas bouger"},
 		{"rapport 2024?.pdf", "rapport 2024_.pdf", "le point d'interrogation est refusé par Win32"},
 		{`fichier<1>"2"|3*.txt`, "fichier_1__2__3_.txt", "tous les caractères interdits sont remplacés"},
+		{"rapport 10:30.txt", "rapport 10_30.txt", "« : » ouvrirait un chemin relatif au lecteur ou un flux NTFS"},
+		{"C:evil.txt", "C_evil.txt", "une lettre de lecteur forgée ne doit jamais atteindre filepath.Join"},
 		{"aux.txt", "_aux.txt", "aux est un périphérique, extension comprise"},
 		{"CON", "_CON", "la casse n'y change rien"},
 		{"com9.log", "_com9.log", "les ports série aussi"},

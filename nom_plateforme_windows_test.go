@@ -17,6 +17,7 @@ func TestNomUtilisableAdapteSousWindows(t *testing.T) {
 	cas := map[string]string{
 		"rapport.pdf":       "rapport.pdf",
 		"rapport 2024?.pdf": "rapport 2024_.pdf",
+		"rapport 10:30.txt": "rapport 10_30.txt",
 		"aux.txt":           "_aux.txt",
 		"note.":             "note",
 		`a<b>c`:             "a_b_c",

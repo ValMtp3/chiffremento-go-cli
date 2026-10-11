@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -229,6 +230,12 @@ func TestMetadataNomHostile(t *testing.T) {
 		"./././x.txt":                     "x.txt",
 		"dossier/sous/fichier.txt":        "fichier.txt",
 		"rapport.pdf":                     "rapport.pdf",
+		// « : » est légal sous macOS et Linux (« Capture 10:30.png ») : le
+		// refuser ici rendait indéchiffrable un fichier chiffré sans erreur.
+		// Le risque Windows (« C:evil » relatif au lecteur) est traité par
+		// nomUtilisable, qui remplace « : » avant tout renommage.
+		"rapport 10:30.txt": "rapport 10:30.txt",
+		"C:evil.txt":        "C:evil.txt",
 	}
 	for entree, attendu := range attendus {
 		got, err := sanitizeMetaName(entree)
@@ -243,13 +250,50 @@ func TestMetadataNomHostile(t *testing.T) {
 
 	refuses := []string{
 		"", ".", "..", "/", "/../", "../..", `\`, `\\`, "///",
-		// Un « : » ouvrirait la porte aux chemins relatifs au lecteur sous
-		// Windows, et un octet nul tronquerait le nom pour un appelant en C.
-		"C:evil.txt", "flux:caché", "nom\x00tronqué",
+		// Un octet nul tronquerait le nom pour un appelant en C.
+		"nom\x00tronqué",
 	}
 	for _, mauvais := range refuses {
 		if got, err := sanitizeMetaName(mauvais); err == nil {
 			t.Errorf("sanitizeMetaName(%q) accepté à tort, rendu %q", mauvais, got)
+		}
+	}
+}
+
+// TestMetadataNomAvecDeuxPointsAllerRetour : un fichier chiffré avec -meta
+// minimal doit se relire, quel que soit son nom légal. « rapport 10:30.txt »
+// sortait ✓ du chiffrement, puis verify et dec échouaient : « nom d'origine
+// inutilisable ». L'original supprimé après le ✓, le contenu était perdu.
+func TestMetadataNomAvecDeuxPointsAllerRetour(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("« : » n'est pas un caractère de nom de fichier sous Windows")
+	}
+	dir := t.TempDir()
+	nom := "rapport 10:30.txt"
+	in := write(t, dir, nom, []byte("contenu"))
+	enc := filepath.Join(dir, "sortie.chto")
+	if err := Encrypt(in, enc, []byte("pw"), Options{Metadata: MetadataMinimal}); err != nil {
+		t.Fatal(err)
+	}
+	if err := Verify(enc, []byte("pw"), Options{}); err != nil {
+		t.Fatalf("verify d'un fichier chiffré sans erreur: %v", err)
+	}
+	res, err := DecryptTo(enc, filepath.Join(dir, "clair"), []byte("pw"), Options{})
+	if err != nil {
+		t.Fatalf("déchiffrement d'un fichier chiffré sans erreur: %v", err)
+	}
+	if res.Metadata == nil || res.Metadata.Name != nom {
+		t.Errorf("nom restitué %+v, attendu %q", res.Metadata, nom)
+	}
+}
+
+// TestMetadataNomIllisibleRefuseALEcriture : tout nom que la relecture
+// refuserait doit être refusé dès l'écriture. Sinon le chiffrement annonce un
+// succès pour un fichier qu'aucun déchiffrement n'ouvrira.
+func TestMetadataNomIllisibleRefuseALEcriture(t *testing.T) {
+	for _, nom := range []string{"nom\x00tronqué", "..", "/"} {
+		if _, err := marshalMetadata(&FileMetadata{Name: nom}); err == nil {
+			t.Errorf("marshalMetadata(%q) accepté, alors que la relecture le refusera", nom)
 		}
 	}
 }
