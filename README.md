@@ -19,7 +19,7 @@
 **Chiffremento CLI** est un outil en ligne de commande écrit en Go pour chiffrer et déchiffrer des fichiers. Il s'utilise soit via une interface guidée, soit avec des flags pour les scripts.
 
 ```
-  chiffremento chiffrement  v2.2.1
+  chiffremento chiffrement  v2.3.0
 ┌────────────────────────────────────────────────────┐
 │  entrée    rapport-annuel.pdf             14.2 Mo  │
 │  sortie    rapport-annuel.pdf.chto                 │
@@ -32,6 +32,20 @@
 │  ████████████░░░░░░░░░░░░░░░░░░  42%      38 Mo/s  │
 └────────────────────────────────────────────────────┘
 ```
+
+## ✨ Nouveautés v2.3
+
+> Le **format de fichier** ne change pas : il reste en v4.
+
+- **🎲 Phrase de passe générée.** À l'étape du mot de passe, l'interface propose une phrase de 7 mots français tirée au hasard, d'environ 128 bits. Elle s'affiche masquée, se dévoile ou se copie, et l'interface demande confirmation qu'elle a été enregistrée avant de chiffrer. En ligne de commande : `-mode genpass [-mots N]`.
+- **🪶 Plus léger.** La mémoire d'Argon2 est rendue au système dès la clé dérivée : pendant le traitement d'un gros fichier, l'empreinte passe de 272 à 17 Mo, et `-mode passwd` de 528 à 272 Mo. Archiver ou extraire un dossier de 5 000 fichiers consomme environ 90 Mo de moins, et l'interface au repos calcule 40 % de moins.
+- **⚡ Extraction d'un dossier rapide et sûre.** Chaque fichier extrait est désormais synchronisé sur disque, sans le coût d'une synchronisation complète par fichier sous macOS : 0,55 s pour 5 000 petits fichiers au lieu de ~17 s. Sur les volumes qui ne savent pas synchroniser (exFAT, SMB, NFS), l'extraction n'échoue plus.
+- **🛡️ Fiabilité.**
+  - Ctrl+C interrompt l'écran de progression et restaure le terminal pendant la saisie masquée.
+  - Une source modifiée depuis le chiffrement n'est jamais effacée, et l'écran dit pourquoi la source n'a pas pu être relevée.
+  - L'écriture reste atomique quand l'entrée est un flux. `-out /dev/null`, un tube nommé ou un lien symbolique reçoivent de nouveau les octets.
+  - Un nom d'origine contenant « : » est accepté avec `-meta minimal`.
+  - `install.sh` refuse une archive absente de `checksums.txt`.
 
 ## 🔧 Correctifs v2.2.1
 
@@ -360,6 +374,20 @@ Le mode parano ne remplace pas un bon mot de passe : il protège contre la déco
 # 🇬🇧 English
 
 **Chiffremento CLI** is a command-line tool written in Go for encrypting and decrypting files. It offers a guided interface, or flags for scripting.
+
+## ✨ New in v2.3
+
+> The **file format** does not change: it stays at v4.
+
+- **🎲 Generated passphrase.** At the password step, the interface offers a random 7-word French passphrase of about 128 bits. It is shown masked, can be revealed or copied, and the interface asks for confirmation that it has been saved before encrypting. On the command line: `-mode genpass [-mots N]`.
+- **🪶 Lighter.** Argon2's memory goes back to the system as soon as the key is derived: while processing a large file, the footprint drops from 272 to 17 MB, and `-mode passwd` from 528 to 272 MB. Archiving or extracting a 5,000-file folder uses about 90 MB less, and the idle interface does 40% less work.
+- **⚡ Fast and safe folder extraction.** Every extracted file is now synced to disk, without the cost of a full sync per file on macOS: 0.55 s for 5,000 small files instead of ~17 s. On volumes that cannot sync (exFAT, SMB, NFS), extraction no longer fails.
+- **🛡️ Reliability.**
+  - Ctrl+C interrupts the progress screen and restores the terminal during masked input.
+  - A source modified since encryption is never deleted, and the screen says why the source could not be recorded.
+  - Writing stays atomic when the input is a stream. `-out /dev/null`, a named pipe or a symlink receive the bytes again.
+  - An original name containing « : » is accepted with `-meta minimal`.
+  - `install.sh` refuses an archive missing from `checksums.txt`.
 
 ## 🔧 Fixes in v2.2.1
 
