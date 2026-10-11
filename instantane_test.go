@@ -1,8 +1,10 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -17,7 +19,7 @@ func TestVerifierInchange(t *testing.T) {
 	cas := []struct {
 		nom      string
 		modifier func(t *testing.T, racine string)
-		attendu  string // vide : aucun changement attendu
+		attendu  string // vide : aucun changement attendu ; sinon, ce qui change
 	}{
 		{"rien ne bouge", func(*testing.T, string) {}, ""},
 		{"fichier ajouté", func(t *testing.T, r string) {
@@ -62,8 +64,8 @@ func TestVerifierInchange(t *testing.T) {
 			if err == nil {
 				t.Fatal("changement non détecté : la suppression aurait effacé des données non archivées")
 			}
-			if !strings.Contains(err.Error(), c.attendu) {
-				t.Errorf("le message ne nomme pas %q : %v", c.attendu, err)
+			if !strings.Contains(err.Error(), "a changé depuis le chiffrement") {
+				t.Errorf("message inattendu : %v", err)
 			}
 		})
 	}
@@ -104,8 +106,8 @@ func TestEffacerSiInchange(t *testing.T) {
 	if err == nil {
 		t.Fatal("suppression acceptée alors que la source a changé")
 	}
-	if !strings.Contains(err.Error(), "tardif.txt") {
-		t.Errorf("le message ne nomme pas le fichier ajouté : %v", err)
+	if !strings.Contains(err.Error(), "rien n'a été supprimé") {
+		t.Errorf("le refus ne dit pas que rien n'a été supprimé : %v", err)
 	}
 	if _, err := os.Stat(ajoute); err != nil {
 		t.Errorf("le fichier non archivé a disparu : %v", err)
@@ -120,5 +122,29 @@ func TestEffacerSiInchange(t *testing.T) {
 	}
 	if _, err := os.Stat(racine); err == nil {
 		t.Error("la source inchangée n'a pas été effacée")
+	}
+}
+
+// TestInstantaneMemoireConstante : le relevé ne doit pas grandir avec le
+// dossier. Une liste par entrée coûtait ~148 octets par fichier — 15 Mo pour
+// 100 000 fichiers, ~74 Mo au plafond de l'archive. Une empreinte calculée au
+// fil du parcours tient en quelques octets, quelle que soit la taille.
+func TestInstantaneMemoireConstante(t *testing.T) {
+	racine := t.TempDir()
+	for i := range 3000 {
+		ecrire(t, filepath.Join(racine, fmt.Sprintf("fichier-au-nom-realiste-%04d.txt", i)), []byte("x"))
+	}
+	var avant, apres runtime.MemStats
+	runtime.GC()
+	runtime.ReadMemStats(&avant)
+	photo, err := photographier(racine)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime.GC()
+	runtime.ReadMemStats(&apres)
+	runtime.KeepAlive(photo)
+	if garde := int64(apres.HeapAlloc) - int64(avant.HeapAlloc); garde > 64<<10 {
+		t.Errorf("le relevé de 3 000 fichiers garde %d octets en mémoire, attendu une taille constante", garde)
 	}
 }
