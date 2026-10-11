@@ -256,22 +256,13 @@ func newAtomicDir(dest string) (*atomicDir, error) {
 	return &atomicDir{path: p, dest: dest}, nil
 }
 
-// commit rend l'arborescence durable puis la renomme. Le contenu des fichiers
-// est synchronisé à l'extraction (extractFile) ; restent les entrées de
-// répertoire, sans quoi une coupure après le ✓ pourrait laisser des fichiers
-// introuvables — alors que l'interface propose ensuite de supprimer le .chto.
+// commit rend l'arborescence durable puis la renomme. Sans ça, une coupure
+// après le ✓ pourrait laisser des fichiers vides ou introuvables — alors que
+// l'interface propose ensuite de supprimer le .chto. rendreDurable prend la
+// voie la plus légère du système (durabilite_*.go).
 func (a *atomicDir) commit() error {
-	err := filepath.WalkDir(a.path, func(p string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if d.IsDir() {
-			syncDir(p)
-		}
-		return nil
-	})
-	if err != nil {
-		return fmt.Errorf("synchronisation de l'arborescence: %w", err)
+	if err := rendreDurable(a.path); err != nil {
+		return err
 	}
 	if err := os.Rename(a.path, a.dest); err != nil {
 		return fmt.Errorf("renommage vers %s: %w", a.dest, err)
