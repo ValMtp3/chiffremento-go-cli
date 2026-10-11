@@ -4,7 +4,7 @@
 > - 🔥 **Priorité haute** · ⭐️ **Priorité moyenne** · ☁️ **Idées futures**
 > - 🟢 **Facile** | 🟡 **Moyen** | 🔴 **Difficile**
 
-Dernière version publiée : **v2.2.1**. Le format de fichier en est à la **v4**.
+Dernière version publiée : **v2.3.0**. Le format de fichier en est à la **v4**.
 
 ---
 
@@ -41,6 +41,13 @@ Flèche droite qui ne validait pas la dernière question d'un écran (explorateu
 - **Format v4 : enveloppe DEK/KEK** — la clé du contenu est tirée au hasard et scellée dans l'en-tête, donc indépendante du mot de passe
 - **`-mode passwd`** — changer le mot de passe en réécrivant 117 octets, quelle que soit la taille du fichier ; disponible aussi dans l'interface guidée
 
+### v2.3 — phrase de passe générée, et un outil plus léger
+
+- **Phrase de passe générée** à l'étape du mot de passe : 7 mots français tirés de `crypto/rand`, environ 128 bits, masquée, copiable, avec confirmation avant de chiffrer. En ligne de commande : `-mode genpass [-mots N]`
+- **Mémoire d'Argon2 rendue au système** dès la clé dérivée : 272 → 17 Mo pendant le traitement d'un gros fichier, 528 → 272 Mo pour `-mode passwd`
+- **Extraction d'un dossier synchronisée sur disque**, en 0,55 s pour 5 000 fichiers sous macOS, et tolérante aux volumes sans synchronisation (exFAT, SMB, NFS)
+- **Fiabilité** : Ctrl+C, source modifiée jamais effacée, écriture atomique depuis un flux, `install.sh` vérifié par `checksums.txt`
+
 ---
 
 ## Ce qui reste
@@ -49,7 +56,6 @@ Flèche droite qui ne validait pas la dernière question d'un écran (explorateu
 
 - **🟢 Fichier-clé en second facteur** — combiner le mot de passe et le contenu d'un fichier (clé USB) par HKDF : `-keyfile /Volumes/USB/cle.bin`. Le mot de passe seul ne suffit plus.
 - **🟢 Sortie ASCII (`-armor`)** — base64 avec en-tête et pied lisibles, pour coller un secret dans un mail. Ce que fait `age --armor`.
-- **🟢 Générateur de phrases de passe** — `chiffremento -mode genpass`, diceware tiré de `crypto/rand`.
 - **🟢 Complétions shell et page de manuel** — bash, zsh, fish.
 - **🟡 Métadonnées : ce qui manque** — les permissions ne sont pas conservées, et il n'existe que deux niveaux (`none`, `minimal`). Un niveau intermédiaire n'a d'intérêt que si quelqu'un le demande.
 
