@@ -590,17 +590,52 @@ func indiceForce(err error) error {
 // Ctrl+C laissent la destination intacte — même avec -force. Ce chemin passait
 // par os.Create, qui tronquait la cible avant toute vérification.
 //
+// Deux exceptions gardent le comportement d'avant, où l'on écrivait *dans* la
+// destination : un fichier spécial (/dev/null, tube nommé) reçoit les octets
+// directement — un rename le remplacerait par un fichier ordinaire, ou
+// échouerait faute de droits sur /dev ; un lien symbolique écrit dans sa
+// cible, de façon atomique, et reste un lien.
+//
 // commit rend l'écriture définitive et remonte son erreur ; abort s'appelle en
 // defer et ne fait rien après un commit réussi.
 func openDest(out string, force bool) (w io.Writer, commit func() error, abort func(), err error) {
 	if isStream(out) {
 		return os.Stdout, func() error { return nil }, func() {}, nil
 	}
-	aw, err := pkg.CreateAtomic(out, force)
+	if st, err := os.Stat(out); err == nil && !st.Mode().IsRegular() && !st.IsDir() {
+		return ouvrirFichierSpecial(out, force)
+	}
+	cible := out
+	if resolu, err := filepath.EvalSymlinks(out); err == nil {
+		cible = resolu
+	}
+	aw, err := pkg.CreateAtomic(cible, force)
 	if err != nil {
 		return nil, nil, nil, err
 	}
 	return aw, aw.Commit, aw.Abort, nil
+}
+
+// ouvrirFichierSpecial ouvre un périphérique ou un tube nommé en écriture,
+// sans le tronquer ni le remplacer. Comme pour un fichier, une destination
+// existante exige -force.
+func ouvrirFichierSpecial(out string, force bool) (io.Writer, func() error, func(), error) {
+	if !force {
+		return nil, nil, nil, fmt.Errorf("%w : %s", pkg.ErrDestinationExistante, out)
+	}
+	f, err := os.OpenFile(out, os.O_WRONLY, 0)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("ouverture de %s: %w", out, err)
+	}
+	ferme := false
+	fermer := func() error {
+		if ferme {
+			return nil
+		}
+		ferme = true
+		return f.Close()
+	}
+	return f, fermer, func() { fermer() }, nil
 }
 
 func describeDest(out string) string {
