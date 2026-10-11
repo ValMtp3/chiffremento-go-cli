@@ -15,6 +15,11 @@ release:
   # Rend une relance possible sur un tag déjà publié : sans ça, goreleaser
   # échoue sur « asset already_exists » et s'arrête avant l'étape Homebrew.
   replace_existing_artifacts: true
+  # Le README invite à télécharger install.sh depuis la page de la release,
+  # à côté de l'archive et de checksums.txt. Sans cette ligne, il n'y était
+  # jamais joint.
+  extra_files:
+    - glob: ./install.sh
 
 builds:
   - env:

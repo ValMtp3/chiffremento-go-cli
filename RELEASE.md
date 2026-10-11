@@ -107,7 +107,7 @@ gh run watch <id>
 GoReleaser fait alors, dans l'ordre :
 
 1. `go mod tidy`, puis compilation pour **6 cibles** : Linux, macOS et Windows, chacun en `amd64` et `arm64`. Les binaires sont compilés avec `-trimpath` (reproductibles) et la version injectée par `-X main.version`.
-2. Archives `chiffremento_X.Y.Z_<os>_<arch>.tar.gz` (`.zip` pour Windows) et `checksums.txt`.
+2. Archives `chiffremento_X.Y.Z_<os>_<arch>.tar.gz` (`.zip` pour Windows), `checksums.txt`, et `install.sh` joint tel quel (`release.extra_files`).
 3. Release GitHub, avec un changelog généré à partir des commits. Les commits `docs:` et `test:` en sont exclus.
 4. **Homebrew** : écriture de `Casks/chiffremento.rb` dans le dépôt [`ValMtp3/homebrew-tap`](https://github.com/ValMtp3/homebrew-tap). Le cask retire l'attribut de quarantaine de macOS après l'installation, car les binaires ne sont pas signés.
 
@@ -206,7 +206,7 @@ La description de la [v2.3.0](https://github.com/ValMtp3/chiffremento-go-cli/rel
 
 Une release n'est terminée qu'une fois installée comme le ferait un utilisateur.
 
-1. **Les fichiers de la release** : 6 archives et `checksums.txt`.
+1. **Les fichiers de la release** : 6 archives, `checksums.txt` et `install.sh`.
 
    ```bash
    gh release view vX.Y.Z --json assets -q '.assets[].name'
