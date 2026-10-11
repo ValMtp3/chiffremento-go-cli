@@ -1,0 +1,21 @@
+# Les actions des workflows sont épinglées par SHA de commit : sans mise à jour
+# automatique, une correction de sécurité d'une action passerait inaperçue.
+# Dependabot ouvre une PR par mise à jour, avec le nouveau SHA et la version en
+# commentaire. Les modules Go sont suivis pour la même raison.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]
+
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      modules-go:
+        patterns: ["*"]

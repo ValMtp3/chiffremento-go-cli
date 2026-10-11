@@ -3,7 +3,7 @@ name: goreleaser
 on:
   push:
     tags:
-      - '*'
+      - 'v*'
   # Permet de relancer une release à la main depuis un tag existant, sans
   # avoir à supprimer puis repousser le tag.
   workflow_dispatch:
@@ -11,25 +11,35 @@ on:
 permissions:
   contents: write
 
+# Les actions sont épinglées par SHA de commit, pas par tag : un tag se déplace,
+# un SHA non. Ce job détient un jeton qui écrit dans le tap Homebrew — une
+# action compromise derrière un tag déplacé pousserait un cask piégé à tous
+# les utilisateurs de brew. Dependabot propose les mises à jour
+# (.github/dependabot.yml).
 jobs:
   goreleaser:
+    # workflow_dispatch se lance depuis n'importe quelle ref : seule une ref de
+    # tag de version peut publier.
+    if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
 
       - name: Set up Go
-        uses: actions/setup-go@v7
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: stable
 
       - name: Run GoReleaser
-        uses: goreleaser/goreleaser-action@v7
+        uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
         with:
           distribution: goreleaser
-          version: latest
+          # Figé sur la v2 majeure : une v3 pourrait changer le format de
+          # .goreleaser.yaml sans prévenir au milieu d'une release.
+          version: '~> v2'
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
