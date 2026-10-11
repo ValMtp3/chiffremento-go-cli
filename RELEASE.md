@@ -129,8 +129,10 @@ Le changelog généré n'est qu'une liste de commits. On le remplace par une vra
 ```bash
 gh release view vX.Y.Z --json body -q .body > changelog.md   # garder la liste des commits
 # écrire notes.md selon le modèle ci-dessous, y coller changelog.md à la fin
-gh release edit vX.Y.Z --title "vX.Y.Z — <titre court>" --notes-file notes.md
+gh release edit vX.Y.Z --notes-file notes.md
 ```
+
+Le **titre de la release reste le numéro seul** (`vX.Y.Z`), comme GoReleaser le crée : on ne le change pas. Le résumé de la version va dans l'accroche, en tête de la description.
 
 ### Règles de style
 
