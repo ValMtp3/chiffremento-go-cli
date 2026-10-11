@@ -347,6 +347,13 @@ func extractFile(tr io.Reader, target, rel string, hdr *tar.Header) error {
 		f.Close()
 		return fmt.Errorf("extraction de %s: %w", rel, err)
 	}
+	// Comme atomicFile.commit : sans fsync, le contenu peut rester dans le cache
+	// du système. Une coupure après le ✓ — et après la suppression du .chto que
+	// l'interface propose — laisserait des fichiers vides ou tronqués.
+	if err := f.Sync(); err != nil {
+		f.Close()
+		return fmt.Errorf("synchronisation de %s: %w", rel, err)
+	}
 	if err := f.Close(); err != nil {
 		return fmt.Errorf("fermeture de %s: %w", rel, err)
 	}
