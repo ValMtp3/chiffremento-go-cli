@@ -9,12 +9,12 @@ require (
 	github.com/charmbracelet/huh v1.0.0
 	github.com/charmbracelet/lipgloss v1.1.0
 	github.com/creack/pty v1.1.24
-	github.com/klauspost/compress v1.20.1
+	github.com/klauspost/compress v1.20.3
 	github.com/minio/sio v0.5.1
 	github.com/trustelem/zxcvbn v1.0.1
-	golang.org/x/crypto v0.57.0
+	golang.org/x/crypto v0.58.0
 	golang.org/x/sys v0.49.0
-	golang.org/x/term v0.46.0
+	golang.org/x/term v0.47.0
 )
 
 require (
@@ -45,5 +45,5 @@ require (
 	github.com/stretchr/testify v1.11.1 // indirect
 	github.com/test-go/testify v1.1.4 // indirect
 	github.com/xo/terminfo v1.0.0 // indirect
-	golang.org/x/text v0.42.0 // indirect
+	golang.org/x/text v0.43.0 // indirect
 )
