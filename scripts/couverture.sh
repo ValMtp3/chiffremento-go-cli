@@ -4,6 +4,7 @@
 # vides et celles qui commencent par # sont ignorées.
 # Les planchers se remontent à la main quand la couverture progresse, jamais
 # automatiquement : une baisse doit toujours être un choix visible.
+# Un plancher valide : des chiffres, avec au plus un point décimal entouré de chiffres.
 # Le contrôle ne passe jamais en silence : plancher invalide, profil illisible
 # ou aucune ligne vérifiée font échouer le script.
 set -eu
@@ -15,7 +16,7 @@ while read -r profil plancher || [ -n "$profil" ]; do
 	'' | '#'*) continue ;;
 	esac
 	case "$plancher" in
-	'' | *[!0-9.]*)
+	'' | *[!0-9.]* | .* | *. | *.*.*)
 		echo "plancher invalide pour $profil : « $plancher »"
 		exit 1
 		;;
