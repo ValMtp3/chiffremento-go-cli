@@ -186,6 +186,12 @@ refusé sans question.
 
 Tests : TestConfirmerEcrasementDossier
 
+### R-TUI-10 — Changer le mot de passe depuis l'interface guidée
+L'interface guidée change le mot de passe d'un `.chto` v4 : ensuite, l'ancien
+mot de passe est refusé, le nouveau ouvre le fichier et le contenu est intact.
+
+Tests : TestE2EChangerMotDePasse
+
 ## FMT — compatibilité des formats
 
 ### R-FMT-01 — Les fichiers v1, v2 et v4 de référence se déchiffrent

@@ -324,6 +324,9 @@ func (p *pilote) choisirAction(action string) {
 		"chiffrer":   nil,
 		"déchiffrer": {"déchiffrer un .chto"},
 		"vérifier":   {"déchiffrer un .chto", "vérifier un .chto"},
+		"changer le mot de passe": {
+			"déchiffrer un .chto", "vérifier un .chto", "changer le mot de passe d'un .chto",
+		},
 	}
 	chemin, ok := options[action]
 	if !ok {
@@ -344,12 +347,28 @@ func (p *pilote) choisirAction(action string) {
 // saisirChemin remplit le champ de la cible.
 func (p *pilote) saisirChemin(chemin string) {
 	p.t.Helper()
-	if p.action == "chiffrer" {
+	switch p.action {
+	case "chiffrer":
 		p.attendre("fichier ou dossier à chiffrer")
-	} else {
+	case "changer le mot de passe":
+		p.attendre(".chto dont changer le mot de passe")
+	default:
 		p.attendre(".chto à lire")
 	}
 	p.taper(chemin)
+}
+
+// changerPhrase remplit l'écran du changement de mot de passe : l'actuel, le
+// nouveau, puis sa confirmation, chaque saisie attendant que son champ ait le
+// focus.
+func (p *pilote) changerPhrase(actuelle, nouvelle string) {
+	p.t.Helper()
+	p.attendre(focus + "mot de passe actuel")
+	p.taper(actuelle)
+	p.attendre(focus + "nouveau mot de passe")
+	p.taper(nouvelle)
+	p.attendre(focus + "confirmation")
+	p.taper(nouvelle)
 }
 
 // validerOptionsParDefaut accepte une à une les options de chiffrement
@@ -667,6 +686,43 @@ func TestE2ESuppressionApresCoup(t *testing.T) {
 	sortie := filepath.Join(t.TempDir(), "relu.txt")
 	if err := pkg.Decrypt(filepath.Join(dossier, "brouillon.txt.chto"), sortie, []byte("phrase de suppression"), pkg.Options{}); err != nil {
 		t.Fatalf("le chiffré gardé ne se déchiffre pas : %v", err)
+	}
+	obtenu, err := os.ReadFile(sortie)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(obtenu, original) {
+		t.Fatalf("contenu relu différent : %q", obtenu)
+	}
+}
+
+// R-TUI-10 : le mot de passe changé depuis l'interface remplace l'ancien, et
+// le contenu reste intact.
+func TestE2EChangerMotDePasse(t *testing.T) {
+	dossier := t.TempDir()
+	original := []byte("contenu à garder\n")
+	clair := filepath.Join(dossier, "coffre.txt")
+	chiffre := clair + ".chto"
+	ecrireFichier(t, clair, original)
+	chiffrerPourTest(t, clair, chiffre, "ancienne phrase")
+	if err := os.Remove(clair); err != nil {
+		t.Fatal(err)
+	}
+
+	p := lancerPilote(t, dossier)
+	p.choisirAction("changer le mot de passe")
+	p.saisirChemin("coffre.txt.chto")
+	p.changerPhrase("ancienne phrase", "nouvelle phrase de passe")
+	if code := p.codeDeSortie(); code != 0 {
+		t.Fatalf("changement : code %d ; fin de l'écran :\n%s", code, p.queue())
+	}
+
+	sortie := filepath.Join(t.TempDir(), "relu.txt")
+	if err := pkg.Decrypt(chiffre, sortie, []byte("ancienne phrase"), pkg.Options{}); !errors.Is(err, pkg.ErrBadPassword) {
+		t.Fatalf("l'ancienne phrase devrait être refusée, erreur obtenue : %v", err)
+	}
+	if err := pkg.Decrypt(chiffre, sortie, []byte("nouvelle phrase de passe"), pkg.Options{}); err != nil {
+		t.Fatalf("la nouvelle phrase ne déchiffre pas : %v", err)
 	}
 	obtenu, err := os.ReadFile(sortie)
 	if err != nil {
