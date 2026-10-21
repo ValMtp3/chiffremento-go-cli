@@ -1,0 +1,26 @@
+# R-FS-04 : espaces, accents et emoji dans le nom, pour un fichier et un dossier.
+stdin mdp.txt
+exec chiffremento -mode enc -in 'rapport final é 🔒.txt'
+exists 'rapport final é 🔒.txt.chto'
+rm 'rapport final é 🔒.txt'
+stdin mdp.txt
+exec chiffremento -mode dec -in 'rapport final é 🔒.txt.chto'
+cmp 'rapport final é 🔒.txt' attendu.txt
+
+stdin mdp.txt
+exec chiffremento -mode enc -in 'dossier été 🔒'
+exists 'dossier été 🔒.chto'
+rm 'dossier été 🔒'
+stdin mdp.txt
+exec chiffremento -mode dec -in 'dossier été 🔒.chto'
+cmp 'dossier été 🔒/note é.txt' attendu_dossier.txt
+-- mdp.txt --
+correct horse battery staple
+-- attendu.txt --
+contenu du rapport
+-- rapport final é 🔒.txt --
+contenu du rapport
+-- attendu_dossier.txt --
+une note
+-- dossier été 🔒/note é.txt --
+une note

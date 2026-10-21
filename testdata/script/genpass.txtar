@@ -1,0 +1,7 @@
+# R-CLI-09 : genpass écrit la phrase seule sur une ligne ; -mots est borné.
+exec chiffremento -mode genpass -mots 6
+stdout '^[^\n]+\n$'
+! stdout '[ \t]'
+! exec chiffremento -mode genpass -mots 1
+stderr 'erreur :'
+! exec chiffremento -mode genpass -mots 99

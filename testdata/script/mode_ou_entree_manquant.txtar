@@ -1,0 +1,8 @@
+# R-CLI-03 : sans -mode ou sans -in, l'usage est affiché et la commande échoue.
+! exec chiffremento -in a.txt
+stderr '-mode et -in sont obligatoires'
+stderr 'Options :'
+! exec chiffremento -mode enc
+stderr '-mode et -in sont obligatoires'
+-- a.txt --
+x

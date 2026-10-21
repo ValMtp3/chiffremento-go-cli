@@ -1,0 +1,14 @@
+# R-FS-02 : un mauvais mot de passe échoue sans rien écrire.
+stdin mdp.txt
+exec chiffremento -mode enc -in secret.txt
+rm secret.txt
+stdin faux.txt
+! exec chiffremento -mode dec -in secret.txt.chto
+stderr 'mot de passe incorrect'
+! exists secret.txt
+-- mdp.txt --
+correct horse battery staple
+-- faux.txt --
+tout autre mot de passe
+-- secret.txt --
+données

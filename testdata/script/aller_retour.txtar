@@ -1,0 +1,13 @@
+# R-CRY-03 / R-CLI-05 : le mot de passe est lu sur l'entrée standard.
+stdin mdp.txt
+exec chiffremento -mode enc -in secret.txt
+exists secret.txt.chto
+cp secret.txt original.txt
+rm secret.txt
+stdin mdp.txt
+exec chiffremento -mode dec -in secret.txt.chto
+cmp secret.txt original.txt
+-- mdp.txt --
+correct horse battery staple
+-- secret.txt --
+données confidentielles

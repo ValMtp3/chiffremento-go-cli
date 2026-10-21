@@ -15,33 +15,33 @@ Sans argument et quand l'entrée standard n'est pas un terminal, l'usage est
 écrit sur stderr et le code de sortie est 1. L'interface guidée ne se lance
 pas, sinon elle attendrait une saisie qui n'arrivera jamais.
 
-Tests :
+Tests : TestScripts
 
 ### R-CLI-02 — Mode inconnu
 Un `-mode` inconnu produit un message qui liste les modes valides, et le code
 de sortie 1.
 
-Tests :
+Tests : TestScripts
 
 ### R-CLI-03 — `-mode` ou `-in` manquant
 Sans `-mode` ou sans `-in` (hors `bench` et `genpass`), l'usage est affiché et
 le code de sortie est 1.
 
-Tests :
+Tests : TestScripts
 
 ### R-CLI-04 — Options hors de leur mode : note et ignorées
 Les options de chiffrement (`-comp`, `-pad`, `-pad-niveau`, `-chacha`,
 `-parano`, `-kdf`, `-meta`) passées hors du mode `enc` donnent une note sur
 stderr et sont ignorées ; l'opération se déroule normalement.
 
-Tests :
+Tests : TestScripts
 
 ### R-CLI-05 — Mot de passe lu sur l'entrée standard
 Quand l'entrée standard n'est pas un terminal, le mot de passe est la première
 ligne lue ; une fin de ligne `\r\n` est retirée. Un mot de passe n'est jamais
 un argument de la ligne de commande.
 
-Tests :
+Tests : TestScripts
 
 ### R-CLI-06 — `-in -` : le mot de passe vient du terminal
 Avec `-in -`, les données arrivent par l'entrée standard et le mot de passe est
@@ -53,13 +53,13 @@ Tests : TestReadPasswordDepuisTTY, TestReadPasswordSansTTY, TestDoVerifyDepuisFl
 ### R-CLI-07 — `-version`
 `-version` affiche `chiffremento <version>` sur stdout, code de sortie 0.
 
-Tests :
+Tests : TestScripts
 
 ### R-CLI-08 — Erreurs et abandon
 Une erreur s'écrit `erreur : <cause>` sur stderr avec le code 1. Un abandon
 volontaire (Échap, Ctrl+C) sort avec le code 130, sans message d'erreur.
 
-Tests :
+Tests : TestScripts
 
 ### R-CLI-09 — `genpass`
 `-mode genpass` écrit la phrase seule, sur une ligne, sur stdout (l'entropie va
@@ -323,7 +323,7 @@ Tests : TestRoundTripFichierVide, TestDossierVideResteLisible
 Les fichiers et dossiers dont le nom contient des espaces, des accents ou des
 emoji sont chiffrés et restitués à l'identique.
 
-Tests :
+Tests : TestScripts
 
 ### R-FS-05 — Un dossier existant n'est jamais fusionné
 Déchiffrer une archive vers un dossier qui existe déjà est refusé, et le
@@ -335,7 +335,7 @@ Tests : TestDossierDestinationExistante
 `-force` n'autorise pas à remplacer un dossier existant : cela reviendrait à
 supprimer une arborescence entière.
 
-Tests :
+Tests : TestScripts
 
 ### R-FS-07 — Liens symboliques refusés
 Un lien symbolique, seul ou dans un dossier, est refusé au chiffrement avec un

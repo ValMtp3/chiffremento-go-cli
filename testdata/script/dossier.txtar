@@ -1,0 +1,33 @@
+# R-FS-03 / R-FS-05 : un dossier fait l'aller-retour, un dossier vide aussi.
+stdin mdp.txt
+exec chiffremento -mode enc -in photos
+exists photos.chto
+rm photos
+stdin mdp.txt
+exec chiffremento -mode dec -in photos.chto
+cmp photos/a.txt attendu_a.txt
+cmp photos/sous/b.txt attendu_b.txt
+
+# Déchiffrer vers un dossier existant est refusé : rien n'est fusionné.
+stdin mdp.txt
+! exec chiffremento -mode dec -in photos.chto
+stderr 'existe déjà'
+
+# Dossier vide.
+stdin mdp.txt
+exec chiffremento -mode enc -in vide
+rm vide
+stdin mdp.txt
+exec chiffremento -mode dec -in vide.chto
+exists vide
+-- mdp.txt --
+correct horse battery staple
+-- attendu_a.txt --
+a
+-- attendu_b.txt --
+b
+-- photos/a.txt --
+a
+-- photos/sous/b.txt --
+b
+-- vide/.keep --

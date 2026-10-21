@@ -1,0 +1,5 @@
+# R-CLI-01 : hors terminal, sans argument, on affiche l'usage et on échoue.
+! exec chiffremento
+stderr 'interface guidée nécessite un terminal'
+# R-CLI-08 : une erreur s'écrit « erreur : cause » sur stderr.
+stderr 'erreur :'
