@@ -811,9 +811,11 @@ func tuiPasswd(path string) error {
 			champ,
 			huh.NewInput().
 				Title("nouveau mot de passe").
-				DescriptionFunc(func() string { return strengthHint(nouveau) }, &nouveau).
+				// Même précaution qu'au chiffrement : l'indicateur se calcule
+				// hors de la boucle de l'interface — voir saisieVerrouillee.
+				DescriptionFunc(func() string { return strengthHint(saisieVerrouillee{&nouveau}.Get()) }, &nouveau).
 				EchoMode(huh.EchoModePassword).
-				Value(&nouveau).
+				Accessor(saisieVerrouillee{&nouveau}).
 				Validate(validatePassword),
 			huh.NewInput().
 				Title("confirmation").
@@ -840,7 +842,10 @@ func tuiPasswd(path string) error {
 	defer func() {
 		zero(ancienOctets)
 		zero(nouveauOctets)
-		ancien, nouveau, confirme = "", "", ""
+		// Le nouveau mot de passe passe par l'accesseur : un calcul de
+		// robustesse lancé par la dernière frappe peut encore le lire.
+		saisieVerrouillee{&nouveau}.Set("")
+		ancien, confirme = "", ""
 	}()
 
 	if err := pkg.ChangePassword(path, ancienOctets, nouveauOctets); err != nil {
