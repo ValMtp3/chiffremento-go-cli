@@ -490,5 +490,7 @@ règles ci-dessus.
 - **Planchers de couverture** : `.couverture-min` fixe un minimum par paquet ;
   la CI échoue en dessous. En local : `make couverture`
 - **Tests de mutation hebdomadaires** : gremlins modifie le code de `pkg/` et
-  vérifie que les tests le remarquent (workflow `mutation.yml`, le lundi). En
-  local : `make mutation` (long : compter plusieurs heures).
+  vérifie que les tests le remarquent (workflow `mutation.yml`, le lundi, deux
+  périmètres : `coeur` et `crypto`). En local : `make mutation` (~30 min sur
+  10 cœurs, ~1 h sur 4) et `make mutation-crypto` (~11 min sur 10 cœurs,
+  ~20 min sur 4).

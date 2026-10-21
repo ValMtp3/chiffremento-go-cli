@@ -12,10 +12,35 @@ permissions:
 
 jobs:
   mutation:
+    name: mutation (${{ matrix.nom }})
     runs-on: ubuntu-latest
-    # Mesuré en local (10 cœurs) : 29 min pour le périmètre ci-dessous. Un
-    # runner à 4 cœurs sera plus lent ; 120 min laissent de la marge.
+    # Mesuré en local (10 cœurs) : 29 min pour « coeur », 11 min pour
+    # « crypto ». Un runner à 4 cœurs est environ deux fois plus lent ; 120 min
+    # laissent de la marge à chaque job.
     timeout-minutes: 120
+    # Deux périmètres indépendants : un seuil raté sur l'un ne doit pas cacher
+    # le résultat de l'autre.
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # format, clés, remplissage (pad), métadonnées : une comparaison
+          # fausse y casse le format ou la sécurité.
+          # Seuils : efficacité mesurée 90,14 % et couverture des mutants
+          # 81,14 % sur macOS 10 cœurs. Efficacité : marge de 5 points pour la
+          # variance des timeouts sur ubuntu 4 cœurs. Couverture : mesure moins
+          # 1 point, pour que les mutants non couverts ne grossissent pas en
+          # silence. À relever après 2 ou 3 vraies exécutions.
+          - nom: coeur
+            exclure: '(crypto|archive|passwd|passphrase|benchmark|durabilite)[a-z_]*\.go$'
+            efficacite: 85
+            couverture: 80
+          # crypto.go seul : le flux chiffré lui-même.
+          # Mesuré : efficacité 88,35 %, couverture 99,04 %.
+          - nom: crypto
+            exclure: '(format|keys|pad|metadata|kdf|atomicwriter|archive|passwd|passphrase|benchmark|durabilite)[a-z_]*\.go$'
+            efficacite: 83
+            couverture: 98
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -28,18 +53,14 @@ jobs:
       - name: Installer gremlins
         run: go install github.com/go-gremlins/gremlins/cmd/gremlins@v0.6.0
 
-      # Périmètre : format, clés, remplissage (pad), métadonnées. Ce sont les
-      # fichiers où une comparaison fausse casse la sécurité ou le format. Le
-      # reste de pkg (crypto, archive, passwd, passphrase, benchmark,
-      # durabilité) coûterait ~2,7 fois plus de mutants.
+      # Les fichiers hors périmètre sont exclus avec -E (gremlins n'a pas
+      # d'option « inclure »). Les autres paquets ne sont pas touchés.
       #
       # -count=1 : gremlins fixe le délai de chaque mutant d'après la durée de
       # sa première passe de tests. Avec le cache de go test, cette passe dure
       # 0,1 s et tous les mutants partent en « timed out ».
       # --timeout-coefficient 6 : la suite fait du Argon2 en parallèle, sa durée
       # varie. --workers 2 : chaque test peut prendre jusqu'à 1 Gio.
-      # Seuil : efficacité mesurée 90,14 % en local, arrondie à l'entier
-      # inférieur.
       - name: Tests de mutation
         env:
           GOFLAGS: -count=1
@@ -47,5 +68,6 @@ jobs:
           gremlins unleash ./pkg
           --workers 2
           --timeout-coefficient 6
-          -E '(crypto|archive|passwd|passphrase|benchmark|durabilite)[a-z_]*\.go$'
-          --threshold-efficacy 90
+          -E '${{ matrix.exclure }}'
+          --threshold-efficacy ${{ matrix.efficacite }}
+          --threshold-mcover ${{ matrix.couverture }}
