@@ -154,6 +154,15 @@ func deriveKeysV4(password []byte, h *header) (*keySet, error) {
 	}
 	defer m.wipe()
 
+	return clesDepuisMaitre(m, h)
+}
+
+// clesDepuisMaitre est la suite de deriveKeysV4 une fois la clé maîtresse
+// connue : engagement, ouverture de l'enveloppe, clés du contenu. Elle existe
+// pour séparer Argon2, coûteux, de ces étapes, bon marché : le fuzzing dérive la
+// maîtresse une fois puis rouvre des milliers de fichiers. m reste à l'appelant,
+// qui l'efface.
+func clesDepuisMaitre(m *masterV4, h *header) (*keySet, error) {
 	if !constantTimeEqual(m.commit, h.Commit) {
 		return nil, ErrBadPassword
 	}
