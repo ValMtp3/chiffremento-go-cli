@@ -32,8 +32,9 @@ const exitInterrompu = 130
 func main() {
 	installSignalHandler()
 	if err := run(); err != nil {
-		// Échap ou Ctrl+C sur un formulaire : l'utilisateur a choisi de partir,
-		// pas la peine d'afficher « erreur : user aborted ».
+		// Ctrl+C sur un formulaire : l'utilisateur a choisi de partir, pas la
+		// peine d'afficher « erreur : user aborted ». Échap, lui, ne quitte pas
+		// les formulaires (huh ne lie l'abandon qu'à Ctrl+C).
 		if errors.Is(err, huh.ErrUserAborted) {
 			os.Exit(exitInterrompu)
 		}

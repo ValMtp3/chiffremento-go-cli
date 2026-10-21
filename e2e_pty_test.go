@@ -38,10 +38,14 @@ const (
 	delaiEcran = 20 * time.Second
 	// delaiSortie borne l'attente de la fin du processus.
 	delaiSortie = 60 * time.Second
-	// pauseTouche laisse à l'interface le temps de traiter une touche avant la
-	// suivante : huh avance d'un champ par un message asynchrone, et deux
-	// touches collées pourraient être lues par le même champ.
-	pauseTouche = 120 * time.Millisecond
+	// delaiNettoyage borne chaque attente du nettoyage : un processus tué ou
+	// une lecture qui ne rend pas la main ne doivent pas bloquer la suite.
+	delaiNettoyage = 5 * time.Second
+	// calmeSortie et delaiDerniersOctets règlent la dernière lecture, une fois
+	// le processus sorti : on relit jusqu'à ce que la sortie cesse de grossir
+	// pendant calmeSortie, sans dépasser delaiDerniersOctets.
+	calmeSortie         = 200 * time.Millisecond
+	delaiDerniersOctets = 2 * time.Second
 )
 
 // Séquences que le terminal enverrait pour chaque touche.
@@ -49,8 +53,20 @@ const (
 	toucheHaut   = "\x1b[A"
 	toucheBas    = "\x1b[B"
 	toucheEntree = "\r"
-	toucheEchap  = "\x1b"
 	toucheCtrlC  = "\x03"
+)
+
+// Repères de l'écran. huh dessine une barre « ┃ » devant le champ qui a le
+// focus, et un « > » devant l'option sous le curseur. Attendre « ┃ titre » ou
+// « > option » après une touche, c'est attendre que l'interface l'ait traitée :
+// c'est ce qui synchronise le pilote, plutôt qu'une pause à l'aveugle.
+//
+// La synchronisation compte parce que huh passe au champ suivant par un message
+// asynchrone : une touche envoyée trop tôt serait lue par le champ qu'on croit
+// avoir quitté.
+const (
+	focus   = "┃ "
+	curseur = "> "
 )
 
 // Requêtes que bubbletea et lipgloss adressent au terminal au démarrage, et
@@ -144,11 +160,19 @@ func lancerPilote(t *testing.T, dossier string) *pilote {
 		default:
 			// Le test a échoué en route : on ne laisse pas un processus orphelin.
 			_ = cmd.Process.Kill()
-			<-p.fini
+			select {
+			case <-p.fini:
+			case <-time.After(delaiNettoyage):
+				t.Logf("le processus %d n'a pas fini %v après avoir été tué", cmd.Process.Pid, delaiNettoyage)
+			}
 		}
 		maitre.Close()
 		esclave.Close()
-		<-lectureFinie
+		select {
+		case <-lectureFinie:
+		case <-time.After(delaiNettoyage):
+			t.Logf("la lecture du terminal n'a pas rendu la main %v après sa fermeture", delaiNettoyage)
+		}
 	})
 	return p
 }
@@ -220,9 +244,9 @@ func (p *pilote) attendre(texte string) {
 		}
 		select {
 		case <-p.fini:
-			// Le processus est parti : le texte n'arrivera plus. Une dernière
-			// lecture tout de même, la sortie a pu arriver juste avant.
-			time.Sleep(50 * time.Millisecond)
+			// Le processus est parti : le texte n'arrivera plus, mais ses
+			// derniers octets peuvent encore être en route dans le pty.
+			p.attendreFinDeSortie()
 			if e := p.ecran(); strings.Contains(e[p.lu:], texte) {
 				p.lu += strings.Index(e[p.lu:], texte) + len(texte)
 				return
@@ -237,45 +261,83 @@ func (p *pilote) attendre(texte string) {
 	}
 }
 
-// touches envoie des octets au programme, comme un clavier.
+// taille rend le nombre d'octets reçus jusqu'ici.
+func (p *pilote) taille() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return len(p.sortie)
+}
+
+// attendreFinDeSortie relit jusqu'à ce que la sortie cesse de grossir pendant
+// calmeSortie, sans dépasser delaiDerniersOctets.
+func (p *pilote) attendreFinDeSortie() {
+	limite := time.Now().Add(delaiDerniersOctets)
+	vue, depuis := p.taille(), time.Now()
+	for time.Now().Before(limite) && time.Since(depuis) < calmeSortie {
+		time.Sleep(20 * time.Millisecond)
+		if n := p.taille(); n != vue {
+			vue, depuis = n, time.Now()
+		}
+	}
+}
+
+// touches envoie des octets au programme, comme un clavier. Aucune pause : la
+// méthode qui appelle attend ensuite le repère d'écran qui prouve que la touche
+// a été traitée.
 func (p *pilote) touches(seq string) {
 	p.t.Helper()
 	if _, err := p.maitre.WriteString(seq); err != nil {
 		p.t.Fatalf("écriture sur le terminal: %v", err)
 	}
-	time.Sleep(pauseTouche)
 }
 
-// echap envoie Échap seul, puis attend : collé aux octets suivants, il serait
-// lu comme le début d'une séquence et non comme une touche.
-func (p *pilote) echap() {
-	p.t.Helper()
-	p.touches(toucheEchap)
-	time.Sleep(300 * time.Millisecond)
-}
-
-// taper saisit du texte puis le valide.
+// taper saisit du texte puis le valide. Texte et entrée partent ensemble sans
+// risque : ils visent le même champ, et bubbletea traite les touches dans
+// l'ordre.
 func (p *pilote) taper(texte string) {
 	p.t.Helper()
-	p.touches(texte)
+	p.touches(texte + toucheEntree)
+}
+
+// valider appuie sur entrée, puis attend que le focus soit passé au champ
+// suivant, désigné par son titre.
+func (p *pilote) valider(titreSuivant string) {
+	p.t.Helper()
 	p.touches(toucheEntree)
+	p.attendre(focus + titreSuivant)
+}
+
+// attendrePremierEcran attend que le choix de l'opération soit affiché en
+// entier.
+func (p *pilote) attendrePremierEcran() {
+	p.t.Helper()
+	p.attendre("désigner la cible")
 }
 
 // choisirAction choisit l'opération au premier écran, puis la saisie du chemin
 // au clavier.
 func (p *pilote) choisirAction(action string) {
 	p.t.Helper()
-	ordre := map[string]int{"chiffrer": 0, "déchiffrer": 1, "vérifier": 2}
-	rang, ok := ordre[action]
+	// Les options dans l'ordre de l'écran, jusqu'à celle voulue : chacune est
+	// le repère du « ↓ » qui l'atteint.
+	options := map[string][]string{
+		"chiffrer":   nil,
+		"déchiffrer": {"déchiffrer un .chto"},
+		"vérifier":   {"déchiffrer un .chto", "vérifier un .chto"},
+	}
+	chemin, ok := options[action]
 	if !ok {
 		p.t.Fatalf("action inconnue du pilote : %q", action)
 	}
-	p.attendre("désigner la cible")
-	for range rang {
+	p.attendrePremierEcran()
+	for _, option := range chemin {
 		p.touches(toucheBas)
+		p.attendre(curseur + option)
 	}
-	p.touches(toucheEntree) // valide l'opération
-	p.touches(toucheEntree) // valide « saisir un chemin », proposé par défaut
+	p.valider("désigner la cible") // valide l'opération
+	// Valide « saisir un chemin », proposé par défaut. L'écran se ferme : le
+	// repère est le titre de l'écran suivant, attendu par saisirChemin.
+	p.touches(toucheEntree)
 	p.action = action
 }
 
@@ -296,46 +358,51 @@ func (p *pilote) saisirChemin(chemin string) {
 // le mot de passe.
 func (p *pilote) validerOptionsParDefaut() {
 	p.t.Helper()
-	p.attendre("algorithme")
-	p.touches(toucheEntree) // algorithme
-	p.touches(toucheEntree) // coût de la dérivation
-	p.touches(toucheEntree) // compression
-	p.attendre("masquer la taille réelle")
+	p.attendre(focus + "algorithme")
+	p.valider("coût de la dérivation de clé")
+	p.valider("compresser avant chiffrement")
+	p.valider("masquer la taille réelle")
+	p.valider("conserver le nom et la date d'origine")
+	p.valider("mot de passe") // générer une phrase, ou la saisir
+	p.attendre(curseur + "le saisir moi-même")
+	// Valide « le saisir moi-même » : le repère du champ de saisie est attendu
+	// par saisirPhrase ou commencerPhrase.
 	p.touches(toucheEntree)
-	p.attendre("conserver le nom et la date d'origine")
-	p.touches(toucheEntree)
-	p.attendre("le saisir moi-même")
-	p.touches(toucheEntree)
+}
+
+// attendreChampPhrase attend que le champ de la phrase ait le focus.
+//
+// Au chiffrement, le repère est « confirmation », qui s'affiche avec le champ
+// du mot de passe : celui-ci apparaît à la ligne où se tenait la question
+// « mot de passe » (générer ou saisir), et bubbletea ne réécrit pas une ligne
+// inchangée — son titre ne repasse donc pas dans le flux.
+func (p *pilote) attendreChampPhrase() {
+	p.t.Helper()
+	if p.action == "chiffrer" {
+		p.attendre("confirmation")
+		return
+	}
+	p.attendre(focus + "mot de passe")
 }
 
 // saisirPhrase tape la phrase de passe ; confirmer la tape une seconde fois,
 // comme le demande le chiffrement.
-//
-// Au chiffrement, on attend « confirmation » et non « mot de passe » : le champ
-// de saisie s'affiche à la ligne où se tenait la question « mot de passe »
-// (générer ou saisir), et bubbletea ne réécrit pas une ligne inchangée — le
-// libellé n'apparaît donc pas une seconde fois dans le flux.
 func (p *pilote) saisirPhrase(phrase string, confirmer bool) {
 	p.t.Helper()
-	if !confirmer {
-		p.attendre("mot de passe")
+	p.attendreChampPhrase()
+	p.taper(phrase)
+	if confirmer {
+		p.attendre(focus + "confirmation")
 		p.taper(phrase)
-		return
 	}
-	p.attendre("confirmation")
-	p.taper(phrase) // mot de passe
-	p.taper(phrase) // confirmation
 }
 
-// attendreSaisiePhrase attend que le champ de la phrase soit prêt, sans rien
-// taper : c'est là qu'un abandon en cours de saisie se teste.
-func (p *pilote) attendreSaisiePhrase(confirmer bool) {
+// commencerPhrase tape le début d'une phrase sans la valider : c'est là qu'un
+// abandon en cours de saisie se teste.
+func (p *pilote) commencerPhrase(debut string) {
 	p.t.Helper()
-	if confirmer {
-		p.attendre("confirmation")
-		return
-	}
-	p.attendre("mot de passe")
+	p.attendreChampPhrase()
+	p.touches(debut)
 }
 
 // repondreSuppression répond à la question posée après l'opération : effacer
@@ -343,17 +410,25 @@ func (p *pilote) attendreSaisiePhrase(confirmer bool) {
 // le curseur ; « supprimer » est juste au-dessus.
 func (p *pilote) repondreSuppression(supprimer bool) {
 	p.t.Helper()
-	p.attendre("garder")
+	p.attendre(curseur + "garder")
 	if supprimer {
 		p.touches(toucheHaut)
+		p.attendre(curseur + "supprimer")
 	}
 	p.touches(toucheEntree)
 }
 
-// abandonnerParEchap appuie sur Échap.
-func (p *pilote) abandonnerParEchap() {
+// attendreSuccesVerification attend le message de fin d'une vérification
+// réussie d'un fichier.
+func (p *pilote) attendreSuccesVerification() {
 	p.t.Helper()
-	p.echap()
+	p.attendre(verifySucces(false))
+}
+
+// attendreRefusMotDePasse attend l'annonce d'une mauvaise phrase de passe.
+func (p *pilote) attendreRefusMotDePasse() {
+	p.t.Helper()
+	p.attendre(pkg.ErrBadPassword.Error())
 }
 
 // abandonnerParCtrlC appuie sur Ctrl+C. En mode brut, c'est une touche et non
@@ -491,7 +566,7 @@ func TestE2EVerifier(t *testing.T) {
 	p.choisirAction("vérifier")
 	p.saisirChemin("notes.txt.chto")
 	p.saisirPhrase("phrase de controle", false)
-	p.attendre(verifySucces(false))
+	p.attendreSuccesVerification()
 	if code := p.codeDeSortie(); code != 0 {
 		t.Fatalf("vérification : code %d ; fin de l'écran :\n%s", code, p.queue())
 	}
@@ -515,7 +590,7 @@ func TestE2EMauvaisePhrase(t *testing.T) {
 	p.choisirAction("déchiffrer")
 	p.saisirChemin("notes.txt.chto")
 	p.saisirPhrase("une autre phrase", false)
-	p.attendre(pkg.ErrBadPassword.Error())
+	p.attendreRefusMotDePasse()
 	if code := p.codeDeSortie(); code != 1 {
 		t.Fatalf("mauvaise phrase : code %d, attendu 1", code)
 	}
@@ -524,39 +599,20 @@ func TestE2EMauvaisePhrase(t *testing.T) {
 	}
 }
 
-// R-TUI-04 et R-CLI-08 : Échap ou Ctrl+C sortent en 130, sans message
-// d'erreur, rendent le terminal tel qu'il était et ne laissent rien derrière.
+// R-TUI-04, R-CLI-08 et R-FS-02 : Ctrl+C sort en 130, sans message d'erreur,
+// rend le terminal tel qu'il était et, avant le lancement de l'opération,
+// n'écrit rien.
 //
 // L'abandon a lieu avant toute écriture : ce test ne prouve donc pas le
-// nettoyage des temporaires d'une opération interrompue (R-FS-02).
+// nettoyage des temporaires d'une opération interrompue en cours de route.
 func TestE2EInterruption(t *testing.T) {
 	dossier := t.TempDir()
 	ecrireFichier(t, filepath.Join(dossier, "secret.txt"), []byte("à ne pas toucher\n"))
 	avant := contenuDossier(t, dossier)
 
-	t.Run("échap au premier écran", func(t *testing.T) {
-		// Écart constaté avec SPEC.md (R-TUI-04, R-CLI-08), signalé et non
-		// tranché ici : huh ne lie l'abandon qu'à Ctrl+C (KeyMap.Quit,
-		// huh@v1.0.0/keymap.go) et formKeyMap n'y ajoute pas Échap. Le
-		// programme reçoit bien la touche, l'ignore et reste au premier écran
-		// (vérifié : un Ctrl+C envoyé ensuite le fait sortir en 130). Le test
-		// est gardé tel quel pour le jour où la règle sera tenue — ou réécrite.
-		t.Skip("Échap n'abandonne pas l'interface : écart avec R-TUI-04 et R-CLI-08, à trancher")
-		p := lancerPilote(t, dossier)
-		p.attendre("désigner la cible")
-		p.abandonnerParEchap()
-		if code := p.codeDeSortie(); code != exitInterrompu {
-			t.Fatalf("code %d, attendu %d ; fin de l'écran :\n%s", code, exitInterrompu, p.queue())
-		}
-		p.terminalRestaure()
-		if strings.Contains(p.ecran(), "erreur :") {
-			t.Errorf("un abandon volontaire ne doit afficher aucune erreur ; fin de l'écran :\n%s", p.queue())
-		}
-	})
-
 	t.Run("ctrl+c au premier écran", func(t *testing.T) {
 		p := lancerPilote(t, dossier)
-		p.attendre("désigner la cible")
+		p.attendrePremierEcran()
 		p.abandonnerParCtrlC()
 		if code := p.codeDeSortie(); code != exitInterrompu {
 			t.Fatalf("code %d, attendu %d ; fin de l'écran :\n%s", code, exitInterrompu, p.queue())
@@ -572,8 +628,7 @@ func TestE2EInterruption(t *testing.T) {
 		p.choisirAction("chiffrer")
 		p.saisirChemin("secret.txt")
 		p.validerOptionsParDefaut()
-		p.attendreSaisiePhrase(true)
-		p.touches("correct horse") // saisie entamée, pas validée
+		p.commencerPhrase("correct horse") // saisie entamée, pas validée
 		p.abandonnerParCtrlC()
 		if code := p.codeDeSortie(); code != exitInterrompu {
 			t.Fatalf("code %d, attendu %d ; fin de l'écran :\n%s", code, exitInterrompu, p.queue())

@@ -57,7 +57,8 @@ Tests : TestScripts
 
 ### R-CLI-08 — Erreurs et abandon
 Une erreur s'écrit `erreur : <cause>` sur stderr avec le code 1. Un abandon
-volontaire (Échap, Ctrl+C) sort avec le code 130, sans message d'erreur.
+volontaire par Ctrl+C sort avec le code 130, sans message d'erreur. Échap ne
+fait pas quitter l'interface guidée (voir R-TUI-04).
 
 Tests : TestScripts, TestE2EInterruption
 
@@ -145,9 +146,11 @@ L'interface guidée contrôle un `.chto` sans rien écrire.
 
 Tests : TestE2EVerifier
 
-### R-TUI-04 — Abandon : code 130, terminal restauré, rien de partiel
-Échap ou Ctrl+C dans l'interface sort avec le code 130, rend le terminal
-(écho, curseur) dans son état d'origine et ne laisse aucun fichier partiel.
+### R-TUI-04 — Abandon par Ctrl+C : code 130, terminal restauré, rien d'écrit
+Ctrl+C dans l'interface sort avec le code 130, sans message d'erreur, et rend
+le terminal (écho, curseur) dans son état d'origine. Un abandon avant le
+lancement de l'opération laisse le dossier tel qu'il était. Échap ne fait pas
+quitter l'interface : son rôle sera fixé à la refonte plein écran.
 
 Tests : TestE2EInterruption
 
@@ -309,9 +312,10 @@ Tests : TestRefusEcrasementCLI, TestDestinationExistanteRefusee, TestOpenDestRef
 ### R-FS-02 — Aucun fichier partiel après une erreur ou un abandon
 Après une erreur de déchiffrement, une destination déjà présente n'est pas
 détruite, aucun `.chto-tmp-*` ne reste, et aucun dossier à moitié extrait
-n'apparaît. L'interruption nettoie les temporaires en cours.
+n'apparaît. L'interruption nettoie les temporaires en cours. Un abandon dans
+l'interface avant le lancement de l'opération n'écrit rien.
 
-Tests : TestEchecNeDetruitPasLaCible, TestDecryptFluxMauvaisMotDePasseGardeLaDestination, TestDecryptFluxMauvaisMotDePasseNeLaissePasDeFichier, TestNettoyageTemporaires, TestDossierMauvaisMotDePasse
+Tests : TestEchecNeDetruitPasLaCible, TestDecryptFluxMauvaisMotDePasseGardeLaDestination, TestDecryptFluxMauvaisMotDePasseNeLaissePasDeFichier, TestNettoyageTemporaires, TestDossierMauvaisMotDePasse, TestE2EInterruption
 
 ### R-FS-03 — Fichier vide : aller-retour exact
 Un fichier vide se chiffre et se déchiffre en un fichier vide, ainsi qu'un
