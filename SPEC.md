@@ -255,14 +255,14 @@ Modifier un seul octet de l'en-tête (version, drapeaux, algorithme, paramètres
 sel, engagement, enveloppe) ou du corps empêche le déchiffrement, et `verify`
 le signale. Aucune sortie n'est laissée.
 
-Tests : TestHeaderFalsifie, TestV4EnTeteAltere, TestCorpsFalsifie
+Tests : TestHeaderFalsifie, TestV4EnTeteAltere, TestCorpsFalsifie, FuzzAllerRetour
 
 ### R-CRY-03 — Aller-retour exact quelles que soient les options
 Chiffrer puis déchiffrer rend exactement le contenu d'origine, pour chaque
 algorithme (AES-GCM, ChaCha20-Poly1305, cascade), avec ou sans compression
 zstd, remplissage, métadonnées, et pour chaque profil de dérivation testé.
 
-Tests : TestRoundTrip, TestV4RoundTrip, TestRoundTripDossier, TestFluxAllerRetour
+Tests : TestRoundTrip, TestV4RoundTrip, TestRoundTripDossier, TestFluxAllerRetour, FuzzAllerRetour
 
 ### R-CRY-04 — Fichier tronqué : refus, aucun clair partiel
 Un chiffré tronqué est refusé, et le clair authentifié jusqu'au point de

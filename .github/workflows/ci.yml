@@ -70,6 +70,13 @@ jobs:
         if: matrix.os == 'ubuntu-latest'
         run: go test ./pkg -run '^$' -fuzz FuzzSafeArchivePath -fuzztime 30s -parallel 4
 
+      # L'aller-retour chiffrer puis déchiffrer, avec un octet modifié en plus.
+      # La clé maîtresse Argon2 est dérivée une fois par worker (~272 Mio
+      # chacun) : c'est ce qui rend possible des milliers d'itérations.
+      - name: Fuzzing de l'aller-retour
+        if: matrix.os == 'ubuntu-latest'
+        run: go test ./pkg -run '^$' -fuzz FuzzAllerRetour -fuzztime 30s -parallel 4
+
       # Une seule itération : on ne mesure pas une performance fiable sur un
       # runner partagé, on vérifie que les benchmarks compilent et tournent.
       - name: Benchmarks (fumée)
