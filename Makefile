@@ -14,7 +14,7 @@ LDFLAGS=-s -w -X main.version=$(VERSION)
 # taille (~33 Ko) n'est qu'un effet de bord.
 BUILDFLAGS=-trimpath
 
-.PHONY: all build build-all clean install test lint
+.PHONY: all build build-all clean install test lint couverture
 
 all: lint test build
 
@@ -65,3 +65,10 @@ lint:
 # Lance les tests
 test:
 	go test -race ./...
+
+# Même contrôle que la CI sur ubuntu : un profil par paquet (un profil commun
+# mélangerait main et pkg), puis le script compare chacun à son plancher.
+couverture:
+	go test -race -timeout 25m -coverprofile=main.cover .
+	go test -race -timeout 25m -coverprofile=pkg.cover ./pkg
+	./scripts/couverture.sh
