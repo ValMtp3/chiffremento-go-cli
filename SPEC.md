@@ -59,7 +59,7 @@ Tests : TestScripts
 Une erreur s'écrit `erreur : <cause>` sur stderr avec le code 1. Un abandon
 volontaire (Échap, Ctrl+C) sort avec le code 130, sans message d'erreur.
 
-Tests : TestScripts
+Tests : TestScripts, TestE2EInterruption
 
 ### R-CLI-09 — `genpass`
 `-mode genpass` écrit la phrase seule, sur une ligne, sur stdout (l'entropie va
@@ -133,28 +133,28 @@ Tests : TestDoPasswd, TestDoPasswdRefusCasSansFichier, TestDoPasswdAncienFormat
 Depuis un terminal, sans argument, l'interface guidée mène à un fichier chiffré
 lisible par le déchiffrement.
 
-Tests :
+Tests : TestE2EChiffrerPuisDechiffrer
 
 ### R-TUI-02 — Déchiffrer depuis l'interface guidée
 L'interface guidée déchiffre un `.chto` et restitue le contenu d'origine.
 
-Tests :
+Tests : TestE2EChiffrerPuisDechiffrer
 
 ### R-TUI-03 — Vérifier depuis l'interface guidée
 L'interface guidée contrôle un `.chto` sans rien écrire.
 
-Tests :
+Tests : TestE2EVerifier
 
 ### R-TUI-04 — Abandon : code 130, terminal restauré, rien de partiel
 Échap ou Ctrl+C dans l'interface sort avec le code 130, rend le terminal
 (écho, curseur) dans son état d'origine et ne laisse aucun fichier partiel.
 
-Tests :
+Tests : TestE2EInterruption
 
 ### R-TUI-05 — Mauvaise phrase de passe dans l'interface
 Une mauvaise phrase de passe donne un message clair, et rien n'est écrit.
 
-Tests :
+Tests : TestE2EMauvaisePhrase
 
 ### R-TUI-06 — Grammaire de navigation
 `↑↓` parcourent les réponses, `→` ou `entrée` valident, `←` revient à la
