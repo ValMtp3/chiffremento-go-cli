@@ -471,3 +471,24 @@ Le relevé qui détecte un changement de la source tient en mémoire constante
 quelle que soit la taille du dossier (une empreinte, pas une liste).
 
 Tests : TestInstantaneMemoireConstante
+
+## Outils de vérification
+
+Ce ne sont pas des règles du produit : ce sont les filets qui vérifient les
+règles ci-dessus.
+
+- **Traçabilité de la spec** : `TestSpec` relie chaque règle `### R-…` à ses
+  tests nommés ; une règle sans test fait échouer la suite. En local :
+  `go test -run TestSpec .`
+- **testscript** : les scripts de `testdata/script` rejouent le vrai binaire
+  (drapeaux, codes de sortie). En local : `go test -run TestScripts .`
+- **Bout en bout par pseudo-terminal** : `e2e_pty_test.go` pilote l'interface
+  dans un vrai pty. En local : `go test -run E2E .`
+- **Fuzzing** (3 fuzzers : `FuzzReadHeader`, `FuzzSafeArchivePath`,
+  `FuzzAllerRetour`) : `go test ./pkg -run '^$' -fuzz FuzzReadHeader -fuzztime 30s`
+  (remplacer le nom du fuzzer).
+- **Planchers de couverture** : `.couverture-min` fixe un minimum par paquet ;
+  la CI échoue en dessous. En local : `make couverture`
+- **Tests de mutation hebdomadaires** : gremlins modifie le code de `pkg/` et
+  vérifie que les tests le remarquent (workflow `mutation.yml`, le lundi). En
+  local : `make mutation` (long : compter plusieurs heures).

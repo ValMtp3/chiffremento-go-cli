@@ -14,7 +14,7 @@ LDFLAGS=-s -w -X main.version=$(VERSION)
 # taille (~33 Ko) n'est qu'un effet de bord.
 BUILDFLAGS=-trimpath
 
-.PHONY: all build build-all clean install test lint couverture
+.PHONY: all build build-all clean install test lint couverture mutation
 
 all: lint test build
 
@@ -72,3 +72,11 @@ couverture:
 	go test -race -timeout 25m -coverprofile=main.cover .
 	go test -race -timeout 25m -coverprofile=pkg.cover ./pkg
 	./scripts/couverture.sh
+
+# Même commande et même périmètre que le workflow mutation.yml (voir ses
+# commentaires). Long : ~30 min sur 10 cœurs. Nécessite gremlins :
+# go install github.com/go-gremlins/gremlins/cmd/gremlins@v0.6.0
+mutation:
+	GOFLAGS=-count=1 gremlins unleash ./pkg --workers 2 --timeout-coefficient 6 \
+		-E '(crypto|archive|passwd|passphrase|benchmark|durabilite)[a-z_]*\.go$$' \
+		--threshold-efficacy 90

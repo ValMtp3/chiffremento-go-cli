@@ -1,0 +1,51 @@
+name: mutation
+
+# Une fois par semaine, pas à chaque PR : la suite de pkg prend ~40 s (Argon2
+# à 256 Mio–1 Gio), et gremlins la relance une fois par mutant.
+on:
+  schedule:
+    - cron: "0 5 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  mutation:
+    runs-on: ubuntu-latest
+    # Mesuré en local (10 cœurs) : 29 min pour le périmètre ci-dessous. Un
+    # runner à 4 cœurs sera plus lent ; 120 min laissent de la marge.
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: stable
+
+      # gremlins est un outil, pas une dépendance : `go install` avec une
+      # version exacte ne touche ni go.mod ni go.sum.
+      - name: Installer gremlins
+        run: go install github.com/go-gremlins/gremlins/cmd/gremlins@v0.6.0
+
+      # Périmètre : format, clés, remplissage (pad), métadonnées. Ce sont les
+      # fichiers où une comparaison fausse casse la sécurité ou le format. Le
+      # reste de pkg (crypto, archive, passwd, passphrase, benchmark,
+      # durabilité) coûterait ~2,7 fois plus de mutants.
+      #
+      # -count=1 : gremlins fixe le délai de chaque mutant d'après la durée de
+      # sa première passe de tests. Avec le cache de go test, cette passe dure
+      # 0,1 s et tous les mutants partent en « timed out ».
+      # --timeout-coefficient 6 : la suite fait du Argon2 en parallèle, sa durée
+      # varie. --workers 2 : chaque test peut prendre jusqu'à 1 Gio.
+      # Seuil : efficacité mesurée 90,14 % en local, arrondie à l'entier
+      # inférieur.
+      - name: Tests de mutation
+        env:
+          GOFLAGS: -count=1
+        run: >
+          gremlins unleash ./pkg
+          --workers 2
+          --timeout-coefficient 6
+          -E '(crypto|archive|passwd|passphrase|benchmark|durabilite)[a-z_]*\.go$'
+          --threshold-efficacy 90
