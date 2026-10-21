@@ -5,8 +5,10 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"strings"
 	"testing"
@@ -18,7 +20,10 @@ import (
 // refonte de retirer une vérification sans que personne ne le voie.
 var (
 	motifRegle = regexp.MustCompile(`^### (R-[A-Z]+-\d{2}) — .+$`)
-	motifTests = regexp.MustCompile(`^Tests : (.+)$`)
+	// Une règle retirée est barrée, pas renumérotée : son identifiant reste
+	// pris, et ses éventuelles lignes « Tests : » ne comptent plus.
+	motifRegleBarree = regexp.MustCompile(`^### ~~(R-[A-Z]+-\d{2}) — .+~~$`)
+	motifTests       = regexp.MustCompile(`^Tests : (.+)$`)
 )
 
 func TestSpecChaqueRegleAUnTestExistant(t *testing.T) {
@@ -30,42 +35,106 @@ func TestSpecChaqueRegleAUnTestExistant(t *testing.T) {
 	}
 	defer f.Close()
 
+	regles, erreurs := lireSpec(f)
+	for _, e := range erreurs {
+		t.Error(e)
+	}
+	if len(regles) == 0 {
+		t.Fatal("aucune règle trouvée dans SPEC.md : le format des titres a changé ?")
+	}
+	for regle, tests := range regles {
+		if len(tests) == 0 {
+			t.Errorf("%s n'a aucun test", regle)
+		}
+		for _, nom := range tests {
+			if !existants[nom] {
+				t.Errorf("%s cite %s, qui n'existe dans aucun fichier _test.go", regle, nom)
+			}
+		}
+	}
+}
+
+// lireSpec rend, pour chaque règle en vigueur, les noms de tests qu'elle cite,
+// et les erreurs de forme (identifiant défini deux fois, lecture impossible).
+// Une règle barrée n'apparaît pas dans le résultat mais garde son identifiant.
+func lireSpec(r io.Reader) (regles map[string][]string, erreurs []string) {
+	regles = map[string][]string{}
 	vus := map[string]bool{}
 	regle := ""
-	aDesTests := map[string]bool{}
-	sc := bufio.NewScanner(f)
+	sc := bufio.NewScanner(r)
 	for sc.Scan() {
 		ligne := sc.Text()
-		if m := motifRegle.FindStringSubmatch(ligne); m != nil {
-			regle = m[1]
-			if vus[regle] {
-				t.Errorf("%s est défini deux fois", regle)
+		barree := false
+		m := motifRegle.FindStringSubmatch(ligne)
+		if m == nil {
+			m = motifRegleBarree.FindStringSubmatch(ligne)
+			barree = m != nil
+		}
+		if m != nil {
+			if vus[m[1]] {
+				erreurs = append(erreurs, m[1]+" est défini deux fois")
 			}
-			vus[regle] = true
+			vus[m[1]] = true
+			if barree {
+				regle = ""
+			} else {
+				regle = m[1]
+				if _, ok := regles[regle]; !ok {
+					regles[regle] = nil
+				}
+			}
 			continue
 		}
-		m := motifTests.FindStringSubmatch(ligne)
+		m = motifTests.FindStringSubmatch(ligne)
 		if m == nil || regle == "" {
 			continue
 		}
 		for _, nom := range strings.Split(m[1], ",") {
-			nom = strings.TrimSpace(nom)
-			if !existants[nom] {
-				t.Errorf("%s cite %s, qui n'existe dans aucun fichier _test.go", regle, nom)
+			if nom = strings.TrimSpace(nom); nom != "" {
+				regles[regle] = append(regles[regle], nom)
 			}
-			aDesTests[regle] = true
 		}
 	}
 	if err := sc.Err(); err != nil {
-		t.Fatal(err)
+		erreurs = append(erreurs, "lecture de la spec : "+err.Error())
 	}
-	if len(vus) == 0 {
-		t.Fatal("aucune règle trouvée dans SPEC.md : le format des titres a changé ?")
+	return regles, erreurs
+}
+
+// TestLireSpec vérifie l'analyse elle-même : si elle se trompait, la
+// traçabilité passerait au vert sans rien garantir.
+func TestLireSpec(t *testing.T) {
+	cas := []struct {
+		nom     string
+		spec    string
+		regles  map[string][]string
+		erreurs int
+	}{
+		{"règle et tests", "### R-CLI-01 — a\nTests : TestA, TestB\n",
+			map[string][]string{"R-CLI-01": {"TestA", "TestB"}}, 0},
+		{"règle sans test", "### R-CLI-01 — a\nTests :\n",
+			map[string][]string{"R-CLI-01": nil}, 0},
+		{"virgule finale et espaces", "### R-CLI-01 — a\nTests : TestA, ,  TestB ,\n",
+			map[string][]string{"R-CLI-01": {"TestA", "TestB"}}, 0},
+		{"règle barrée : ses tests ne passent pas à la précédente",
+			"### R-CLI-01 — a\nTests : TestA\n### ~~R-CLI-02 — b~~\nTests : TestB\n",
+			map[string][]string{"R-CLI-01": {"TestA"}}, 0},
+		{"identifiant barré puis réutilisé", "### ~~R-CLI-01 — a~~\n### R-CLI-01 — b\n",
+			map[string][]string{"R-CLI-01": nil}, 1},
+		{"doublon", "### R-CLI-01 — a\nTests : TestA\n### R-CLI-01 — b\nTests : TestB\n",
+			map[string][]string{"R-CLI-01": {"TestA", "TestB"}}, 1},
+		{"tests avant toute règle", "Tests : TestA\n", map[string][]string{}, 0},
 	}
-	for r := range vus {
-		if !aDesTests[r] {
-			t.Errorf("%s n'a aucun test", r)
-		}
+	for _, c := range cas {
+		t.Run(c.nom, func(t *testing.T) {
+			regles, erreurs := lireSpec(strings.NewReader(c.spec))
+			if len(erreurs) != c.erreurs {
+				t.Errorf("erreurs = %v, attendu %d", erreurs, c.erreurs)
+			}
+			if !reflect.DeepEqual(regles, c.regles) {
+				t.Errorf("règles = %#v, attendu %#v", regles, c.regles)
+			}
+		})
 	}
 }
 

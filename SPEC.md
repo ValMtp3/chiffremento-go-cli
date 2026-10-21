@@ -206,10 +206,14 @@ qui rassure sur les anciens fichiers) mais reste lu, y compris en v3.
 Tests : TestChooseComp, TestGzipRefuseALEcriture, TestGzipResteLisibleEnV3
 
 ### R-FMT-04 — Structure binaire figée
-La structure binaire de l'en-tête est figée par un test : la modifier exige de
-mettre ce test à jour et de se demander si une nouvelle version s'impose.
+La disposition binaire de l'en-tête v4 est figée par un test : magic, tailles
+des champs et de chaque version d'en-tête (dont 117 octets en v4), identifiants
+de version, d'algorithme et de compression, drapeaux connus. La modifier casse
+le test exprès ; elle exige une nouvelle version de format. Le tripwire
+historique garde en plus la version courante au moins égale à 3 et la présence
+des fichiers de référence v1 et v2.
 
-Tests : TestProtocolSafety_Tripwire
+Tests : TestFormatV4Fige, TestProtocolSafety_Tripwire
 
 ### R-FMT-05 — En-tête incohérent ou hostile refusé
 Un en-tête qui se contredit (deux façons de décrire la compression, drapeau
@@ -259,8 +263,10 @@ produit pas un dossier vide.
 Tests : TestFichierTronque, TestTronquageNeLaissePasDeClair, TestArchiveTronqueeALEntete
 
 ### R-CRY-05 — Engagement sur la clé
-Deux mots de passe distincts donnent deux engagements distincts ; un chiffré ne
-peut pas être valide sous deux clés.
+L'engagement écrit dans l'en-tête ne dépend que du couple (mot de passe, sel) :
+deux mots de passe distincts donnent deux engagements distincts, le même mot de
+passe donne toujours le même, un sel différent change l'engagement, et il est
+distinct de la clé d'enveloppe.
 
 Tests : TestV4EngagementSurLaCle
 
