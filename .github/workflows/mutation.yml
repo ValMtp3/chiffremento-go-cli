@@ -61,7 +61,14 @@ jobs:
       # 0,1 s et tous les mutants partent en « timed out ».
       # --timeout-coefficient 6 : la suite fait du Argon2 en parallèle, sa durée
       # varie. --workers 2 : chaque test peut prendre jusqu'à 1 Gio.
+      #
+      # timeout-minutes: 90 sur l'étape elle-même, le job gardant ses 120 min :
+      # si gremlins reste bloqué, l'étape suivante a le temps de nettoyer.
+      # gremlins passe -timeout à go test, mais à l'échéance seul le processus
+      # `go` est tué : un mutant qui boucle à l'infini peut laisser le binaire
+      # de test vivant, et gremlins attend alors indéfiniment.
       - name: Tests de mutation
+        timeout-minutes: 90
         env:
           GOFLAGS: -count=1
         run: >
@@ -71,3 +78,10 @@ jobs:
           -E '${{ matrix.exclure }}'
           --threshold-efficacy ${{ matrix.efficacite }}
           --threshold-mcover ${{ matrix.couverture }}
+
+      # Même si l'étape précédente a échoué ou expiré : on tue les binaires de
+      # test restés vivants (voir le commentaire ci-dessus), pour qu'ils ne
+      # tournent pas à 100 % de CPU jusqu'à la fin du job.
+      - name: Tuer les tests orphelins
+        if: always()
+        run: pkill -f 'pkg\.test' || true
