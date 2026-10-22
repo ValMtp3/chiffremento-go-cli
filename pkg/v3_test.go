@@ -3,6 +3,7 @@ package pkg
 import (
 	"bytes"
 	"compress/gzip"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -149,6 +150,94 @@ func TestHeaderIncoherentRefuse(t *testing.T) {
 	}
 }
 
+// enteteDeTest fabrique un en-tête valide de la version demandée, aux drapeaux
+// donnés, sans passer par un chiffrement complet.
+func enteteDeTest(version, flags, comp byte) *header {
+	h := &header{
+		Version: version,
+		Flags:   flags,
+		Algo:    AlgoAES,
+		Argon:   defaultArgonParams(),
+		Comp:    comp,
+		Salt:    make([]byte, saltSize),
+	}
+	if version >= versionV4 {
+		h.Commit = make([]byte, commitSize)
+		h.Wrapped = make([]byte, wrappedSize)
+	}
+	return h
+}
+
+// TestHeaderV3AvecRemplissageResteLisible : le remplissage est né en v3. Un
+// fichier v3 (ou plus récent) qui l'annonce est légitime et doit se relire ;
+// seuls les fichiers antérieurs, où ce bit n'a jamais existé, sont refusés.
+func TestHeaderV3AvecRemplissageResteLisible(t *testing.T) {
+	for _, version := range []byte{versionV3, versionV4} {
+		raw := enteteDeTest(version, FlagPadded, CompZstd).marshal()
+		h, err := readHeader(bytes.NewReader(raw))
+		if err != nil {
+			t.Fatalf("en-tête v%d rempli refusé à tort : %v", version, err)
+		}
+		if !h.padded() {
+			t.Errorf("en-tête v%d : le drapeau de remplissage s'est perdu à la relecture", version)
+		}
+	}
+	for _, version := range []byte{versionV1, versionV2} {
+		raw := enteteDeTest(version, FlagPadded, CompNone).marshal()
+		if _, err := readHeader(bytes.NewReader(raw)); err == nil {
+			t.Errorf("en-tête v%d annonçant le remplissage accepté", version)
+		}
+	}
+}
+
+// TestHeaderDrapeauCompressionSelonLaVersion : le bit de compression v1/v2 n'a
+// de sens qu'avant la v3. Dès la v3, compAlgo seul décrit la compression : un
+// fichier qui porte les deux se contredit et est refusé, en v3 comme en v4.
+// Avant la v3, ce même bit reste valide : c'est lui qui rend lisibles les
+// anciens fichiers gzip.
+func TestHeaderDrapeauCompressionSelonLaVersion(t *testing.T) {
+	for _, version := range []byte{versionV3, versionV4} {
+		raw := enteteDeTest(version, FlagCompressed, CompZstd).marshal()
+		if _, err := readHeader(bytes.NewReader(raw)); err == nil {
+			t.Errorf("en-tête v%d portant le drapeau de compression v1/v2 accepté", version)
+		}
+	}
+	raw := enteteDeTest(versionV2, FlagCompressed, CompNone).marshal()
+	h, err := readHeader(bytes.NewReader(raw))
+	if err != nil {
+		t.Fatalf("en-tête v2 compressé refusé à tort : %v", err)
+	}
+	if h.Comp != CompGzip {
+		t.Errorf("en-tête v2 compressé relu avec la compression %d, attendu gzip", h.Comp)
+	}
+}
+
+// TestMarshalEnteteV2Exact : un en-tête v2 s'écrit octet pour octet comme les
+// fichiers v2 déjà chez les utilisateurs : les paramètres Argon2 y sont, le
+// champ compAlgo (v3) n'y est pas, et le sel suit directement.
+func TestMarshalEnteteV2Exact(t *testing.T) {
+	salt := bytes.Repeat([]byte{0xAB}, saltSize)
+	h := &header{
+		Version: versionV2,
+		Flags:   FlagArchive,
+		Algo:    AlgoChaCha,
+		Argon:   argonParams{Time: 0x01020304, Memory: 0x05060708, Threads: 9},
+		Salt:    salt,
+	}
+	attendu := []byte(magicNumber)
+	attendu = append(attendu, versionV2, FlagArchive, AlgoChaCha)
+	attendu = append(attendu, 1, 2, 3, 4, 5, 6, 7, 8, 9)
+	attendu = append(attendu, salt...)
+
+	got := h.marshal()
+	if !bytes.Equal(got, attendu) {
+		t.Errorf("en-tête v2 sérialisé :\n got %x\nwant %x", got, attendu)
+	}
+	if len(got) != headerSizeV2 {
+		t.Errorf("en-tête v2 de %d octets, attendu %d", len(got), headerSizeV2)
+	}
+}
+
 // --- Remplissage --------------------------------------------------------
 
 func TestPadme(t *testing.T) {
@@ -186,6 +275,100 @@ func TestPadme(t *testing.T) {
 	}
 	if len(paliers) < 2 {
 		t.Error("un seul palier sur une octave entière : le surcoût serait énorme")
+	}
+}
+
+// TestPadmeAuxPetitesTailles : à partir de 8 octets (exposant 3) le palier
+// s'arrondit déjà, d'un bit ; en dessous, la taille reste exacte. Un palier
+// qui ne bougeait pas à 9 ou 15 octets ne masquerait rien pour les petits
+// fichiers.
+//
+// Calculs à la main, profil standard : e = floor(log2(taille)), s = 2 chiffres
+// significatifs pour e = 3, donc e - s = 1 bit à effacer (masque 1).
+//
+//	 7 : e = 2 < 3, rendu tel quel                      -> 7
+//	 8 : e = 3, (8 + 1) &^ 1 = 8                        -> 8
+//	 9 : e = 3, (9 + 1) &^ 1 = 10                       -> 10
+//	15 : e = 3, (15 + 1) &^ 1 = 16                      -> 16
+func TestPadmeAuxPetitesTailles(t *testing.T) {
+	cas := []struct{ taille, attendu int64 }{
+		{7, 7},
+		{8, 8},
+		{9, 10},
+		{15, 16},
+	}
+	for _, c := range cas {
+		if got := padme(c.taille, PadStandard); got != c.attendu {
+			t.Errorf("padme(%d) = %d, attendu %d", c.taille, got, c.attendu)
+		}
+	}
+}
+
+// TestWritePaddingZero : une taille pile sur un palier n'a besoin d'aucun octet
+// de remplissage. Elle reste valide et n'écrit que l'en-tête de remplissage,
+// quatre octets à zéro : le refuser ferait échouer le chiffrement de tout
+// fichier dont la taille tombe juste.
+func TestWritePaddingZero(t *testing.T) {
+	var out bytes.Buffer
+	if err := writePadding(&out, 0); err != nil {
+		t.Fatalf("writePadding(0) refusé : %v", err)
+	}
+	if !bytes.Equal(out.Bytes(), make([]byte, padHeaderSize)) {
+		t.Errorf("writePadding(0) a écrit %x, attendu %d octets à zéro", out.Bytes(), padHeaderSize)
+	}
+	if err := writePadding(&out, -1); err == nil {
+		t.Error("un remplissage négatif a été accepté")
+	}
+}
+
+// ecrivainQuiLacheApres accepte n octets puis échoue : il permet d'aller
+// jusqu'au bout des vérifications de writePadding sans écrire 4 Gio.
+type ecrivainQuiLacheApres struct{ reste int }
+
+func (e *ecrivainQuiLacheApres) Write(p []byte) (int, error) {
+	if len(p) > e.reste {
+		return 0, errors.New("disque plein")
+	}
+	e.reste -= len(p)
+	return len(p), nil
+}
+
+// TestWritePaddingAcceptePlafondExact : le plafond de remplissage est
+// inclusif. Une taille égale à maxPadding passe la vérification des bornes (et
+// n'échoue ici que sur l'écrivain, plus loin), une taille au-dessus est refusée
+// d'emblée comme hors bornes.
+func TestWritePaddingAcceptePlafondExact(t *testing.T) {
+	err := writePadding(&ecrivainQuiLacheApres{reste: padHeaderSize}, maxPadding)
+	if err == nil || strings.Contains(err.Error(), "hors bornes") {
+		t.Errorf("writePadding(maxPadding) = %v : attendu une erreur d'écriture, pas un refus de bornes", err)
+	}
+	err = writePadding(&ecrivainQuiLacheApres{reste: padHeaderSize}, maxPadding+1)
+	if err == nil || !strings.Contains(err.Error(), "hors bornes") {
+		t.Errorf("writePadding(maxPadding+1) = %v : attendu un refus hors bornes", err)
+	}
+}
+
+// TestPadFenetreValeursExactes : la fenêtre annoncée à l'écran est exactement
+// l'intervalle de tailles qui sortent identiques, bornes comprises. À la main,
+// profil standard (en-tête de remplissage de 4 octets) :
+//
+//	taille 9  : palier padme(13) = 14 ; 8 sort à 12, 9 et 10 à 14, 11 à 16
+//	            -> fenêtre (9, 10)
+//	taille 11 : palier padme(15) = 16 ; 11 et 12 sortent à 16, 13 à 18
+//	            -> fenêtre (11, 12)
+//
+// Une borne haute fausse promettrait à l'utilisateur un anonymat qu'il n'a pas
+// (ou le réduirait au fichier seul sans raison).
+func TestPadFenetreValeursExactes(t *testing.T) {
+	cas := []struct{ taille, bas, haut int64 }{
+		{9, 9, 10},
+		{11, 11, 12},
+	}
+	for _, c := range cas {
+		bas, haut := PadFenetre(c.taille, PadStandard)
+		if bas != c.bas || haut != c.haut {
+			t.Errorf("PadFenetre(%d) = (%d, %d), attendu (%d, %d)", c.taille, bas, haut, c.bas, c.haut)
+		}
 	}
 }
 

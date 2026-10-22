@@ -222,14 +222,14 @@ le test exprès ; elle exige une nouvelle version de format. Le tripwire
 historique garde en plus la version courante au moins égale à 3 et la présence
 des fichiers de référence v1 et v2.
 
-Tests : TestFormatV4Fige, TestProtocolSafety_Tripwire
+Tests : TestFormatV4Fige, TestProtocolSafety_Tripwire, TestMarshalEnteteV2Exact
 
 ### R-FMT-05 — En-tête incohérent ou hostile refusé
 Un en-tête qui se contredit (deux façons de décrire la compression, drapeau
 inconnu pour la version), ou qui annonce des paramètres Argon2 hors bornes
 (jusqu'à 4 Tio de mémoire), est refusé avant toute allocation ou dérivation.
 
-Tests : TestHeaderIncoherentRefuse, TestDrapeauMetadataRefuseAvantV3, TestParametresArgonHorsBornes, TestHeaderMemoireHostile
+Tests : TestHeaderIncoherentRefuse, TestDrapeauMetadataRefuseAvantV3, TestParametresArgonHorsBornes, TestHeaderMemoireHostile, TestHeaderV3AvecRemplissageResteLisible, TestHeaderDrapeauCompressionSelonLaVersion
 
 ### R-FMT-06 — Fichier qui n'est pas un chiffré
 Un fichier sans le bon début est refusé, sans être interprété.
@@ -298,13 +298,33 @@ Avec `-pad`, deux fichiers de tailles proches (même palier) donnent des chiffr�
 de même taille ; la fenêtre annoncée à l'utilisateur est exacte, et se réduit
 au fichier lui-même au-delà du plafond.
 
-Tests : TestRemplissageMasqueLaTaille, TestPadPalierSuitLeRemplissageReel, TestPadFenetreNePrometPasCeQuElleNeTientPas, TestPadFenetreDegenereAuPlafond, TestMetadataAvecRemplissage
+Tests : TestRemplissageMasqueLaTaille, TestPadPalierSuitLeRemplissageReel, TestPadFenetreNePrometPasCeQuElleNeTientPas, TestPadFenetreDegenereAuPlafond, TestMetadataAvecRemplissage, TestPadmeAuxPetitesTailles, TestWritePaddingZero, TestWritePaddingAcceptePlafondExact, TestPadFenetreValeursExactes
 
 ### R-CRY-09 — Le remplissage et la compression s'excluent
 `-pad` avec `-comp` est refusé à l'écriture, et un fichier qui annonce les deux
 est refusé à la lecture.
 
 Tests : TestRemplissageEtCompressionSExcluent, TestRemplissageAvecCompressionEnLecture, TestOptionsValidate
+
+### R-CRY-10 — Les clés sont effacées de la mémoire après usage
+Une fois la lecture terminée, la fermeture de la chaîne de déchiffrement
+efface les clés : elles ne restent pas en mémoire après chaque opération.
+
+Tests : TestMonterLectureEffaceLesClesALaFermeture
+
+### R-CRY-11 — Une erreur de scellement n'est jamais avalée
+En mode cascade, une erreur sur l'une ou l'autre des deux couches lors de la
+fermeture remonte à l'appelant, et les deux couches sont toujours fermées :
+on n'annonce jamais « succès » sur un fichier dont le dernier bloc manque.
+
+Tests : TestCascadeFermeLesDeuxCouchesEtRemonteLErreur
+
+### R-CRY-12 — La progression suit le travail réel
+La progression n'avance que sur des octets réellement lus, finit à 100 %, et au
+déchiffrement son total est la taille moins l'en-tête déjà consommé (nul, jamais
+négatif, quand la taille d'entrée est inconnue).
+
+Tests : TestProgression, TestProgressionDossier, TestProgressReaderIgnoreLesLecturesVides, TestProgressionDechiffrementSuitLeReste
 
 ## FS — fichiers, écrasement, suppression
 
@@ -321,7 +341,7 @@ détruite, aucun `.chto-tmp-*` ne reste, et aucun dossier à moitié extrait
 n'apparaît. L'interruption nettoie les temporaires en cours. Un abandon dans
 l'interface avant le lancement de l'opération n'écrit rien.
 
-Tests : TestEchecNeDetruitPasLaCible, TestDecryptFluxMauvaisMotDePasseGardeLaDestination, TestDecryptFluxMauvaisMotDePasseNeLaissePasDeFichier, TestNettoyageTemporaires, TestDossierMauvaisMotDePasse, TestE2EInterruption
+Tests : TestEchecNeDetruitPasLaCible, TestDecryptFluxMauvaisMotDePasseGardeLaDestination, TestDecryptFluxMauvaisMotDePasseNeLaissePasDeFichier, TestNettoyageTemporaires, TestDossierMauvaisMotDePasse, TestE2EInterruption, TestNettoyageFermeLeDescripteur, TestEncryptDossierIllisibleRemonteLErreur
 
 ### R-FS-03 — Fichier vide : aller-retour exact
 Un fichier vide se chiffre et se déchiffre en un fichier vide, ainsi qu'un
@@ -394,7 +414,7 @@ un nom que la relecture refuserait est refusé dès le chiffrement ; un nom
 hostile (`../..`, chemin absolu, octet nul) est réduit à son dernier élément ou
 refusé.
 
-Tests : TestMetadataAllerRetour, TestMetadataNomHostile, TestMetadataNomAvecDeuxPointsAllerRetour, TestMetadataNomIllisibleRefuseALEcriture, TestMetadataNomTropLong, TestMetadataBlocCorrompu, TestSansMetadataParDefaut
+Tests : TestMetadataAllerRetour, TestMetadataNomHostile, TestMetadataNomAvecDeuxPointsAllerRetour, TestMetadataNomIllisibleRefuseALEcriture, TestMetadataNomTropLong, TestMetadataBlocCorrompu, TestSansMetadataParDefaut, TestMetadataNomALaLimite
 
 ### R-FS-14 — Nom utilisable selon la plateforme
 Un nom d'origine restitué est adapté aux règles de la plateforme (caractères

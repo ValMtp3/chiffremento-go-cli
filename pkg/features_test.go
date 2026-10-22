@@ -2,6 +2,7 @@ package pkg
 
 import (
 	"bytes"
+	"encoding/binary"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -313,6 +314,39 @@ func TestMetadataNomTropLong(t *testing.T) {
 	long := strings.Repeat("a", maxMetaName+1)
 	if _, err := marshalMetadata(&FileMetadata{Name: long}); err == nil {
 		t.Error("un nom au-delà du plafond a été accepté à l'écriture")
+	}
+}
+
+// TestMetadataNomALaLimite : le plafond est inclusif. Un nom de 1024 octets
+// exactement s'écrit puis se relit ; un de 1025 est refusé, à l'écriture comme
+// à la relecture d'un bloc forgé. Sans cela, un fichier au nom très long serait
+// refusé à tort, ou le plafond protégeant l'allocation serait d'un octet trop
+// large.
+func TestMetadataNomALaLimite(t *testing.T) {
+	limite := strings.Repeat("a", maxMetaName)
+	bloc, err := marshalMetadata(&FileMetadata{Name: limite})
+	if err != nil {
+		t.Fatalf("nom de %d octets refusé à l'écriture : %v", maxMetaName, err)
+	}
+	meta, err := readMetadata(bytes.NewReader(bloc))
+	if err != nil {
+		t.Fatalf("nom de %d octets refusé à la relecture : %v", maxMetaName, err)
+	}
+	if meta.Name != limite {
+		t.Errorf("nom relu de %d octets, attendu %d", len(meta.Name), maxMetaName)
+	}
+
+	if _, err := marshalMetadata(&FileMetadata{Name: limite + "a"}); err == nil {
+		t.Errorf("nom de %d octets accepté à l'écriture", maxMetaName+1)
+	}
+
+	// Bloc forgé : même préfixe que marshalMetadata, longueur annoncée 1025.
+	forge := append([]byte(metaMagic), 0, 0)
+	binary.BigEndian.PutUint16(forge[len(metaMagic):], uint16(maxMetaName+1))
+	forge = append(forge, make([]byte, 8)...)
+	forge = append(forge, []byte(limite+"a")...)
+	if _, err := readMetadata(bytes.NewReader(forge)); err == nil {
+		t.Errorf("nom de %d octets accepté à la relecture", maxMetaName+1)
 	}
 }
 
