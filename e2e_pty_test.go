@@ -46,6 +46,9 @@ const (
 	// pendant calmeSortie, sans dépasser delaiDerniersOctets.
 	calmeSortie         = 200 * time.Millisecond
 	delaiDerniersOctets = 2 * time.Second
+	// pasDeSondage est la pause entre deux relectures de l'écran : assez courte
+	// pour ne pas ralentir les tests, assez longue pour ne pas occuper le CPU.
+	pasDeSondage = 20 * time.Millisecond
 )
 
 // Séquences que le terminal enverrait pour chaque touche.
@@ -257,7 +260,7 @@ func (p *pilote) attendre(texte string) {
 		if time.Now().After(limite) {
 			p.t.Fatalf("%q n'est pas apparu en %v ; fin de l'écran :\n%s", texte, delaiEcran, p.queue())
 		}
-		time.Sleep(20 * time.Millisecond)
+		time.Sleep(pasDeSondage)
 	}
 }
 
@@ -274,7 +277,7 @@ func (p *pilote) attendreFinDeSortie() {
 	limite := time.Now().Add(delaiDerniersOctets)
 	vue, depuis := p.taille(), time.Now()
 	for time.Now().Before(limite) && time.Since(depuis) < calmeSortie {
-		time.Sleep(20 * time.Millisecond)
+		time.Sleep(pasDeSondage)
 		if n := p.taille(); n != vue {
 			vue, depuis = n, time.Now()
 		}
@@ -305,6 +308,13 @@ func (p *pilote) valider(titreSuivant string) {
 	p.t.Helper()
 	p.touches(toucheEntree)
 	p.attendre(focus + titreSuivant)
+}
+
+// attendreProgression attend l'écran de progression de l'opération. Il dure
+// au moins 4 s (progress.go) : il reste affiché le temps d'y envoyer une touche.
+func (p *pilote) attendreProgression() {
+	p.t.Helper()
+	p.attendre("aead")
 }
 
 // attendrePremierEcran attend que le choix de l'opération soit affiché en
@@ -622,8 +632,8 @@ func TestE2EMauvaisePhrase(t *testing.T) {
 // rend le terminal tel qu'il était et, avant le lancement de l'opération,
 // n'écrit rien.
 //
-// L'abandon a lieu avant toute écriture : ce test ne prouve donc pas le
-// nettoyage des temporaires d'une opération interrompue en cours de route.
+// L'abandon a lieu avant toute écriture ; l'abandon pendant l'opération est
+// couvert par TestE2EInterruptionPendantOperation.
 func TestE2EInterruption(t *testing.T) {
 	dossier := t.TempDir()
 	ecrireFichier(t, filepath.Join(dossier, "secret.txt"), []byte("à ne pas toucher\n"))
@@ -660,6 +670,40 @@ func TestE2EInterruption(t *testing.T) {
 
 	if apres := contenuDossier(t, dossier); !slices.Equal(avant, apres) {
 		t.Fatalf("l'abandon a laissé des traces : %v puis %v", avant, apres)
+	}
+}
+
+// R-TUI-04 et R-FS-02 : un abandon par Ctrl+C pendant l'opération, écran de
+// progression affiché, sort en 130, rend le terminal, garde l'original intact
+// et ne laisse ni chiffré ni temporaire.
+func TestE2EInterruptionPendantOperation(t *testing.T) {
+	dossier := t.TempDir()
+	// Assez gros pour que l'opération soit en cours à l'arrivée de Ctrl+C.
+	original := bytes.Repeat([]byte("contenu à protéger 0123456789\n"), 2<<20)
+	ecrireFichier(t, filepath.Join(dossier, "gros.bin"), original)
+	avant := contenuDossier(t, dossier)
+
+	p := lancerPilote(t, dossier)
+	p.choisirAction("chiffrer")
+	p.saisirChemin("gros.bin")
+	p.validerOptionsParDefaut()
+	p.saisirPhrase("phrase d'abandon", true)
+	p.attendreProgression()
+	p.abandonnerParCtrlC()
+
+	if code := p.codeDeSortie(); code != exitInterrompu {
+		t.Fatalf("code %d, attendu %d ; fin de l'écran :\n%s", code, exitInterrompu, p.queue())
+	}
+	p.terminalRestaure()
+	if apres := contenuDossier(t, dossier); !slices.Equal(avant, apres) {
+		t.Fatalf("l'abandon a laissé des traces : %v puis %v", avant, apres)
+	}
+	obtenu, err := os.ReadFile(filepath.Join(dossier, "gros.bin"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(obtenu, original) {
+		t.Fatal("l'original a été modifié par l'abandon")
 	}
 }
 

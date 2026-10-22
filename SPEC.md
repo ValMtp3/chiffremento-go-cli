@@ -149,10 +149,12 @@ Tests : TestE2EVerifier
 ### R-TUI-04 — Abandon par Ctrl+C : code 130, terminal restauré, rien d'écrit
 Ctrl+C dans l'interface sort avec le code 130, sans message d'erreur, et rend
 le terminal (écho, curseur) dans son état d'origine. Un abandon avant le
-lancement de l'opération laisse le dossier tel qu'il était. Échap ne fait pas
-quitter l'interface : son rôle sera fixé à la refonte plein écran.
+lancement de l'opération laisse le dossier tel qu'il était. Pendant le
+chiffrement d'un gros fichier, écran de progression affiché, il sort aussi en
+130, rend le terminal, garde l'original intact et ne laisse ni chiffré ni
+temporaire. Échap ne fait pas quitter l'interface : son rôle sera fixé à la refonte plein écran.
 
-Tests : TestE2EInterruption
+Tests : TestE2EInterruption, TestE2EInterruptionPendantOperation
 
 ### R-TUI-05 — Mauvaise phrase de passe dans l'interface
 Une mauvaise phrase de passe donne un message clair, et rien n'est écrit.
@@ -253,14 +255,17 @@ Tests : TestMauvaisMotDePasse, TestV4MauvaisMotDePasse, TestDossierMauvaisMotDeP
 ### R-CRY-02 — Un octet modifié : refus
 Modifier un seul octet de l'en-tête (version, drapeaux, algorithme, paramètres,
 sel, engagement, enveloppe) ou du corps empêche le déchiffrement, et `verify`
-le signale. Aucune sortie n'est laissée.
+le signale. Aucune sortie n'est laissée. (FuzzAllerRetour ne couvre que le
+refus du déchiffrement d'un chiffré altéré, pas `verify` ni l'absence de sortie.)
 
 Tests : TestHeaderFalsifie, TestV4EnTeteAltere, TestCorpsFalsifie, FuzzAllerRetour
 
 ### R-CRY-03 — Aller-retour exact quelles que soient les options
 Chiffrer puis déchiffrer rend exactement le contenu d'origine, pour chaque
 algorithme (AES-GCM, ChaCha20-Poly1305, cascade), avec ou sans compression
-zstd, remplissage, métadonnées, et pour chaque profil de dérivation testé.
+zstd, remplissage, métadonnées, et pour chaque profil de dérivation testé. (FuzzAllerRetour n'utilise qu'un seul
+profil de dérivation, la clé maître étant dérivée une fois ; les autres profils
+reposent sur les autres tests cités.)
 
 Tests : TestRoundTrip, TestV4RoundTrip, TestRoundTripDossier, TestFluxAllerRetour, FuzzAllerRetour
 
@@ -339,9 +344,9 @@ Tests : TestRefusEcrasementCLI, TestDestinationExistanteRefusee, TestOpenDestRef
 Après une erreur de déchiffrement, une destination déjà présente n'est pas
 détruite, aucun `.chto-tmp-*` ne reste, et aucun dossier à moitié extrait
 n'apparaît. L'interruption nettoie les temporaires en cours. Un abandon dans
-l'interface avant le lancement de l'opération n'écrit rien.
+l'interface, avant ou pendant le chiffrement d'un gros fichier, n'écrit rien.
 
-Tests : TestEchecNeDetruitPasLaCible, TestDecryptFluxMauvaisMotDePasseGardeLaDestination, TestDecryptFluxMauvaisMotDePasseNeLaissePasDeFichier, TestNettoyageTemporaires, TestDossierMauvaisMotDePasse, TestE2EInterruption, TestNettoyageFermeLeDescripteur, TestEncryptDossierIllisibleRemonteLErreur
+Tests : TestEchecNeDetruitPasLaCible, TestDecryptFluxMauvaisMotDePasseGardeLaDestination, TestDecryptFluxMauvaisMotDePasseNeLaissePasDeFichier, TestNettoyageTemporaires, TestDossierMauvaisMotDePasse, TestE2EInterruption, TestE2EInterruptionPendantOperation, TestNettoyageFermeLeDescripteur, TestEncryptDossierIllisibleRemonteLErreur
 
 ### R-FS-03 — Fichier vide : aller-retour exact
 Un fichier vide se chiffre et se déchiffre en un fichier vide, ainsi qu'un
