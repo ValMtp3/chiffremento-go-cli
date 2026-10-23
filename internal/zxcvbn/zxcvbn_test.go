@@ -86,13 +86,13 @@ func TestPasswordStrength(t *testing.T) {
 
 }
 
+// Cas limites : une chaîne vide vaut au plus un essai ; de l'UTF-8 invalide
+// n'est pas évalué (Result vide, 0 essai) plutôt que de paniquer.
 func TestCornerCases(t *testing.T) {
-	testdata := []string{
-		"",
-		"wen\x8e\xc6",
+	if g := PasswordStrength("", nil).Guesses; g > 1 {
+		t.Errorf("chaîne vide : %v essais, au plus 1 attendu", g)
 	}
-
-	for _, td := range testdata {
-		_ = PasswordStrength(td, nil)
+	if g := PasswordStrength("wen\x8e\xc6", nil).Guesses; g != 0 {
+		t.Errorf("UTF-8 invalide : %v essais, 0 attendu", g)
 	}
 }
