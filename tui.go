@@ -1139,15 +1139,14 @@ func passwordEntropy(s string) float64 {
 	return math.Log2(guesses)
 }
 
-// strengthHint traduit l'entropie en une ligne lisible, avec l'ordre de
-// grandeur du temps qu'une attaque hors ligne y passerait.
 // indicateurDeForce rend la description d'un champ de mot de passe : la force
 // de la saisie, recalculée à chaque frappe.
 //
 // huh ne l'évalue que lorsque le groupe du champ est affiché. Son premier appel
 // lance donc le chargement des listes de zxcvbn en arrière-plan, pendant que
 // l'utilisateur commence à taper : la première frappe ne l'attend pas, et une
-// phrase générée (groupe de saisie escamoté) ne charge rien (~10 Mo évités).
+// phrase générée (groupe de saisie escamoté) ne charge rien (~9 Mo évités,
+// mesuré en pty).
 func indicateurDeForce(saisie *string) func() string {
 	prechargement := sync.OnceFunc(func() { go zxcvbn.Precharger() })
 	return func() string {
@@ -1156,6 +1155,8 @@ func indicateurDeForce(saisie *string) func() string {
 	}
 }
 
+// strengthHint traduit l'entropie en une ligne lisible, avec l'ordre de
+// grandeur du temps qu'une attaque hors ligne y passerait.
 func strengthHint(s string) string {
 	if s == "" {
 		return "jamais affiché, jamais visible dans ps ni dans l'historique"
