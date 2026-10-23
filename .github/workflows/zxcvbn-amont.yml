@@ -40,11 +40,18 @@ jobs:
           # Pas de `|| true` ici : si l'API échoue, le job échoue.
           tous_les_tags="$(gh api --paginate repos/trustelem/zxcvbn/tags --jq '.[].name')"
 
-          # grep renvoie 1 quand rien ne correspond : ce n'est pas une erreur.
+          # Une liste vide (dépôt renommé ou réponse inattendue) ou des tags
+          # qui n'ont plus la forme vX.Y.Z (par exemple sans « v ») rendraient
+          # la surveillance aveugle : on échoue pour que ce soit visible.
+          if [ -z "$tous_les_tags" ]; then
+            echo "::error::L'API ne renvoie aucun tag pour trustelem/zxcvbn (dépôt renommé ou réponse inattendue ?)"
+            exit 1
+          fi
+          # grep renvoie 1 quand rien ne correspond : on traite ce cas ci-dessous.
           tags_stables="$(printf '%s\n' "$tous_les_tags" | grep -E '^v[0-9]+(\.[0-9]+)*$' || true)"
           if [ -z "$tags_stables" ]; then
-            echo "Aucun tag stable publié par l'amont : rien à signaler."
-            exit 0
+            echo "::error::Des tags existent mais aucun n'a la forme vX.Y.Z (format changé ?) : $(printf '%s' "$tous_les_tags" | tr '\n' ' ')"
+            exit 1
           fi
           derniere="$(printf '%s\n' "$tags_stables" | sort -V | tail -n 1)"
           echo "Version suivie : $actuelle ; dernière version amont : $derniere"
