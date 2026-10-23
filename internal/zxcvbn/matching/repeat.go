@@ -6,7 +6,11 @@ import (
 	"github.com/dlclark/regexp2"
 )
 
-type repeatMatch struct{}
+// repeatMatch note le motif répété avec les mêmes listes que le reste ; sans
+// listes (valeur zéro), il prend les listes anglaises.
+type repeatMatch struct {
+	dm dictionaryMatch
+}
 
 var greedy = regexp2.MustCompile(`(.+)\1+`, 0)
 var lazy = regexp2.MustCompile(`(.+?)\1+`, 0)
@@ -24,7 +28,14 @@ func runeToStringIndex(index int, password string) int {
 	return len(password)
 }
 
-func (repeatMatch) Matches(password string) []*match.Match {
+func (r repeatMatch) dictionnaires() dictionaryMatch {
+	if r.dm.rankedDictionaries == nil {
+		return dictionnairesParDefaut()
+	}
+	return r.dm
+}
+
+func (r repeatMatch) Matches(password string) []*match.Match {
 	var matches []*match.Match
 
 	lastIndex := 0
@@ -65,7 +76,7 @@ func (repeatMatch) Matches(password string) []*match.Match {
 		// recursively match and score the base string
 		baseAnalysis := scoring.MostGuessableMatchSequence(
 			baseToken,
-			Omnimatch(baseToken, nil),
+			omnimatch(baseToken, nil, r.dictionnaires()),
 			false,
 		)
 		matches = append(matches, &match.Match{

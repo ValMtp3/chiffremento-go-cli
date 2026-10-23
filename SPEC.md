@@ -479,6 +479,15 @@ refus.
 
 Tests : TestIndicateurDeForceDictionnaire, TestValidatePassword
 
+### R-PHR-08 — Dictionnaires français dans l'indicateur de force
+L'indicateur de force connaît le français : les mots de la liste des phrases de
+passe (tous au même rang, celui d'un tirage dans cette liste), et les 10 000
+prénoms et 10 000 noms de famille les plus fréquents de l'Insee, avec ou sans
+accent et quelle que soit la casse. Un mot, un prénom ou un nom courant est
+annoncé faible, même suivi d'une année.
+
+Tests : TestMotFrancaisFaible, TestMotsFrancaisRangFixe, TestListesFrancaises
+
 ## PERF — repères de légèreté
 
 ### R-PERF-01 — La mémoire d'Argon2 est rendue au système

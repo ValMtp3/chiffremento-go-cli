@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"chiffremento-cli/internal/zxcvbn/frequency"
 	"chiffremento-cli/internal/zxcvbn/scoring"
 )
 
@@ -57,7 +58,7 @@ func TestPariteAvecV101(t *testing.T) {
 	}
 	for _, ref := range references {
 		t.Run(ref.Password, func(t *testing.T) {
-			got := PasswordStrength(ref.Password, nil)
+			got := passwordStrength(ref.Password, nil, frequency.Anglais())
 			if !proches(ref.Guesses, got.Guesses) {
 				t.Errorf("guesses = %v, attendu %v", got.Guesses, ref.Guesses)
 			}

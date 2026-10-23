@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"chiffremento-cli/internal/zxcvbn/frequency"
 	"chiffremento-cli/internal/zxcvbn/match"
 
 	"chiffremento-cli/internal/zxcvbn/internal/verif/assert"
@@ -38,7 +39,7 @@ func TestPasswordStrength(t *testing.T) {
 				c++
 			}
 			runeMap[len(td.Password)] = c
-			s := PasswordStrength(td.Password, nil)
+			s := passwordStrength(td.Password, nil, frequency.Anglais())
 			if len(s.Sequence) == len(td.Sequence) {
 				for j := range td.Sequence {
 					expect, _ := json.Marshal(td.Sequence[j])

@@ -3,7 +3,9 @@
 package zxcvbn
 
 import (
+	"chiffremento-cli/internal/zxcvbn/frequency"
 	"chiffremento-cli/internal/zxcvbn/match"
+	"maps"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -24,13 +26,25 @@ type Result struct {
 // graphes. Les tests vérifient qu'il reste à 0 au démarrage puis à 1.
 var nbChargements atomic.Int32
 
-// charger construit tout ce qui coûte (listes de mots, classement, graphes de
-// claviers : matching.Precharger les construit tous, scoring en réutilise deux). sync.OnceFunc : une seule exécution, même si le préchargement et
-// la première frappe arrivent en même temps ; les autres appels attendent la fin.
-var charger = sync.OnceFunc(func() {
+// charger construit tout ce qui coûte : le classement des listes anglaises et
+// françaises, et les graphes de claviers (scoring en réutilise deux).
+// sync.OnceValue : une seule exécution, même si le préchargement et la
+// première frappe arrivent en même temps ; les autres appels attendent la fin.
+var charger = sync.OnceValue(func() matching.Classement {
 	nbChargements.Add(1)
 	matching.Precharger()
+	return matching.Classer(listesParDefaut())
 })
+
+// listesParDefaut réunit les listes anglaises (zxcvbn v1.0.1) et françaises
+// (mots des phrases de passe, prénoms et noms de l'Insee).
+func listesParDefaut() map[string]frequency.Liste {
+	anglais, francais := frequency.Anglais(), frequency.Francais()
+	listes := make(map[string]frequency.Liste, len(anglais)+len(francais))
+	maps.Copy(listes, anglais)
+	maps.Copy(listes, francais)
+	return listes
+}
 
 // Precharger force le chargement des listes (une dizaine de millisecondes) pour
 // que le premier PasswordStrength soit rapide. Sans effet s'il est déjà fait ;
@@ -39,16 +53,28 @@ func Precharger() {
 	charger()
 }
 
+// PasswordStrength évalue le mot de passe avec les listes anglaises et
+// françaises, classées une seule fois.
 func PasswordStrength(password string, userInputs []string) Result {
+	if !utf8.ValidString(password) {
+		return Result{}
+	}
+	return evaluer(password, userInputs, charger())
+}
+
+// passwordStrength classe les listes données à chaque appel : réservé aux
+// tests, qui comparent à la v1.0.1 avec les seules listes anglaises.
+func passwordStrength(password string, userInputs []string, listes map[string]frequency.Liste) Result {
+	if !utf8.ValidString(password) {
+		return Result{}
+	}
+	return evaluer(password, userInputs, matching.Classer(listes))
+}
+
+func evaluer(password string, userInputs []string, classement matching.Classement) Result {
 	start := time.Now()
 	var result Result
-	if !utf8.ValidString(password) {
-		// Do not evaluate passwords containing invalid utf8
-		// => those will be reported as weak passwords
-		return result
-	}
-	charger()
-	matches := matching.Omnimatch(password, userInputs)
+	matches := matching.OmnimatchAvec(password, userInputs, classement)
 	seq := scoring.MostGuessableMatchSequence(password, matches, false)
 	end := time.Now()
 	calcTime := end.Nanosecond() - start.Nanosecond()

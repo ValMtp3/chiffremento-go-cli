@@ -8,15 +8,36 @@ import (
 	"sync"
 )
 
+// Omnimatch cherche tous les motifs avec les listes anglaises de zxcvbn.
 func Omnimatch(password string, userInputs []string) (matches []*match.Match) {
-	dictMatcher := dictionnairesParDefaut().withDict("user_inputs", buildRankedDict(userInputs))
+	return omnimatch(password, userInputs, dictionnairesParDefaut())
+}
+
+// Classement est un jeu de listes déjà classées (mot -> rang), construit une
+// fois par Classer puis réutilisé à chaque mot de passe.
+type Classement struct {
+	dictionnaires dictionaryMatch
+}
+
+// Classer construit le classement de ces listes. Coûteux : à faire une fois.
+func Classer(listes map[string]frequency.Liste) Classement {
+	return Classement{dictionnaires: loadDefaultDictionnaries(listes)}
+}
+
+// OmnimatchAvec est Omnimatch avec un autre jeu de listes.
+func OmnimatchAvec(password string, userInputs []string, classement Classement) []*match.Match {
+	return omnimatch(password, userInputs, classement.dictionnaires)
+}
+
+func omnimatch(password string, userInputs []string, dictionnaires dictionaryMatch) (matches []*match.Match) {
+	dictMatcher := dictionnaires.withDict("user_inputs", buildRankedDict(userInputs))
 
 	matchers := []match.Matcher{
 		dictMatcher,
 		reverseDictionnaryMatch{dm: dictMatcher},
 		l33tMatch{dm: dictMatcher, table: l33tTable},
 		spatialMatch{graphs: graphesParDefaut()},
-		repeatMatch{},
+		repeatMatch{dm: dictionnaires},
 		sequenceMatch{},
 		regexpMatch{regexes: defaultRegexpMatch},
 		dateMatch{},
@@ -55,29 +76,26 @@ var (
 	}
 )
 
-// defauts regroupe ce qui coûte à construire : les dictionnaires classés et
-// les graphes de claviers. Rien n'est construit avant le premier usage.
-type defauts struct {
-	dictionnaires dictionaryMatch
-	graphes       []*adjacency.Graph
-}
+// Rien ne se construit avant le premier usage : ni les graphes de claviers, ni
+// le classement des listes anglaises (utilisé par Omnimatch seul, donc surtout
+// par les tests).
+var (
+	graphesChargesUneFois = sync.OnceValue(loadDefaultAdjacencyGraphs)
+	anglaisClasse         = sync.OnceValue(func() dictionaryMatch {
+		return loadDefaultDictionnaries(frequency.Anglais())
+	})
+)
 
-var chargerDefauts = sync.OnceValue(func() defauts {
-	return defauts{
-		dictionnaires: loadDefaultDictionnaries(frequency.Anglais()),
-		graphes:       loadDefaultAdjacencyGraphs(),
-	}
-})
-
-// Precharger construit les dictionnaires et les graphes s'ils ne le sont pas
-// déjà. Sans effet ensuite ; sûr depuis plusieurs goroutines.
+// Precharger construit les graphes de claviers s'ils ne le sont pas déjà. Sans
+// effet ensuite ; sûr depuis plusieurs goroutines. Les listes se préparent
+// avec Classer.
 func Precharger() {
-	chargerDefauts()
+	graphesChargesUneFois()
 }
 
-func dictionnairesParDefaut() dictionaryMatch { return chargerDefauts().dictionnaires }
+func dictionnairesParDefaut() dictionaryMatch { return anglaisClasse() }
 
-func graphesParDefaut() []*adjacency.Graph { return chargerDefauts().graphes }
+func graphesParDefaut() []*adjacency.Graph { return graphesChargesUneFois() }
 
 func loadDefaultDictionnaries(listes map[string]frequency.Liste) dictionaryMatch {
 	rd := make(map[string]rankedDictionnary, len(listes))

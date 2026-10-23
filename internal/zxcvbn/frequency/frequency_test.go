@@ -3,9 +3,12 @@ package frequency
 import (
 	"fmt"
 	"io/fs"
+	"reflect"
 	"strings"
 	"testing"
 	"testing/fstest"
+
+	"github.com/klauspost/compress/zstd"
 )
 
 func TestListesEmbarquees(t *testing.T) {
@@ -85,5 +88,58 @@ func TestDecoderPaniqueSurDonneesCorrompues(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func fsAvecListe(t *testing.T, nom, texte string) fs.FS {
+	t.Helper()
+	encodeur, err := zstd.NewWriter(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer encodeur.Close()
+	return fstest.MapFS{"listes/" + nom + ".txt.zst": {Data: encodeur.EncodeAll([]byte(texte), nil)}}
+}
+
+// Une ligne qui commence par une tabulation est la variante sans accent de la
+// ligne d'avant : même rang, et la tabulation ne fait pas partie du mot.
+func TestDecoderVariantesAuMemeRang(t *testing.T) {
+	liste := decoder(fsAvecListe(t, "prenoms", "hélène\n\thelene\njean\n\tjean2\nzoé\n"))["prenoms"]
+	if want := []string{"hélène", "helene", "jean", "jean2", "zoé"}; !reflect.DeepEqual(liste.Mots, want) {
+		t.Errorf("mots %q, attendu %q", liste.Mots, want)
+	}
+	if want := []int{1, 1, 2, 2, 3}; !reflect.DeepEqual(liste.Rangs, want) {
+		t.Errorf("rangs %v, attendu %v", liste.Rangs, want)
+	}
+}
+
+func TestDecoderSansVariantesPasDeRangs(t *testing.T) {
+	liste := decoder(fsAvecListe(t, "plain", "un\ndeux\n"))["plain"]
+	if liste.Rangs != nil {
+		t.Errorf("rangs %v, nil attendu : le rang suit l'ordre", liste.Rangs)
+	}
+}
+
+func TestDecoderFiltreParNom(t *testing.T) {
+	fsys := fstest.MapFS{}
+	for _, nom := range []string{"a", "b"} {
+		for chemin, f := range fsAvecListe(t, nom, nom+"\n").(fstest.MapFS) {
+			fsys[chemin] = f
+		}
+	}
+	got := decoder(fsys, "a")
+	if _, ok := got["a"]; !ok || len(got) != 1 {
+		t.Errorf("listes %v, seule « a » attendue", got)
+	}
+}
+
+func TestDecoderListeDemandeeAbsentePanique(t *testing.T) {
+	message := ""
+	func() {
+		defer func() { message = fmt.Sprint(recover()) }()
+		decoder(fsAvecListe(t, "a", "x\n"), "a", "manquante")
+	}()
+	if !strings.Contains(message, "frequency : liste manquante absente") {
+		t.Errorf("message %q", message)
 	}
 }
