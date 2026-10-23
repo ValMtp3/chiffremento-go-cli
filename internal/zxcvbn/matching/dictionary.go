@@ -37,10 +37,21 @@ func (dm dictionaryMatch) Matches(password string) []*match.Match {
 	// minuscules et les autres formes d'un morceau ne se calculent qu'une
 	// fois, pas une fois par dictionnaire. L'ordre final ne change pas :
 	// match.Sort trie par positions.
+	//
+	// Convention des positions (octets, comme regexp et scoring) : I est le
+	// premier octet du jeton, J son DERNIER octet, donc password[I:J+1] est le
+	// jeton entier. scoring enchaîne un motif suivant en I = J+1 et finit au
+	// dernier octet du mot de passe ; reverseDictionnaryMatch retourne les
+	// positions en miroir (len-1-J, len-1-I), ce qui n'est juste qu'avec cette
+	// convention. zxcvbn v1.0.1 prenait pour J le début du dernier caractère :
+	// un mot finissant par une lettre sur plusieurs octets (« andré ») n'était
+	// jamais trouvé entier. Pour l'ASCII, les deux conventions coïncident.
 	for i := range password {
-		for delta := range password[i:] {
-			j := i + delta
-			token := password[i : j+1]
+		for fin := i; fin < len(password); {
+			_, taille := utf8.DecodeRuneInString(password[fin:])
+			fin += taille
+			j := fin - 1
+			token := password[i:fin]
 			word := strings.ToLower(token)
 			var formes *autresFormes
 			for _, d := range dictionnaires {

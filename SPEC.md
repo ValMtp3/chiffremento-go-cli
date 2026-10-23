@@ -487,7 +487,7 @@ accent (le nom « lefèvre » vaut « lefevre », une saisie décomposée collé
 depuis le Finder vaut la forme composée) et quelle que soit la casse. Un mot,
 un prénom ou un nom courant est annoncé faible, même suivi d'une année.
 
-Tests : TestMotFrancaisFaible, TestMotsFrancaisRangFixe, TestListesFrancaises, TestNomsAccentuesReconnus, TestPrenomDecomposeReconnu
+Tests : TestMotFrancaisFaible, TestMotsFrancaisRangFixe, TestListesFrancaises, TestNomsAccentuesReconnus, TestPrenomDecomposeReconnu, TestPrenomFinissantParUnAccent, TestPrenomInverseAvecAccent
 
 ## PERF — repères de légèreté
 

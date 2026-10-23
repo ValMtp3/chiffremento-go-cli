@@ -100,6 +100,79 @@ func TestNomsAccentuesReconnus(t *testing.T) {
 	}
 }
 
+// Un prénom qui finit par une lettre accentuée (deux octets en UTF-8) doit
+// être reconnu entier : le jeton va jusqu'au dernier octet de sa dernière
+// lettre (J), y compris suivi d'une année. Le rang attendu est celui de la
+// graphie accentuée dans la liste de l'Insee : « andre », « zoe », « chloe »
+// y sont des prénoms à part, bien plus rares (andré 5, andre 8 819).
+func TestPrenomFinissantParUnAccent(t *testing.T) {
+	fixerAnneeReference(t, anneeReferenceParite)
+	for _, cas := range []struct{ motDePasse, prenom string }{
+		{"andré", "andré"},
+		{"zoé", "zoé"},
+		{"chloé", "chloé"},
+		{"andré1990", "andré"},
+	} {
+		t.Run(cas.motDePasse, func(t *testing.T) {
+			m := correspondance(cas.motDePasse, frequency.NomPrenomsFr, 0, len(cas.prenom)-1)
+			if m == nil {
+				t.Fatalf("%q non reconnu entier dans %s", cas.prenom, frequency.NomPrenomsFr)
+			}
+			if m.Token != cas.prenom {
+				t.Errorf("jeton %q, attendu %q", m.Token, cas.prenom)
+			}
+			if rang := rangDansListe(t, cas.prenom, frequency.NomPrenomsFr); m.Rank != rang {
+				t.Errorf("rang %d, attendu %d (celui de %q dans la liste)", m.Rank, rang, cas.prenom)
+			}
+			// Suivi d'une année, le jeton n'est plus tout le mot de passe :
+			// zxcvbn lui compte au moins 50 essais, et le nom de famille
+			// « andré » (noms_fr) peut l'emporter à égalité. Le motif doit
+			// rester un mot du dictionnaire couvrant le prénom entier.
+			premier := PasswordStrength(cas.motDePasse, nil).Sequence[0]
+			if premier.Pattern != "dictionary" || premier.Token != cas.prenom {
+				t.Errorf("premier motif %s %q, attendu dictionary %q", premier.Pattern, premier.Token, cas.prenom)
+			}
+			if cas.motDePasse == cas.prenom && premier.DictionaryName != frequency.NomPrenomsFr {
+				t.Errorf("premier motif dans %s, attendu %s", premier.DictionaryName, frequency.NomPrenomsFr)
+			}
+		})
+	}
+}
+
+// Le matcher inversé passe par le même Matches puis retourne les positions en
+// miroir : « érdna » (andré à l'envers) doit couvrir tout le mot de passe,
+// accent compris.
+func TestPrenomInverseAvecAccent(t *testing.T) {
+	const inverse = "érdna"
+	for _, m := range matching.OmnimatchAvec(inverse, nil, charger()) {
+		if m.Reversed && m.DictionaryName == frequency.NomPrenomsFr && m.I == 0 && m.J == len(inverse)-1 {
+			if m.Token != inverse {
+				t.Errorf("jeton %q, attendu %q", m.Token, inverse)
+			}
+			return
+		}
+	}
+	t.Errorf("%q non reconnu à l'envers dans %s", inverse, frequency.NomPrenomsFr)
+}
+
+// rangDansListe lit le rang de mot directement dans la liste décodée, sans
+// passer par le matcher.
+func rangDansListe(t *testing.T, mot, nom string) int {
+	t.Helper()
+	liste := frequency.Francais()[nom]
+	for i, entree := range liste.Mots {
+		if entree != mot {
+			continue
+		}
+		if liste.Rangs != nil {
+			return liste.Rangs[i]
+		}
+		return i + 1
+	}
+	t.Fatalf("%q absent de la liste %s", mot, nom)
+	return 0
+}
+
 // La recherche sans accent ne doit pas fabriquer de faux motifs l33t : dans
 // « lefèvre1 », « lefèvre » ne contient aucune substitution (le « 1 » est
 // hors du jeton), il ne doit donc pas ressortir marqué l33t.
