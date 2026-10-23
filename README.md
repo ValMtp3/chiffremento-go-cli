@@ -358,6 +358,10 @@ La solidité dépend **entièrement** de la force du mot de passe. Argon2id rend
 
 Le mode parano ne remplace pas un bon mot de passe : il protège contre la découverte d'une faiblesse dans un seul des deux algorithmes, rien d'autre.
 
+## 📄 Licence
+
+MIT — voir [LICENSE](LICENSE). Les composants et données de tiers (zxcvbn, liste de mots Tails/Tor, prénoms et noms de l'Insee) sont crédités dans [NOTICE](NOTICE).
+
 ---
 <br>
 
@@ -692,4 +696,4 @@ Parano mode is not a substitute for a good password: it guards against a weaknes
 
 ## 📄 License
 
-MIT — see [LICENSE](LICENSE).
+MIT — see [LICENSE](LICENSE). Third-party components and data (zxcvbn, the Tails/Tor word list, INSEE first and last names) are credited in [NOTICE](NOTICE).

@@ -10,13 +10,14 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 
+	"chiffremento-cli/internal/zxcvbn"
 	"chiffremento-cli/pkg"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/huh"
-	"github.com/trustelem/zxcvbn"
 	"golang.org/x/term"
 )
 
@@ -390,7 +391,7 @@ func encryptForm(o *optionsChiffrement, estDossier bool, tailleClair int64) (*hu
 				// voit la robustesse de son mot de passe pendant qu'il le tape.
 				// Ce calcul tourne hors de la boucle de l'interface, d'où la
 				// lecture par l'accesseur verrouillé — voir saisieVerrouillee.
-				DescriptionFunc(func() string { return strengthHint(saisieVerrouillee{&o.password}.Get()) }, &o.password).
+				DescriptionFunc(indicateurDeForce(&o.password), &o.password).
 				EchoMode(huh.EchoModePassword).
 				Accessor(saisieVerrouillee{&o.password}).
 				Validate(validatePassword),
@@ -813,7 +814,7 @@ func tuiPasswd(path string) error {
 				Title("nouveau mot de passe").
 				// Même précaution qu'au chiffrement : l'indicateur se calcule
 				// hors de la boucle de l'interface — voir saisieVerrouillee.
-				DescriptionFunc(func() string { return strengthHint(saisieVerrouillee{&nouveau}.Get()) }, &nouveau).
+				DescriptionFunc(indicateurDeForce(&nouveau), &nouveau).
 				EchoMode(huh.EchoModePassword).
 				Accessor(saisieVerrouillee{&nouveau}).
 				Validate(validatePassword),
@@ -1136,6 +1137,22 @@ func passwordEntropy(s string) float64 {
 		return 0
 	}
 	return math.Log2(guesses)
+}
+
+// indicateurDeForce rend la description d'un champ de mot de passe : la force
+// de la saisie, recalculée à chaque frappe.
+//
+// huh ne l'évalue que lorsque le groupe du champ est affiché. Son premier appel
+// lance donc le chargement des listes de zxcvbn en arrière-plan, pendant que
+// l'utilisateur commence à taper : la première frappe ne l'attend pas, et une
+// phrase générée (groupe de saisie escamoté) ne charge rien (~9 Mo évités,
+// mesuré en pty).
+func indicateurDeForce(saisie *string) func() string {
+	prechargement := sync.OnceFunc(func() { go zxcvbn.Precharger() })
+	return func() string {
+		prechargement()
+		return strengthHint(saisieVerrouillee{saisie}.Get())
+	}
 }
 
 // strengthHint traduit l'entropie en une ligne lisible, avec l'ordre de

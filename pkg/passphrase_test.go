@@ -215,3 +215,28 @@ func TestPhraseUniformite(t *testing.T) {
 		t.Errorf("majuscules non équilibrées : %d sur %d", majuscules, total)
 	}
 }
+
+// MotsPhrase rend une copie : la modifier ne touche pas la liste du générateur.
+func TestMotsPhraseRendUneCopie(t *testing.T) {
+	mots, err := MotsPhrase()
+	if err != nil {
+		t.Fatalf("MotsPhrase : %v", err)
+	}
+	if len(mots) != 7776 {
+		t.Fatalf("%d mots, 7776 attendus", len(mots))
+	}
+	premier := mots[0]
+	mots[0] = "modifie"
+
+	interne, err := listeMots()
+	if err != nil {
+		t.Fatalf("listeMots : %v", err)
+	}
+	if interne[0] != premier {
+		t.Errorf("la liste interne a changé : %q au lieu de %q", interne[0], premier)
+	}
+	autre, _ := MotsPhrase()
+	if autre[0] != premier {
+		t.Errorf("la copie suivante a changé : %q au lieu de %q", autre[0], premier)
+	}
+}
