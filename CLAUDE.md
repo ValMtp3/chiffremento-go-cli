@@ -39,9 +39,13 @@ pas terminée.
   par fichier (`io.Copy` en alloue un de 32 Kio à chaque appel).
 - Interface : 30 images/s (`imagesParSeconde`, `navigation.go`) : ~110 à 150
   réveils par seconde au repos au lieu de ~250 ; premier écran en ~62 ms.
-- zxcvbn construit ses dictionnaires au démarrage du programme : ~13 Mo et
-  ~7 ms à chaque lancement, et ~3 Mo de binaire.
-- Binaire : ~8,3 Mo (`-s -w`).
+- zxcvbn (copie interne, `internal/zxcvbn`) : listes zstd embarquées, chargées
+  au premier usage. Coût au lancement ≈ 0 : `-version` ~4,2 Mo de pic au lieu
+  de ~15,5 Mo, `-mode genpass` ~5,0 Mo au lieu de ~15,9 Mo. Premier
+  `PasswordStrength` : 7 à 12 ms, ~15,3 Mo après l'appel. L'interface le
+  précharge en arrière-plan à l'écran du mot de passe. Les mots, prénoms et
+  noms français sont compris dans ces chiffres.
+- Binaire : ~6,2 Mo (`-s -w`), 6 160 850 o (avant : 8 348 898 o).
 - L'écran de progression dure au moins 4 s : c'est un choix esthétique, pas un
   coût de calcul.
 - La concurrence de l'encodeur zstd est voulue : la brider à 1 coûte ~22 % de
