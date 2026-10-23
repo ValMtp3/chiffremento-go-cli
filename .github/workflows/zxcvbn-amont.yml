@@ -1,0 +1,82 @@
+name: zxcvbn-amont
+
+# Une fois par mois : la copie interne de zxcvbn (internal/zxcvbn) ne reçoit
+# pas les correctifs toute seule. Si trustelem/zxcvbn publie une version plus
+# récente que celle notée dans internal/zxcvbn/AMONT, on ouvre une issue.
+on:
+  schedule:
+    - cron: "0 6 1 * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  surveiller:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # Le shell de GitHub Actions est lancé avec `-e -o pipefail` : une erreur
+      # de l'API GitHub fait échouer le job (visible dans l'onglet Actions) au
+      # lieu de passer en silence.
+      #
+      # L'ordre de l'API `tags` n'est pas garanti comme un tri par version, et
+      # l'amont ne publie aucune « release » (seulement des tags). On garde donc
+      # les tags de la forme vX.Y.Z (sans pré-version) et on prend le plus grand
+      # avec `sort -V` (tri par numéros de version).
+      - name: Comparer avec la dernière version amont
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          actuelle="$(tr -d '[:space:]' < internal/zxcvbn/AMONT)"
+          if [ -z "$actuelle" ]; then
+            echo "::error::internal/zxcvbn/AMONT est vide"
+            exit 1
+          fi
+
+          # Pas de `|| true` ici : si l'API échoue, le job échoue.
+          tous_les_tags="$(gh api --paginate repos/trustelem/zxcvbn/tags --jq '.[].name')"
+
+          # grep renvoie 1 quand rien ne correspond : ce n'est pas une erreur.
+          tags_stables="$(printf '%s\n' "$tous_les_tags" | grep -E '^v[0-9]+(\.[0-9]+)*$' || true)"
+          if [ -z "$tags_stables" ]; then
+            echo "Aucun tag stable publié par l'amont : rien à signaler."
+            exit 0
+          fi
+          derniere="$(printf '%s\n' "$tags_stables" | sort -V | tail -n 1)"
+          echo "Version suivie : $actuelle ; dernière version amont : $derniere"
+
+          # Plus grande des deux selon sort -V : si c'est la version suivie,
+          # l'amont n'a rien de plus récent.
+          plus_grande="$(printf '%s\n%s\n' "$actuelle" "$derniere" | sort -V | tail -n 1)"
+          if [ "$derniere" = "$actuelle" ] || [ "$plus_grande" = "$actuelle" ]; then
+            echo "La copie interne est à jour."
+            exit 0
+          fi
+
+          titre="zxcvbn amont : $derniere publiée"
+
+          # Pas de doublon : la recherche GitHub est approximative, on vérifie
+          # donc le titre exact dans le résultat.
+          ouvertes="$(gh issue list --state open --search "in:title \"$titre\"" --json title)"
+          deja_ouverte="$(printf '%s' "$ouvertes" | jq -r --arg t "$titre" '.[] | select(.title == $t) | .title')"
+          if [ -n "$deja_ouverte" ]; then
+            echo "Une issue ouverte existe déjà : $titre"
+            exit 0
+          fi
+
+          corps="trustelem/zxcvbn a publié \`$derniere\` ; la copie interne suit \`$actuelle\` (\`internal/zxcvbn/AMONT\`).
+
+          Procédure de mise à jour :
+
+          1. Relancer le générateur \`internal/zxcvbn/outils/genlistes\` (directive \`//go:generate\` dans \`internal/zxcvbn/frequency/frequency.go\`, variable \`AMONT_LISTS_GO\`).
+          2. Reporter les changements de code amont dans \`internal/zxcvbn\`.
+          3. Régénérer \`internal/zxcvbn/testdata/parite.json\` avec la nouvelle version externe et vérifier \`TestPariteAvecV101\`.
+          4. Mettre à jour \`internal/zxcvbn/AMONT\`.
+
+          Comparaison : https://github.com/trustelem/zxcvbn/compare/$actuelle...$derniere"
+
+          gh issue create --title "$titre" --body "$corps"
