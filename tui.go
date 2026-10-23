@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 
 	"chiffremento-cli/internal/zxcvbn"
@@ -299,10 +300,6 @@ func secretChoisi(o *optionsChiffrement) string {
 // encryptForm construit l'écran des options. Il rend aussi son premier champ :
 // c'est l'ancre du retour vers le choix de la cible.
 func encryptForm(o *optionsChiffrement, estDossier bool, tailleClair int64) (*huh.Form, huh.Field) {
-	// Les listes de zxcvbn se chargent pendant que l'utilisateur lit l'écran :
-	// la première frappe du mot de passe ne les attend pas.
-	go zxcvbn.Precharger()
-
 	algoChamp := huh.NewSelect[byte]().
 		Title("algorithme").
 		Options(
@@ -394,7 +391,7 @@ func encryptForm(o *optionsChiffrement, estDossier bool, tailleClair int64) (*hu
 				// voit la robustesse de son mot de passe pendant qu'il le tape.
 				// Ce calcul tourne hors de la boucle de l'interface, d'où la
 				// lecture par l'accesseur verrouillé — voir saisieVerrouillee.
-				DescriptionFunc(func() string { return strengthHint(saisieVerrouillee{&o.password}.Get()) }, &o.password).
+				DescriptionFunc(indicateurDeForce(&o.password), &o.password).
 				EchoMode(huh.EchoModePassword).
 				Accessor(saisieVerrouillee{&o.password}).
 				Validate(validatePassword),
@@ -795,9 +792,6 @@ func tuiPasswd(path string) error {
 			"il faut donc le déchiffrer puis le rechiffrer pour en changer", d.Version)
 	}
 
-	// Même préchargement qu'au chiffrement, pour la première frappe.
-	go zxcvbn.Precharger()
-
 	details := fmt.Sprintf("format v%d · %s · %s\nle contenu ne sera pas rechiffré : seul l'en-tête change", d.Version, d.Algo, d.KDF)
 	ancien, nouveau, confirme := "", "", ""
 
@@ -820,7 +814,7 @@ func tuiPasswd(path string) error {
 				Title("nouveau mot de passe").
 				// Même précaution qu'au chiffrement : l'indicateur se calcule
 				// hors de la boucle de l'interface — voir saisieVerrouillee.
-				DescriptionFunc(func() string { return strengthHint(saisieVerrouillee{&nouveau}.Get()) }, &nouveau).
+				DescriptionFunc(indicateurDeForce(&nouveau), &nouveau).
 				EchoMode(huh.EchoModePassword).
 				Accessor(saisieVerrouillee{&nouveau}).
 				Validate(validatePassword),
@@ -1147,6 +1141,21 @@ func passwordEntropy(s string) float64 {
 
 // strengthHint traduit l'entropie en une ligne lisible, avec l'ordre de
 // grandeur du temps qu'une attaque hors ligne y passerait.
+// indicateurDeForce rend la description d'un champ de mot de passe : la force
+// de la saisie, recalculée à chaque frappe.
+//
+// huh ne l'évalue que lorsque le groupe du champ est affiché. Son premier appel
+// lance donc le chargement des listes de zxcvbn en arrière-plan, pendant que
+// l'utilisateur commence à taper : la première frappe ne l'attend pas, et une
+// phrase générée (groupe de saisie escamoté) ne charge rien (~10 Mo évités).
+func indicateurDeForce(saisie *string) func() string {
+	prechargement := sync.OnceFunc(func() { go zxcvbn.Precharger() })
+	return func() string {
+		prechargement()
+		return strengthHint(saisieVerrouillee{saisie}.Get())
+	}
+}
+
 func strengthHint(s string) string {
 	if s == "" {
 		return "jamais affiché, jamais visible dans ps ni dans l'historique"
