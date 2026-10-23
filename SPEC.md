@@ -221,11 +221,11 @@ Tests : TestChooseComp, TestGzipRefuseALEcriture, TestGzipResteLisibleEnV3
 La disposition binaire de l'en-tête v4 est figée par un test : magic, tailles
 des champs et de chaque version d'en-tête (dont 117 octets en v4), identifiants
 de version, d'algorithme et de compression, drapeaux connus. La modifier casse
-le test exprès ; elle exige une nouvelle version de format. Le tripwire
-historique garde en plus la version courante au moins égale à 3 et la présence
-des fichiers de référence v1 et v2.
+le test exprès ; elle exige une nouvelle version de format. La lecture des
+anciens fichiers est gardée par les fichiers de référence de `testdata/`
+(TestCompatibiliteV1, TestCompatibiliteV2), qui échouent s'ils disparaissent.
 
-Tests : TestFormatV4Fige, TestProtocolSafety_Tripwire, TestMarshalEnteteV2Exact
+Tests : TestFormatV4Fige, TestMarshalEnteteV2Exact
 
 ### R-FMT-05 — En-tête incohérent ou hostile refusé
 Un en-tête qui se contredit (deux façons de décrire la compression, drapeau

@@ -11,9 +11,6 @@ import "testing"
 // nouvelle version de format avec son chemin de lecture pour l'ancienne. Le
 // travail sur la v5 ajoutera son propre test figé, et celui-ci restera pour
 // protéger la lecture des fichiers v4.
-//
-// Il complète TestProtocolSafety_Tripwire, dont la branche qui devait échouer
-// sur un changement de structure ne peut plus se déclencher depuis la v4.
 func TestFormatV4Fige(t *testing.T) {
 	entiers := []struct {
 		nom      string
