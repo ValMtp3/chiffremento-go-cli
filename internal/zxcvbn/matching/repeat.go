@@ -1,6 +1,8 @@
 package matching
 
 import (
+	"unicode/utf8"
+
 	"chiffremento-cli/internal/zxcvbn/match"
 	"chiffremento-cli/internal/zxcvbn/scoring"
 	"github.com/dlclark/regexp2"
@@ -70,8 +72,14 @@ func (r repeatMatch) Matches(password string) []*match.Match {
 		// FindStringMatchStartingAt takes an index into the string (basically an offset
 		// into a byte array). rmatch indices will be rune offsets and so need to be converted
 		// to string offsets
+		//
+		// Même convention que dictionaryMatch : J est le DERNIER octet du
+		// motif, donc l'octet qui précède le caractère suivant. La v1.0.1
+		// prenait le début du dernier caractère : avec « é » (2 octets), le
+		// motif perdait son dernier octet et la recherche reprenait en plein
+		// caractère (erreur de regexp2, répétitions suivantes ignorées).
 		i := runeToStringIndex(rmatch.Index, password)
-		j := runeToStringIndex(rmatch.Index+rmatch.Captures[0].Length-1, password)
+		j := runeToStringIndex(rmatch.Index+rmatch.Captures[0].Length, password) - 1
 
 		// recursively match and score the base string
 		baseAnalysis := scoring.MostGuessableMatchSequence(
@@ -87,7 +95,9 @@ func (r repeatMatch) Matches(password string) []*match.Match {
 			BaseToken:   baseToken,
 			BaseGuesses: baseAnalysis.Guesses,
 			BaseMatches: baseAnalysis.Sequence,
-			RepeatCount: rmatch.Captures[0].Length / len(baseToken),
+			// Length compte des caractères : la base aussi (len compterait
+			// des octets, « ééé » ferait 1 répétition au lieu de 3).
+			RepeatCount: rmatch.Captures[0].Length / utf8.RuneCountInString(baseToken),
 		})
 		lastIndex = j + 1
 

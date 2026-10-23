@@ -134,19 +134,22 @@ func MostGuessableMatchSequence(password string, matches []*match.Match, exclude
 		// see if a single bruteforce match spanning the k-prefix is optimal.
 		m := makeBruteforceMatch(0, k, password)
 		update(m, 1)
-		previous := 0
 		for i := 1; i <= k; i++ {
+			// Un motif brut ne commence qu'au début d'un caractère, et
+			// prolonge une séquence finie à l'octet juste avant (i-1) :
+			// update lit optimal.pi[m.I-1]. La v1.0.1 lisait ici le début du
+			// caractère précédent : avec un caractère sur plusieurs octets, la
+			// case lue par update était vide et le produit des essais tombait
+			// à 0.
 			if !validIndexes[i] {
 				continue
 			}
-			prev := previous
-			previous = i
 			// generate k bruteforce matches, spanning from (i=1, j=k) up to (i=k, j=k).
 			// see if adding these new matches to any of the sequences in optimal[i-1]
 			// leads to new bests.
 			m := makeBruteforceMatch(i, k, password)
 			for l := 0; l < n; l++ {
-				lastM, ok := optimal.m[prev][l]
+				lastM, ok := optimal.m[i-1][l]
 				if !ok {
 					continue
 				}
