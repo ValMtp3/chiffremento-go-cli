@@ -4,6 +4,8 @@ package zxcvbn
 
 import (
 	"chiffremento-cli/internal/zxcvbn/match"
+	"sync"
+	"sync/atomic"
 	"time"
 	"unicode/utf8"
 
@@ -18,6 +20,25 @@ type Result struct {
 	CalcTime float64
 }
 
+// nbChargements compte les constructions des listes, du classement et des
+// graphes. Les tests vérifient qu'il reste à 0 au démarrage puis à 1.
+var nbChargements atomic.Int32
+
+// charger construit tout ce qui coûte (listes de mots, classement, graphes de
+// claviers : matching.Precharger les construit tous, scoring en réutilise deux). sync.OnceFunc : une seule exécution, même si le préchargement et
+// la première frappe arrivent en même temps ; les autres appels attendent la fin.
+var charger = sync.OnceFunc(func() {
+	nbChargements.Add(1)
+	matching.Precharger()
+})
+
+// Precharger force le chargement des listes (une dizaine de millisecondes) pour
+// que le premier PasswordStrength soit rapide. Sans effet s'il est déjà fait ;
+// sûr depuis plusieurs goroutines.
+func Precharger() {
+	charger()
+}
+
 func PasswordStrength(password string, userInputs []string) Result {
 	start := time.Now()
 	var result Result
@@ -26,6 +47,7 @@ func PasswordStrength(password string, userInputs []string) Result {
 		// => those will be reported as weak passwords
 		return result
 	}
+	charger()
 	matches := matching.Omnimatch(password, userInputs)
 	seq := scoring.MostGuessableMatchSequence(password, matches, false)
 	end := time.Now()

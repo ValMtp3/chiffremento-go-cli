@@ -10,7 +10,7 @@ import (
 
 func Test_spatialMatch(t *testing.T) {
 	s := spatialMatch{
-		graphs: defaultGraphs,
+		graphs: graphesParDefaut(),
 	}
 	// doesn't match 1- and 2-character spatial patterns
 	assert.Empty(t, s.Matches(""))
@@ -20,7 +20,7 @@ func Test_spatialMatch(t *testing.T) {
 
 	// for testing, make a subgraph that contains a single keyboard
 	s = spatialMatch{
-		graphs: []*adjacency.Graph{adjacency.Graphs["qwerty"]},
+		graphs: []*adjacency.Graph{adjacency.Graphe("qwerty")},
 	}
 
 	pattern := "6tfGHJ"
@@ -60,7 +60,7 @@ func Test_spatialMatch(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.pattern, func(t *testing.T) {
 			s := spatialMatch{
-				graphs: []*adjacency.Graph{adjacency.Graphs[tt.keyboard]},
+				graphs: []*adjacency.Graph{adjacency.Graphe(tt.keyboard)},
 			}
 			matches := s.Matches(tt.pattern)
 			assert.Equal(t,

@@ -171,11 +171,11 @@ func SpatialGuesses(m *match.Match) float64 {
 	d := float64(0)
 	switch m.Graph {
 	case "qwerty", "dvorak":
-		s = float64(len(adjacency.Graphs["qwerty"].Graph))
-		d = adjacency.Graphs["qwerty"].AverageDegree
+		s = float64(len(adjacency.Graphe("qwerty").Graph))
+		d = adjacency.Graphe("qwerty").AverageDegree
 	default:
-		s = float64(len(adjacency.Graphs["keypad"].Graph))
-		d = adjacency.Graphs["keypad"].AverageDegree
+		s = float64(len(adjacency.Graphe("keypad").Graph))
+		d = adjacency.Graphe("keypad").AverageDegree
 	}
 	guesses := float64(0)
 	runeCount := utf8.RuneCountInString(m.Token)

@@ -3,6 +3,7 @@ package matching
 import (
 	"strings"
 
+	"chiffremento-cli/internal/zxcvbn/frequency"
 	"chiffremento-cli/internal/zxcvbn/match"
 )
 
@@ -49,6 +50,20 @@ func (dm dictionaryMatch) withDict(name string, d rankedDictionnary) dictionaryM
 }
 
 type rankedDictionnary map[string]int
+
+// buildRankedDictListe classe une liste : rang = position (à partir de 1),
+// ou RangFixe pour tous les mots si la liste en impose un.
+func buildRankedDictListe(liste frequency.Liste) rankedDictionnary {
+	result := make(rankedDictionnary, len(liste.Mots))
+	for i, v := range liste.Mots {
+		rang := i + 1
+		if liste.RangFixe != 0 {
+			rang = liste.RangFixe
+		}
+		result[strings.ToLower(v)] = rang
+	}
+	return result
+}
 
 func buildRankedDict(unrankedList []string) rankedDictionnary {
 	result := make(rankedDictionnary)

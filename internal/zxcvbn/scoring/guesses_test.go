@@ -112,7 +112,7 @@ func TestDateGuesses(t *testing.T) {
 }
 
 func TestSpatialGuesses(t *testing.T) {
-	keyboardStartingPositions := float64(len(adjacency.Graphs["qwerty"].Graph))
+	keyboardStartingPositions := float64(len(adjacency.Graphe("qwerty").Graph))
 
 	// with no turns or shifts, guesses is starts * degree * (len-1)
 	m := &match.Match{
@@ -122,7 +122,7 @@ func TestSpatialGuesses(t *testing.T) {
 		ShiftedCount: 0,
 	}
 	baseGuesses := keyboardStartingPositions *
-		adjacency.Graphs["qwerty"].AverageDegree *
+		adjacency.Graphe("qwerty").AverageDegree *
 		//     # - 1 term because: not counting spatial patterns of length 1
 		//     # eg for length==6, multiplier is 5 for needing to try len2,len3,..,len6
 		float64(len(m.Token)-1)
@@ -159,7 +159,7 @@ func TestSpatialGuesses(t *testing.T) {
 	guesses := float64(0)
 	l := len(m.Token)
 	s := keyboardStartingPositions
-	d := adjacency.Graphs["qwerty"].AverageDegree
+	d := adjacency.Graphe("qwerty").AverageDegree
 	for i := 2; i <= l; i++ {
 		for j := 1; j <= m.Turns && j <= i-1; j++ {
 			guesses += mathutils.NCk(i-1, j-1) * s * math.Pow(d, float64(j))
