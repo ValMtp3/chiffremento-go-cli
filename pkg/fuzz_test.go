@@ -2,6 +2,7 @@ package pkg
 
 import (
 	"bytes"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -130,6 +131,122 @@ func FuzzSafeArchivePath(f *testing.F) {
 		}
 		if pathDepth(rel) > maxRecursionDepth {
 			t.Fatalf("%q accepté malgré une profondeur de %d", name, pathDepth(rel))
+		}
+	})
+}
+
+// Aller-retour : chiffrer puis déchiffrer rend exactement le contenu d'origine,
+// et un octet modifié dans le chiffré fait échouer le déchiffrement.
+//
+//	go test ./pkg -run '^$' -fuzz FuzzAllerRetour -fuzztime 30s
+//
+// Argon2 (256 Mio, une centaine de ms) rend impossible une dérivation à chaque
+// itération. La clé maîtresse est donc dérivée une seule fois, par le vrai
+// deriveMasterV4, puis chaque itération passe par le vrai chemin d'écriture v4
+// (chiffrerAvecMaitre : engagement, enveloppe, remplissage, zstd, chiffrement)
+// et le vrai chemin de lecture (readHeader, clesDepuisMaitre, monterLecture).
+// Seule la dérivation Argon2 est partagée ; la clé de fichier, elle, est
+// retirée à chaque itération, comme en production.
+//
+// Le sel est fixe pour toutes les itérations : c'est ce qui permet de réutiliser
+// la même clé maîtresse. En production il est neuf à chaque fichier ; ici cela
+// ne change rien à ce qu'on vérifie, qui est le flux, pas la dérivation.
+
+// fixtureAllerRetour dérive la clé maîtresse une fois pour tout le fuzz.
+type fixtureAllerRetour struct {
+	salt   []byte
+	maitre *masterV4
+}
+
+func nouvelleFixtureAllerRetour(t testing.TB) *fixtureAllerRetour {
+	t.Helper()
+	salt := bytes.Repeat([]byte{0x5a}, saltSize)
+	h := &header{Version: currentVersion, Algo: AlgoAES, Argon: KDFStandard.argonParams(), Salt: salt}
+	m, err := deriveMasterV4([]byte("mot de passe du fuzzing"), h)
+	if err != nil {
+		t.Fatalf("dérivation de la clé maîtresse : %v", err)
+	}
+	return &fixtureAllerRetour{salt: salt, maitre: m}
+}
+
+// chiffrer écrit un fichier v4 complet vers un tampon.
+func (fx *fixtureAllerRetour) chiffrer(t *testing.T, data []byte, opts Options) []byte {
+	t.Helper()
+	src := source{r: bytes.NewReader(data), size: int64(len(data))}
+	h, metaBlock, padding, err := preparerChiffrement(src, opts)
+	if err != nil {
+		t.Fatalf("préparation du chiffrement (%+v) : %v", opts, err)
+	}
+	h.Salt = fx.salt
+	var out bytes.Buffer
+	if err := chiffrerAvecMaitre(&out, src, h, fx.maitre, opts, metaBlock, padding); err != nil {
+		t.Fatalf("chiffrement (%+v) : %v", opts, err)
+	}
+	return out.Bytes()
+}
+
+// dechiffrer relit un fichier v4 : en-tête, clés, flux, jusqu'à la fin.
+func (fx *fixtureAllerRetour) dechiffrer(chiffre []byte) ([]byte, error) {
+	r := bytes.NewReader(chiffre)
+	h, err := readHeader(r)
+	if err != nil {
+		return nil, err
+	}
+	keys, err := clesDepuisMaitre(fx.maitre, h)
+	if err != nil {
+		return nil, err
+	}
+	src, fermer, err := monterLecture(r, int64(len(chiffre)), h, keys, Options{})
+	if err != nil {
+		return nil, err
+	}
+	defer fermer()
+	return io.ReadAll(src)
+}
+
+func FuzzAllerRetour(f *testing.F) {
+	fx := nouvelleFixtureAllerRetour(f)
+	defer fx.maitre.wipe()
+
+	compressible := bytes.Repeat([]byte("chiffremento "), 5000)
+	for _, data := range [][]byte{
+		{},
+		{0x00},
+		bytes.Repeat([]byte{0xA5}, 64*1024+1), // un octet de plus qu'un paquet sio
+		compressible,
+	} {
+		// Les trois algorithmes, puis zstd et remplissage tour à tour.
+		f.Add(data, byte(0), false, false)
+		f.Add(data, byte(1), true, false)
+		f.Add(data, byte(2), false, true)
+	}
+
+	algos := []byte{AlgoAES, AlgoChaCha, AlgoCascade}
+	f.Fuzz(func(t *testing.T, data []byte, algo byte, comp, pad bool) {
+		opts := Options{Algo: algos[int(algo)%len(algos)], Comp: CompNone}
+		if comp {
+			opts.Comp = CompZstd
+		}
+		// Compression et remplissage s'excluent : le remplissage masque la
+		// taille, la compression la rend visible.
+		opts.Pad = pad && !comp
+
+		chiffre := fx.chiffrer(t, data, opts)
+
+		clair, err := fx.dechiffrer(chiffre)
+		if err != nil {
+			t.Fatalf("déchiffrement d'un fichier valide (%+v, %d octets) : %v", opts, len(data), err)
+		}
+		if !bytes.Equal(clair, data) {
+			t.Fatalf("aller-retour altéré (%+v) : %d octets rendus, %d attendus", opts, len(clair), len(data))
+		}
+
+		// Un octet modifié, n'importe où (en-tête ou corps), doit être refusé.
+		alteré := bytes.Clone(chiffre)
+		pos := len(data) % len(alteré)
+		alteré[pos] ^= 0x01
+		if rendu, err := fx.dechiffrer(alteré); err == nil {
+			t.Fatalf("octet %d/%d modifié et accepté (%+v), %d octets rendus", pos, len(alteré), opts, len(rendu))
 		}
 	})
 }

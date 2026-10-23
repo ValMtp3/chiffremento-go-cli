@@ -1,0 +1,18 @@
+# R-FS-01 : la destination existe, pas de -force : refus, rien n'est touché.
+stdin mdp.txt
+! exec chiffremento -mode enc -in a.txt -out deja.chto
+stderr 'erreur :'
+cmp deja.chto temoin.chto
+
+# Avec -force, la destination est remplacée.
+stdin mdp.txt
+exec chiffremento -mode enc -in a.txt -out deja.chto -force
+! cmp deja.chto temoin.chto
+-- mdp.txt --
+correct horse battery staple
+-- a.txt --
+contenu
+-- deja.chto --
+ne pas toucher
+-- temoin.chto --
+ne pas toucher

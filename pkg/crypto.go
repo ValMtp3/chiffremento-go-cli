@@ -544,15 +544,31 @@ func EncryptStream(dst io.Writer, src io.Reader, size int64, password []byte, op
 // encrypt monte la chaîne d'écriture (remplissage → compression → chiffrement)
 // et l'exécute. Tous les chemins de chiffrement passent par ici.
 func encrypt(dst io.Writer, src source, password []byte, opts Options) error {
-	if err := opts.validate(); err != nil {
+	h, metaBlock, padding, err := preparerChiffrement(src, opts)
+	if err != nil {
 		return err
+	}
+	m, err := deriveMasterV4(password, h)
+	if err != nil {
+		return err
+	}
+	defer m.wipe()
+	return chiffrerAvecMaitre(dst, src, h, m, opts, metaBlock, padding)
+}
+
+// preparerChiffrement valide les options et décide de tout ce qui précède la
+// dérivation de clé : le bloc de métadonnées, la longueur du remplissage, le sel
+// et l'en-tête (encore sans engagement ni enveloppe, qui viennent de la clé).
+func preparerChiffrement(src source, opts Options) (*header, []byte, int64, error) {
+	if err := opts.validate(); err != nil {
+		return nil, nil, 0, err
 	}
 	algo := opts.Algo
 	if algo == 0 {
 		algo = AlgoAES
 	}
 	if err := validateAlgo(algo); err != nil {
-		return err
+		return nil, nil, 0, err
 	}
 
 	// Le bloc de métadonnées est sérialisé avant tout le reste : sa taille entre
@@ -562,7 +578,7 @@ func encrypt(dst io.Writer, src source, password []byte, opts Options) error {
 	if src.meta != nil {
 		block, err := marshalMetadata(src.meta)
 		if err != nil {
-			return err
+			return nil, nil, 0, err
 		}
 		metaBlock = block
 	}
@@ -574,28 +590,28 @@ func encrypt(dst io.Writer, src source, password []byte, opts Options) error {
 	if opts.Pad {
 		payload, known, err := src.payloadSize()
 		if err != nil {
-			return err
+			return nil, nil, 0, err
 		}
 		if !known {
-			return errors.New("le remplissage exige une taille d'entrée connue : impossible sur un flux")
+			return nil, nil, 0, errors.New("le remplissage exige une taille d'entrée connue : impossible sur un flux")
 		}
 		// Le profil est validé ici, comme celui du KDF : une valeur inconnue
 		// doit arrêter le chiffrement, pas retomber en silence sur le défaut.
 		padProfile, err := ParsePadProfile(string(opts.PadProfile))
 		if err != nil {
-			return err
+			return nil, nil, 0, err
 		}
 		padding = paddingFor(payload+int64(len(metaBlock)), padProfile)
 	}
 
 	salt := make([]byte, saltSize)
 	if _, err := rand.Read(salt); err != nil {
-		return fmt.Errorf("génération du sel: %w", err)
+		return nil, nil, 0, fmt.Errorf("génération du sel: %w", err)
 	}
 
 	profile, err := ParseKDFProfile(string(opts.KDF))
 	if err != nil {
-		return err
+		return nil, nil, 0, err
 	}
 
 	h := &header{
@@ -615,15 +631,22 @@ func encrypt(dst io.Writer, src source, password []byte, opts Options) error {
 		h.Flags |= FlagMetadata
 	}
 
+	return h, metaBlock, padding, nil
+}
+
+// chiffrerAvecMaitre scelle le fichier et écrit le flux chiffré, à partir d'une
+// clé maîtresse déjà dérivée. Elle existe pour séparer la dérivation Argon2,
+// coûteuse (~256 Mio et une centaine de ms), du travail sur le flux : le fuzzing
+// peut ainsi dériver une fois puis chiffrer des milliers de contenus, et un
+// futur format à plusieurs destinataires pourra sceller la même clé de fichier
+// pour chacun. Le contrat est celui de encrypt : m est effacée par l'appelant.
+func chiffrerAvecMaitre(dst io.Writer, src source, h *header, m *masterV4, opts Options, metaBlock []byte, padding int64) error {
+	algo := h.Algo
+
 	// Scellement de la clé de fichier. L'ordre est imposé par les données
 	// authentifiées : l'engagement doit être posé dans l'en-tête *avant* de
 	// sceller, puisqu'il en fait partie, et l'en-tête ne peut être écrit
 	// qu'ensuite, une fois l'enveloppe connue.
-	m, err := deriveMasterV4(password, h)
-	if err != nil {
-		return err
-	}
-	defer m.wipe()
 	h.Commit = m.commit
 
 	dek, err := newDEK()
@@ -882,20 +905,9 @@ func openInput(path string) (*os.File, int64, error) {
 // chemins de lecture pour qu'ils ne puissent pas diverger. Un total nul
 // signifie que la taille d'entrée est inconnue.
 func openDecrypted(in io.Reader, total int64, password []byte, opts Options) (io.Reader, *header, func(), error) {
-	var closers []func()
-	closeAll := func() {
-		for i := len(closers) - 1; i >= 0; i-- {
-			closers[i]()
-		}
-	}
-	fail := func(err error) (io.Reader, *header, func(), error) {
-		closeAll()
-		return nil, nil, nil, err
-	}
-
 	h, err := readHeader(in)
 	if err != nil {
-		return fail(err)
+		return nil, nil, nil, err
 	}
 
 	// Une archive réduite à son en-tête doit être signalée comme tronquée.
@@ -916,16 +928,40 @@ func openDecrypted(in io.Reader, total int64, password []byte, opts Options) (io
 	if h.archive() {
 		var premier [1]byte
 		if _, err := io.ReadFull(in, premier[:]); err != nil {
-			return fail(fmt.Errorf("%w : la charge utile est absente", errTruncated))
+			return nil, nil, nil, fmt.Errorf("%w : la charge utile est absente", errTruncated)
 		}
 		in = io.MultiReader(bytes.NewReader(premier[:]), in)
 	}
 
 	keys, err := deriveKeys(password, h)
 	if err != nil {
-		return fail(err)
+		return nil, nil, nil, err
 	}
-	closers = append(closers, keys.wipe)
+	src, closeAll, err := monterLecture(in, total, h, keys, opts)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	return src, h, closeAll, nil
+}
+
+// monterLecture monte la chaîne de lecture à partir de clés déjà dérivées.
+// Elle existe pour séparer la dérivation Argon2, coûteuse, du travail sur le
+// flux : le fuzzing dérive une fois puis relit des milliers de contenus, et un
+// futur format à plusieurs destinataires ouvrira le même flux avec la clé de
+// chacun. Elle prend possession de keys : les clés sont effacées par le
+// closer renvoyé, ou tout de suite si le montage échoue. h.Meta est renseigné
+// quand le fichier porte des métadonnées.
+func monterLecture(in io.Reader, total int64, h *header, keys *keySet, opts Options) (io.Reader, func(), error) {
+	closers := []func(){keys.wipe}
+	closeAll := func() {
+		for i := len(closers) - 1; i >= 0; i-- {
+			closers[i]()
+		}
+	}
+	fail := func(err error) (io.Reader, func(), error) {
+		closeAll()
+		return nil, nil, err
+	}
 
 	// L'en-tête a déjà été consommé : le compteur ne verra que ce qui reste,
 	// il faut donc l'ôter du total pour que la progression atteigne 100 %.
@@ -963,7 +999,7 @@ func openDecrypted(in io.Reader, total int64, password []byte, opts Options) (io
 		h.Meta = meta
 	}
 
-	return src, h, closeAll, nil
+	return src, closeAll, nil
 }
 
 // Details décrit un .chto tel que son en-tête l'annonce.

@@ -1,0 +1,14 @@
+# R-FS-09 : verify réussit sans rien écrire ; info décrit le fichier.
+stdin mdp.txt
+exec chiffremento -mode enc -in a.txt
+rm a.txt
+stdin mdp.txt
+exec chiffremento -mode verify -in a.txt.chto
+! exists a.txt
+exec chiffremento -mode info -in a.txt.chto
+stdout 'format'
+stdout 'aead'
+-- mdp.txt --
+correct horse battery staple
+-- a.txt --
+contenu

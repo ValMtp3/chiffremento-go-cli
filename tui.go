@@ -388,9 +388,11 @@ func encryptForm(o *optionsChiffrement, estDossier bool, tailleClair int64) (*hu
 				Title("mot de passe").
 				// La description se recalcule à chaque frappe : l'utilisateur
 				// voit la robustesse de son mot de passe pendant qu'il le tape.
-				DescriptionFunc(func() string { return strengthHint(o.password) }, &o.password).
+				// Ce calcul tourne hors de la boucle de l'interface, d'où la
+				// lecture par l'accesseur verrouillé — voir saisieVerrouillee.
+				DescriptionFunc(func() string { return strengthHint(saisieVerrouillee{&o.password}.Get()) }, &o.password).
 				EchoMode(huh.EchoModePassword).
-				Value(&o.password).
+				Accessor(saisieVerrouillee{&o.password}).
 				Validate(validatePassword),
 
 			huh.NewInput().
@@ -548,7 +550,10 @@ func tuiEncrypt(path string, o *optionsChiffrement) error {
 		motDePasse := []byte(secretChoisi(o))
 		defer func() {
 			zero(motDePasse)
-			o.password, o.confirm, o.phrase = "", "", ""
+			// Le mot de passe passe par l'accesseur : un calcul de robustesse
+			// lancé par la dernière frappe peut encore être en train de le lire.
+			saisieVerrouillee{&o.password}.Set("")
+			o.confirm, o.phrase = "", ""
 		}()
 
 		// Relevé de la source avant le chiffrement : la suppression proposée
@@ -806,9 +811,11 @@ func tuiPasswd(path string) error {
 			champ,
 			huh.NewInput().
 				Title("nouveau mot de passe").
-				DescriptionFunc(func() string { return strengthHint(nouveau) }, &nouveau).
+				// Même précaution qu'au chiffrement : l'indicateur se calcule
+				// hors de la boucle de l'interface — voir saisieVerrouillee.
+				DescriptionFunc(func() string { return strengthHint(saisieVerrouillee{&nouveau}.Get()) }, &nouveau).
 				EchoMode(huh.EchoModePassword).
-				Value(&nouveau).
+				Accessor(saisieVerrouillee{&nouveau}).
 				Validate(validatePassword),
 			huh.NewInput().
 				Title("confirmation").
@@ -835,7 +842,10 @@ func tuiPasswd(path string) error {
 	defer func() {
 		zero(ancienOctets)
 		zero(nouveauOctets)
-		ancien, nouveau, confirme = "", "", ""
+		// Le nouveau mot de passe passe par l'accesseur : un calcul de
+		// robustesse lancé par la dernière frappe peut encore le lire.
+		saisieVerrouillee{&nouveau}.Set("")
+		ancien, confirme = "", ""
 	}()
 
 	if err := pkg.ChangePassword(path, ancienOctets, nouveauOctets); err != nil {

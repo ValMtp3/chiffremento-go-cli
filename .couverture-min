@@ -1,0 +1,7 @@
+# Planchers de couverture, par paquet (voir scripts/couverture.sh).
+# Mesure locale (macOS, suite complète, -race) : main 80,6 % ; pkg 78,7 %.
+# Plancher = mesure moins 1 point, arrondi à l'entier inférieur : la CI ne
+# calcule la couverture que sur ubuntu, où les tests pty (qui fusionnent la
+# couverture de leurs processus fils) peuvent donner un chiffre un peu différent.
+main.cover 79
+pkg.cover 77

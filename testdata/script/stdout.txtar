@@ -1,0 +1,12 @@
+# R-FS-01 / R-CLI-05 : -out - écrit sur la sortie standard, le mot de passe
+# vient de stdin.
+stdin mdp.txt
+exec chiffremento -mode enc -in a.txt -out chiffre.chto
+stdin mdp.txt
+exec chiffremento -mode dec -in chiffre.chto -out -
+stdout 'contenu en clair'
+! exists a.txt.chto
+-- mdp.txt --
+correct horse battery staple
+-- a.txt --
+contenu en clair

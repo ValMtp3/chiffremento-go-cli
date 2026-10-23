@@ -53,7 +53,25 @@ jobs:
       # soit bloqué. Un vrai blocage se voit toujours : le test fautif est nommé
       # dans la trace.
       - name: Tests
+        if: matrix.os != 'ubuntu-latest'
         run: go test -race -timeout 25m ./...
+
+      # Sur ubuntu, la même suite (mêmes options) tourne une seule fois, en
+      # écrivant un profil de couverture par paquet : un profil commun
+      # mélangerait main et pkg. Les tests pilotés par pseudo-terminal lancent
+      # le binaire de test en processus fils : leur couverture est fusionnée
+      # dans le profil de main.
+      - name: Tests (avec couverture)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          go test -race -timeout 25m -coverprofile=main.cover .
+          go test -race -timeout 25m -coverprofile=pkg.cover ./pkg
+
+      # Un plancher par paquet dans .couverture-min. Une baisse de couverture
+      # fait échouer la CI : l'accepter doit être un choix visible dans le diff.
+      - name: Seuil de couverture
+        if: matrix.os == 'ubuntu-latest'
+        run: ./scripts/couverture.sh
 
       # Les deux fonctions qui lisent des octets venus de l'extérieur. Une
       # courte passe à chaque CI : le corpus s'accumule dans le cache du
@@ -69,6 +87,13 @@ jobs:
       - name: Fuzzing des chemins d'archive
         if: matrix.os == 'ubuntu-latest'
         run: go test ./pkg -run '^$' -fuzz FuzzSafeArchivePath -fuzztime 30s -parallel 4
+
+      # L'aller-retour chiffrer puis déchiffrer, avec un octet modifié en plus.
+      # La clé maîtresse Argon2 est dérivée une fois par worker (~272 Mio
+      # chacun) : c'est ce qui rend possible des milliers d'itérations.
+      - name: Fuzzing de l'aller-retour
+        if: matrix.os == 'ubuntu-latest'
+        run: go test ./pkg -run '^$' -fuzz FuzzAllerRetour -fuzztime 30s -parallel 4
 
       # Une seule itération : on ne mesure pas une performance fiable sur un
       # runner partagé, on vérifie que les benchmarks compilent et tournent.

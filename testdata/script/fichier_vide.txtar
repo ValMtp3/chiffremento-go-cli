@@ -1,0 +1,12 @@
+# R-FS-03 : un fichier vide revient vide.
+stdin mdp.txt
+exec chiffremento -mode enc -in vide.txt
+exists vide.txt.chto
+cp vide.txt original.txt
+rm vide.txt
+stdin mdp.txt
+exec chiffremento -mode dec -in vide.txt.chto
+cmp vide.txt original.txt
+-- mdp.txt --
+correct horse battery staple
+-- vide.txt --

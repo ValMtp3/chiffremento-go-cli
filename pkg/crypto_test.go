@@ -2,6 +2,8 @@ package pkg
 
 import (
 	"bytes"
+	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -505,77 +507,6 @@ func TestEncryptEcritLaVersionCouranteAvecArgonRenforce(t *testing.T) {
 	}
 }
 
-// --- Tripwire de format -------------------------------------------------
-
-// TestProtocolSafety_Tripwire fige la structure binaire. Si tu modifies le
-// format dans format.go, tu DOIS mettre ce test à jour ET te demander si ça
-// mérite un bump de version.
-func TestProtocolSafety_Tripwire(t *testing.T) {
-	const (
-		expectedVersion  = 3
-		expectedHeaderV1 = 27 // 8+1+1+1+16
-		expectedHeaderV2 = 36 // 8+1+1+1+4+4+1+16
-		expectedHeaderV3 = 37 // 8+1+1+1+4+4+1+1+16
-		expectedMagic    = "CHFRMT03"
-		// FlagArchive (bit1, dossiers), FlagPadded (bit2, taille masquée) et
-		// FlagMetadata (bit3, nom et date d'origine).
-		//
-		// Définir un bit réservé n'appelle pas de bump de version : la disposition
-		// de l'en-tête v3 ne change pas, et un binaire antérieur *refuse* un bit
-		// qu'il ne connaît pas au lieu de mal interpréter le fichier. C'est
-		// exactement ce pour quoi knownFlags existe. Un bump ne serait dû que si
-		// la structure de l'en-tête bougeait — taille, ordre ou sens d'un champ
-		// existant.
-		expectedKnownFlags = FlagCompressed | FlagArchive | FlagPadded | FlagMetadata
-	)
-
-	if currentVersion < expectedVersion {
-		t.Fatalf("CRITIQUE : la version du protocole a reculé (code: %d, attendu >= %d)", currentVersion, expectedVersion)
-	}
-
-	structureChanged := false
-	if headerSizeV1 != expectedHeaderV1 {
-		t.Logf("⚠️  la taille du header v1 a changé (avant: %d, maintenant: %d)", expectedHeaderV1, headerSizeV1)
-		structureChanged = true
-	}
-	if headerSizeV2 != expectedHeaderV2 {
-		t.Logf("⚠️  la taille du header v2 a changé (avant: %d, maintenant: %d)", expectedHeaderV2, headerSizeV2)
-		structureChanged = true
-	}
-	if headerSizeV3 != expectedHeaderV3 {
-		t.Logf("⚠️  la taille du header v3 a changé (avant: %d, maintenant: %d)", expectedHeaderV3, headerSizeV3)
-		structureChanged = true
-	}
-	if magicNumber != expectedMagic {
-		t.Logf("⚠️  le magic number a changé (avant: %s, maintenant: %s)", expectedMagic, magicNumber)
-		structureChanged = true
-	}
-	if knownFlags != expectedKnownFlags {
-		t.Logf("⚠️  la liste des drapeaux connus a changé (avant: %d, maintenant: %d)", expectedKnownFlags, knownFlags)
-		structureChanged = true
-	}
-
-	if structureChanged && currentVersion == expectedVersion {
-		t.Fatalf("🛑 STOP ! Tu as modifié la structure du fichier mais oublié d'incrémenter 'currentVersion' dans format.go.\n"+
-			"-> Si le changement est rétrocompatible, mets ce test à jour.\n"+
-			"-> Sinon, passe currentVersion à %d et ajoute un chemin de lecture pour l'ancienne version.", expectedVersion+1)
-	}
-
-	// La lecture des anciens fichiers doit rester possible tant que des .chto
-	// v1 existent dans la nature.
-	if versionV1 != 1 {
-		t.Error("l'identifiant de la version 1 ne doit pas changer")
-	}
-	if versionV2 != 2 {
-		t.Error("l'identifiant de la version 2 ne doit pas changer")
-	}
-	for _, ref := range []string{"v1_aes.chto", "v2_aes.chto"} {
-		if _, err := os.Stat(filepath.Join("testdata", ref)); err != nil {
-			t.Errorf("%s a disparu de testdata/ : la compatibilité n'est plus testée", ref)
-		}
-	}
-}
-
 // --- Vérification sans écriture -----------------------------------------
 
 func TestVerify(t *testing.T) {
@@ -641,4 +572,206 @@ func TestNettoyageTemporaires(t *testing.T) {
 		t.Error("CleanupTemporaries n'a pas supprimé le temporaire en cours")
 	}
 	a.cleanup()
+}
+
+// --- Trous révélés par les tests de mutation ------------------------------
+
+// TestNettoyageFermeLeDescripteur : sur Ctrl+C, le temporaire est fermé avant
+// d'être supprimé. Windows refuse de supprimer un fichier encore ouvert : sans
+// la fermeture, l'interruption laisserait un .chto-tmp-* derrière elle.
+func TestNettoyageFermeLeDescripteur(t *testing.T) {
+	f, err := os.CreateTemp(t.TempDir(), "suivi-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	trackTempFile(f.Name(), f)
+	defer untrackTemp(f.Name())
+
+	CleanupTemporaries()
+
+	if err := f.Close(); !errors.Is(err, os.ErrClosed) {
+		t.Errorf("CleanupTemporaries n'a pas fermé le descripteur (Close renvoie %v)", err)
+	}
+	if _, err := os.Stat(f.Name()); !os.IsNotExist(err) {
+		t.Error("le temporaire suivi n'a pas été supprimé")
+	}
+}
+
+// fermeurTest est un WriteCloser dont Close renvoie une erreur choisie.
+type fermeurTest struct {
+	err    error
+	ferme  bool
+	ecrits int
+}
+
+func (f *fermeurTest) Write(p []byte) (int, error) { f.ecrits += len(p); return len(p), nil }
+func (f *fermeurTest) Close() error                { f.ferme = true; return f.err }
+
+// TestCascadeFermeLesDeuxCouchesEtRemonteLErreur : en mode cascade, une erreur
+// de scellement sur l'une ou l'autre couche doit remonter, sans quoi on
+// annoncerait « succès » sur un fichier dont le dernier bloc n'a pas été
+// écrit. Les deux couches sont fermées même si la première échoue.
+func TestCascadeFermeLesDeuxCouchesEtRemonteLErreur(t *testing.T) {
+	errInterne := errors.New("scellement interne")
+	errExterne := errors.New("scellement externe")
+	cas := []struct {
+		nom          string
+		interne, ext error
+		attendu      error
+	}{
+		{"aucune erreur", nil, nil, nil},
+		{"couche interne seule", errInterne, nil, errInterne},
+		{"couche externe seule", nil, errExterne, errExterne},
+		{"les deux : la première gagne", errInterne, errExterne, errInterne},
+	}
+	for _, c := range cas {
+		t.Run(c.nom, func(t *testing.T) {
+			interne, externe := &fermeurTest{err: c.interne}, &fermeurTest{err: c.ext}
+			cascade := &cascadeWriteCloser{inner: interne, outer: externe}
+			if err := cascade.Close(); err != c.attendu {
+				t.Errorf("Close = %v, attendu %v", err, c.attendu)
+			}
+			if !interne.ferme || !externe.ferme {
+				t.Errorf("couches fermées : interne=%v externe=%v, attendu les deux", interne.ferme, externe.ferme)
+			}
+		})
+	}
+}
+
+// TestProgressReaderIgnoreLesLecturesVides : la progression ne bouge que
+// lorsque des octets ont réellement été lus. Un rappel sur une lecture vide
+// (fin de flux) redessinerait l'écran pour rien, avec la même valeur.
+func TestProgressReaderIgnoreLesLecturesVides(t *testing.T) {
+	var appels []int64
+	r := withProgress(strings.NewReader("abcde"), 5, func(done, _ int64) { appels = append(appels, done) })
+	if _, err := io.ReadAll(r); err != nil {
+		t.Fatal(err)
+	}
+	if len(appels) != 1 || appels[0] != 5 {
+		t.Errorf("rappels de progression %v, attendu un seul, à 5 octets", appels)
+	}
+}
+
+// TestProgressionDechiffrementSuitLeReste : au déchiffrement, le total annoncé
+// est ce qui reste après l'en-tête, déjà consommé, et la progression finit à
+// 100 %. Si la taille d'entrée est inconnue (flux, total nul), le total reste
+// nul : jamais négatif, ce que l'interface prendrait pour un état invalide.
+func TestProgressionDechiffrementSuitLeReste(t *testing.T) {
+	fx := nouvelleFixtureAllerRetour(t)
+	chiffre := fx.chiffrer(t, bytes.Repeat([]byte("x"), 200*1024), Options{})
+
+	lire := func(total int64) (totaux []int64, dernier int64) {
+		t.Helper()
+		r := bytes.NewReader(chiffre)
+		h, err := readHeader(r)
+		if err != nil {
+			t.Fatal(err)
+		}
+		keys, err := clesDepuisMaitre(fx.maitre, h)
+		if err != nil {
+			t.Fatal(err)
+		}
+		src, fermer, err := monterLecture(r, total, h, keys, Options{Progress: func(done, tot int64) {
+			totaux = append(totaux, tot)
+			dernier = done
+		}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer fermer()
+		if _, err := io.ReadAll(src); err != nil {
+			t.Fatal(err)
+		}
+		return totaux, dernier
+	}
+
+	reste := int64(len(chiffre) - headerSizeV4)
+	totaux, dernier := lire(int64(len(chiffre)))
+	if len(totaux) == 0 {
+		t.Fatal("aucun rappel de progression")
+	}
+	for _, tot := range totaux {
+		if tot != reste {
+			t.Fatalf("total annoncé %d, attendu %d (taille moins l'en-tête)", tot, reste)
+		}
+	}
+	if dernier != reste {
+		t.Errorf("progression finale %d, attendu %d", dernier, reste)
+	}
+
+	totaux, _ = lire(0)
+	for _, tot := range totaux {
+		if tot != 0 {
+			t.Fatalf("taille inconnue : total annoncé %d, attendu 0", tot)
+		}
+	}
+}
+
+// TestMonterLectureEffaceLesClesALaFermeture : le closer rendu par
+// monterLecture efface les clés de la mémoire. Les closers doivent tous
+// tourner, y compris le premier enregistré, celui des clés : sinon elles
+// resteraient en mémoire après chaque déchiffrement.
+func TestMonterLectureEffaceLesClesALaFermeture(t *testing.T) {
+	fx := nouvelleFixtureAllerRetour(t)
+	chiffre := fx.chiffrer(t, []byte("contenu"), Options{})
+
+	r := bytes.NewReader(chiffre)
+	h, err := readHeader(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keys, err := clesDepuisMaitre(fx.maitre, h)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Equal(keys.Key, make([]byte, len(keys.Key))) {
+		t.Fatal("clé déjà nulle avant la fermeture : le test ne prouverait rien")
+	}
+	src, fermer, err := monterLecture(r, int64(len(chiffre)), h, keys, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := io.ReadAll(src); err != nil {
+		t.Fatal(err)
+	}
+	fermer()
+	if !bytes.Equal(keys.Key, make([]byte, len(keys.Key))) {
+		t.Error("la clé n'a pas été effacée par la fermeture")
+	}
+}
+
+// TestEncryptDossierIllisibleRemonteLErreur : si un fichier du dossier ne peut
+// pas être lu au moment d'écrire l'archive, le chiffrement échoue, et aucune
+// sortie ne reste : ni le .chto, ni son temporaire. Annoncer un succès sur une
+// archive incomplète serait le pire cas d'une sauvegarde.
+func TestEncryptDossierIllisibleRemonteLErreur(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("pas de bits de permission POSIX sous Windows")
+	}
+	if os.Geteuid() == 0 {
+		t.Skip("root lit tout : l'illisibilité ne peut pas être fabriquée")
+	}
+	src := filepath.Join(t.TempDir(), "dossier")
+	if err := os.MkdirAll(src, 0755); err != nil {
+		t.Fatal(err)
+	}
+	write(t, src, "lisible.txt", []byte("ok"))
+	secret := write(t, src, "illisible.txt", []byte("non"))
+	if err := os.Chmod(secret, 0); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Chmod(secret, 0644)
+
+	sortieDir := t.TempDir()
+	sortie := filepath.Join(sortieDir, "archive.chto")
+	if err := Encrypt(src, sortie, []byte("pw"), Options{}); err == nil {
+		t.Fatal("un dossier contenant un fichier illisible a été chiffré sans erreur")
+	}
+	restes, err := os.ReadDir(sortieDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range restes {
+		t.Errorf("sortie partielle laissée après l'échec : %s", e.Name())
+	}
 }

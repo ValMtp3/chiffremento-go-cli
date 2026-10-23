@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"slices"
+	"sync"
 
 	"github.com/charmbracelet/bubbles/key"
 	tea "github.com/charmbracelet/bubbletea"
@@ -115,6 +116,36 @@ func (a reponseAccessor) Get() string {
 }
 
 func (a reponseAccessor) Set(choix string) { *a.valeur = choix == a.siOui }
+
+// verrouSaisie protège le mot de passe tapé à l'écran des options.
+//
+// huh calcule la description d'un champ — ici l'indicateur de robustesse —
+// dans une tea.Cmd, donc sur une autre goroutine que celle qui reçoit les
+// frappes (field_input.go, updateDescriptionMsg). Sans verrou, ce calcul lisait
+// la chaîne pendant que la frappe suivante la réécrivait : une course que
+// go test -race a relevée dans le parcours de bout en bout.
+//
+// Un seul verrou pour tout le programme suffit : un seul formulaire est à
+// l'écran à la fois.
+var verrouSaisie sync.Mutex
+
+// saisieVerrouillee donne à huh l'accès à une saisie par le verrou. La valeur
+// reste une string ordinaire : le reste du code la lit directement, sur la
+// goroutine de l'interface ou après la fin du formulaire, là où personne
+// d'autre ne l'écrit.
+type saisieVerrouillee struct{ valeur *string }
+
+func (a saisieVerrouillee) Get() string {
+	verrouSaisie.Lock()
+	defer verrouSaisie.Unlock()
+	return *a.valeur
+}
+
+func (a saisieVerrouillee) Set(v string) {
+	verrouSaisie.Lock()
+	defer verrouSaisie.Unlock()
+	*a.valeur = v
+}
 
 // retourDepuis dit par quelles touches on quitte un écran vers le précédent, et
 // comment l'écran l'annonce. Le champ passé est celui sur lequel s'ouvre le

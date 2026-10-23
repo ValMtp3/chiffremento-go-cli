@@ -1,0 +1,3 @@
+# R-CLI-07 : -version affiche « chiffremento <version> » et sort en 0.
+exec chiffremento -version
+stdout '^chiffremento '

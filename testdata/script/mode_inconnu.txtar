@@ -1,0 +1,6 @@
+# R-CLI-02 : un mode inconnu liste les modes valides.
+! exec chiffremento -mode zip -in a.txt
+stderr 'mode inconnu "zip"'
+stderr 'enc, dec, verify, info, passwd, bench ou genpass'
+-- a.txt --
+x

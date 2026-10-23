@@ -1,0 +1,25 @@
+# R-FS-06 : un dossier extrait ne s'écrase jamais, même avec -force.
+stdin mdp.txt
+exec chiffremento -mode enc -in photos
+rm photos
+mkdir photos
+cp temoin.txt photos/temoin.txt
+stdin mdp.txt
+! exec chiffremento -mode dec -in photos.chto -force
+stderr 'erreur :'
+cmp photos/temoin.txt temoin.txt
+
+# Même un dossier vide n'est pas remplacé : le renommage l'écraserait sans bruit.
+rm photos
+mkdir photos
+stdin mdp.txt
+! exec chiffremento -mode dec -in photos.chto -force
+stderr 'existe déjà'
+exists photos
+! exists photos/a.txt
+-- mdp.txt --
+correct horse battery staple
+-- temoin.txt --
+ne pas toucher
+-- photos/a.txt --
+a

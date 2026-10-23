@@ -41,3 +41,6 @@ dist/
 # Binaire compilé à la racine
 /chiffremento
 /chiffremento-cli
+
+# Profils de couverture (make couverture)
+*.cover

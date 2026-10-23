@@ -1,0 +1,15 @@
+# R-CLI-05 : une fin de ligne \r\n est retirée du mot de passe. Le chiffrement
+# lit un mot de passe terminé par \r\n, le déchiffrement le même en \n.
+cp mdp.txt mdp_crlf.txt
+crlf mdp_crlf.txt
+stdin mdp_crlf.txt
+exec chiffremento -mode enc -in secret.txt
+cp secret.txt original.txt
+rm secret.txt
+stdin mdp.txt
+exec chiffremento -mode dec -in secret.txt.chto
+cmp secret.txt original.txt
+-- mdp.txt --
+correct horse battery staple
+-- secret.txt --
+données confidentielles

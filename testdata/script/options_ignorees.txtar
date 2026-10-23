@@ -1,0 +1,10 @@
+# R-CLI-04 : les options de chiffrement hors du mode enc sont notées et ignorées.
+stdin mdp.txt
+exec chiffremento -mode enc -in x.txt
+stdin mdp.txt
+exec chiffremento -mode verify -in x.txt.chto -comp
+stderr 'ils sont ignorés ici'
+-- mdp.txt --
+correct horse battery staple
+-- x.txt --
+contenu
