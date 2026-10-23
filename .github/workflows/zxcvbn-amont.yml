@@ -19,15 +19,17 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      # Le shell de GitHub Actions est lancé avec `-e -o pipefail` : une erreur
-      # de l'API GitHub fait échouer le job (visible dans l'onglet Actions) au
-      # lieu de passer en silence.
+      # `shell: bash` : GitHub lance alors `bash --noprofile --norc -eo pipefail`
+      # (sans lui, ce serait `bash -e {0}`, sans pipefail). Une erreur de l'API
+      # GitHub fait échouer le job (visible dans l'onglet Actions) au lieu de
+      # passer en silence.
       #
       # L'ordre de l'API `tags` n'est pas garanti comme un tri par version, et
       # l'amont ne publie aucune « release » (seulement des tags). On garde donc
       # les tags de la forme vX.Y.Z (sans pré-version) et on prend le plus grand
       # avec `sort -V` (tri par numéros de version).
       - name: Comparer avec la dernière version amont
+        shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -68,7 +70,7 @@ jobs:
 
           # Pas de doublon : la recherche GitHub est approximative, on vérifie
           # donc le titre exact dans le résultat.
-          ouvertes="$(gh issue list --state open --search "in:title \"$titre\"" --json title)"
+          ouvertes="$(gh issue list --state open --limit 100 --search "in:title \"$titre\"" --json title)"
           deja_ouverte="$(printf '%s' "$ouvertes" | jq -r --arg t "$titre" '.[] | select(.title == $t) | .title')"
           if [ -n "$deja_ouverte" ]; then
             echo "Une issue ouverte existe déjà : $titre"
@@ -83,6 +85,8 @@ jobs:
           2. Reporter les changements de code amont dans \`internal/zxcvbn\`.
           3. Régénérer \`internal/zxcvbn/testdata/parite.json\` avec la nouvelle version externe et vérifier \`TestPariteAvecV101\`.
           4. Mettre à jour \`internal/zxcvbn/AMONT\`.
+
+          Fermer cette issue sans mettre à jour \`internal/zxcvbn/AMONT\` en fait ouvrir une nouvelle le mois suivant.
 
           Comparaison : https://github.com/trustelem/zxcvbn/compare/$actuelle...$derniere"
 
