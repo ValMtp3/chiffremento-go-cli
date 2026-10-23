@@ -41,10 +41,14 @@ pas terminée.
   réveils par seconde au repos au lieu de ~250 ; premier écran en ~62 ms.
 - zxcvbn (copie interne, `internal/zxcvbn`) : listes zstd embarquées, chargées
   au premier usage. Coût au lancement ≈ 0 : `-version` ~4,2 Mo de pic au lieu
-  de ~15,5 Mo, `-mode genpass` ~5,0 Mo au lieu de ~15,9 Mo. Premier
-  `PasswordStrength` : 7 à 12 ms, ~15,3 Mo après l'appel. L'interface le
-  précharge en arrière-plan à l'écran du mot de passe. Les mots, prénoms et
-  noms français sont compris dans ces chiffres.
+  de ~15,5 Mo, `-mode genpass` ~4,9 Mo au lieu de ~15,9 Mo. Premier
+  `PasswordStrength` : 7 à 12 ms, ~15,5 Mo de pic ; ensuite ~7,9 Mo gardés
+  (tas vivant : seul le classement reste, les listes décodées sont lâchées).
+  L'interface précharge en arrière-plan quand le champ de saisie du mot de
+  passe apparaît, jamais pour une phrase générée (~9 Mo évités). Les mots,
+  prénoms et noms français sont compris dans ces chiffres.
+- Indicateur de force, coût par frappe (`BenchmarkFrappe`) : 12 caractères
+  ~76 µs (~106 µs accentués), 64 caractères ~2,1 ms (~3,5 ms accentués).
 - Binaire : ~6,2 Mo (`-s -w`), 6 160 850 o (avant : 8 348 898 o).
 - L'écran de progression dure au moins 4 s : c'est un choix esthétique, pas un
   coût de calcul.
