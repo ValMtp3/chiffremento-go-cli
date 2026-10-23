@@ -12,11 +12,11 @@ import (
 	"strings"
 	"sync/atomic"
 
+	"chiffremento-cli/internal/zxcvbn"
 	"chiffremento-cli/pkg"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/huh"
-	"github.com/trustelem/zxcvbn"
 	"golang.org/x/term"
 )
 
@@ -299,6 +299,10 @@ func secretChoisi(o *optionsChiffrement) string {
 // encryptForm construit l'écran des options. Il rend aussi son premier champ :
 // c'est l'ancre du retour vers le choix de la cible.
 func encryptForm(o *optionsChiffrement, estDossier bool, tailleClair int64) (*huh.Form, huh.Field) {
+	// Les listes de zxcvbn se chargent pendant que l'utilisateur lit l'écran :
+	// la première frappe du mot de passe ne les attend pas.
+	go zxcvbn.Precharger()
+
 	algoChamp := huh.NewSelect[byte]().
 		Title("algorithme").
 		Options(
@@ -790,6 +794,9 @@ func tuiPasswd(path string) error {
 		return fmt.Errorf("ce fichier est au format v%d : son contenu est chiffré par une clé tirée du mot de passe, "+
 			"il faut donc le déchiffrer puis le rechiffrer pour en changer", d.Version)
 	}
+
+	// Même préchargement qu'au chiffrement, pour la première frappe.
+	go zxcvbn.Precharger()
 
 	details := fmt.Sprintf("format v%d · %s · %s\nle contenu ne sera pas rechiffré : seul l'en-tête change", d.Version, d.Algo, d.KDF)
 	ancien, nouveau, confirme := "", "", ""
