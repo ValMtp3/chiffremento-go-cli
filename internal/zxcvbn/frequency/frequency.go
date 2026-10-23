@@ -9,6 +9,7 @@ package frequency
 import (
 	"embed"
 	"fmt"
+	"io/fs"
 	"strings"
 	"sync"
 
@@ -41,7 +42,12 @@ func Anglais() map[string]Liste {
 // erreur de programmation (comme regexp.MustCompile), TestListesEmbarquees
 // la détecte avant livraison.
 func decoderAnglais() map[string]Liste {
-	entrees, err := listesEmbarquees.ReadDir("listes")
+	return decoder(listesEmbarquees)
+}
+
+// decoder lit et décode les *.txt.zst du dossier "listes" de fsys.
+func decoder(fsys fs.FS) map[string]Liste {
+	entrees, err := fs.ReadDir(fsys, "listes")
 	if err != nil {
 		panic(fmt.Sprintf("frequency : dossier listes embarqué illisible : %v", err))
 	}
@@ -58,7 +64,7 @@ func decoderAnglais() map[string]Liste {
 		if !ok {
 			continue
 		}
-		compresse, err := listesEmbarquees.ReadFile("listes/" + fichier)
+		compresse, err := fs.ReadFile(fsys, "listes/"+fichier)
 		if err != nil {
 			panic(fmt.Sprintf("frequency : lecture de %s : %v", fichier, err))
 		}

@@ -1,6 +1,12 @@
 package frequency
 
-import "testing"
+import (
+	"fmt"
+	"io/fs"
+	"strings"
+	"testing"
+	"testing/fstest"
+)
 
 func TestListesEmbarquees(t *testing.T) {
 	attendu := []struct {
@@ -36,5 +42,48 @@ func TestListesEmbarquees(t *testing.T) {
 		if liste.RangFixe != 0 {
 			t.Errorf("%s : RangFixe %d, 0 attendu (rang suit l'ordre)", a.nom, liste.RangFixe)
 		}
+	}
+}
+
+// messagePanique appelle decoder et renvoie le message de la panique ("" si aucune).
+func messagePanique(fsys fs.FS) (message string) {
+	defer func() {
+		if r := recover(); r != nil {
+			message = fmt.Sprint(r)
+		}
+	}()
+	decoder(fsys)
+	return ""
+}
+
+func TestDecoderPaniqueSurDonneesCorrompues(t *testing.T) {
+	cas := []struct {
+		nom     string
+		fsys    fs.FS
+		attendu []string
+	}{
+		{
+			nom:     "fichier zst invalide",
+			fsys:    fstest.MapFS{"listes/casse.txt.zst": {Data: []byte("ceci n'est pas du zstd")}},
+			attendu: []string{"frequency : décodage de casse.txt.zst"},
+		},
+		{
+			nom:     "dossier listes absent",
+			fsys:    fstest.MapFS{},
+			attendu: []string{"frequency : dossier listes embarqué illisible"},
+		},
+	}
+	for _, c := range cas {
+		t.Run(c.nom, func(t *testing.T) {
+			message := messagePanique(c.fsys)
+			if message == "" {
+				t.Fatal("aucune panique")
+			}
+			for _, morceau := range c.attendu {
+				if !strings.Contains(message, morceau) {
+					t.Errorf("message %q ne contient pas %q", message, morceau)
+				}
+			}
+		})
 	}
 }
