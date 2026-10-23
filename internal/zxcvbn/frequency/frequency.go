@@ -16,7 +16,6 @@ import (
 	"io/fs"
 	"slices"
 	"strings"
-	"sync"
 
 	"chiffremento-cli/pkg"
 
@@ -55,36 +54,24 @@ var nomsAnglais = []string{
 	"passwords", "english_wikipedia", "female_names", "surnames", "us_tv_and_film", "male_names",
 }
 
-var (
-	anglais  = sync.OnceValue(decoderAnglais)
-	francais = sync.OnceValue(decoderFrancais)
-)
-
-// Anglais renvoie les 6 listes de zxcvbn v1.0.1, sous leurs noms d'origine.
-// Le décodage se fait une seule fois, au premier appel. La map renvoyée est
-// partagée : ne pas la modifier.
+// Anglais décode et renvoie les 6 listes de zxcvbn v1.0.1, sous leurs noms
+// d'origine. Rien n'est gardé : chaque appel décode (quelques millisecondes).
+// L'appelant classe les listes une fois (zxcvbn.charger) puis les lâche, ce
+// qui rend au ramasse-miettes les ~122 000 entrées des tranches Mots (~2 Mo).
+//
+// Panique si une donnée embarquée est illisible : c'est une erreur de
+// programmation (comme regexp.MustCompile), TestListesEmbarquees la détecte
+// avant livraison.
 func Anglais() map[string]Liste {
-	return anglais()
-}
-
-// Francais renvoie les listes françaises : mots_fr (les mots des phrases de
-// passe, tous au rang 7 776), prenoms_fr et noms_fr (10 000 entrées de
-// l'Insee chacune, classées par fréquence). Même règles que Anglais : un seul
-// décodage, map partagée.
-func Francais() map[string]Liste {
-	return francais()
-}
-
-// decoderAnglais panique si une donnée embarquée est illisible : c'est une
-// erreur de programmation (comme regexp.MustCompile), TestListesEmbarquees
-// la détecte avant livraison.
-func decoderAnglais() map[string]Liste {
 	return decoder(listesEmbarquees, nomsAnglais...)
 }
 
-// decoderFrancais : mêmes règles. Les mots de phrases viennent de pkg, qui les
-// embarque déjà : pas de deuxième copie dans le binaire.
-func decoderFrancais() map[string]Liste {
+// Francais décode et renvoie les listes françaises : mots_fr (les mots des
+// phrases de passe, tous au rang 7 776), prenoms_fr et noms_fr (10 000 entrées
+// de l'Insee chacune, classées par fréquence). Mêmes règles que Anglais. Les
+// mots de phrases viennent de pkg, qui les embarque déjà : pas de deuxième
+// copie dans le binaire.
+func Francais() map[string]Liste {
 	listes := decoder(listesEmbarquees, NomPrenomsFr, NomNomsFr)
 	mots, err := pkg.MotsPhrase()
 	if err != nil {
