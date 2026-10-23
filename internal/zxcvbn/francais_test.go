@@ -6,6 +6,8 @@ import (
 	"testing"
 
 	"chiffremento-cli/internal/zxcvbn/frequency"
+	"chiffremento-cli/internal/zxcvbn/match"
+	"chiffremento-cli/internal/zxcvbn/matching"
 )
 
 // seuilFaible : même valeur que bitsFaible dans tui.go (le paquet main n'est
@@ -17,18 +19,101 @@ func bitsDe(p string) float64 {
 }
 
 // Un mot français courant, un prénom ou un nom de famille doivent être annoncés
-// faibles : majuscules, accents et année collée comprises.
+// faibles : majuscules, accents et année collée comprises. Le seuil seul ne
+// prouve rien (la plupart de ces mots sont déjà faibles avec l'anglais) : la
+// séquence retenue doit commencer par le dictionnaire français attendu, au
+// rang de la forme en minuscules.
 func TestMotFrancaisFaible(t *testing.T) {
 	fixerAnneeReference(t, anneeReferenceParite)
-	for _, p := range []string{
-		"soleil", "abandon", "marie", "dupont", "Martin", "DUPONT",
-		"hélène1990", "helene1990", "Françoise",
+	for _, cas := range []struct{ motDePasse, dictionnaire, minuscules string }{
+		{"soleil", "", ""},
+		{"abandon", "", ""},
+		{"helene1990", "", ""},
+		{"marie", frequency.NomPrenomsFr, "marie"},
+		{"hélène1990", frequency.NomPrenomsFr, "hélène"},
+		{"Françoise", frequency.NomPrenomsFr, "françoise"},
+		{"dupont", frequency.NomNomsFr, "dupont"},
+		{"DUPONT", frequency.NomNomsFr, "dupont"},
+		{"Martin", frequency.NomNomsFr, "martin"},
 	} {
-		t.Run(p, func(t *testing.T) {
-			if bits := bitsDe(p); bits >= seuilFaible {
-				t.Errorf("%q : %.1f bits, moins de %d attendus", p, bits, seuilFaible)
+		t.Run(cas.motDePasse, func(t *testing.T) {
+			if bits := bitsDe(cas.motDePasse); bits >= seuilFaible {
+				t.Errorf("%q : %.1f bits, moins de %d attendus", cas.motDePasse, bits, seuilFaible)
+			}
+			if cas.dictionnaire == "" {
+				return
+			}
+			premier := PasswordStrength(cas.motDePasse, nil).Sequence[0]
+			if premier.Pattern != "dictionary" || premier.DictionaryName != cas.dictionnaire {
+				t.Fatalf("premier motif %q du dictionnaire %q ; attendu dictionary, %s",
+					premier.Pattern, premier.DictionaryName, cas.dictionnaire)
+			}
+			if rang := rangDans(t, cas.minuscules, cas.dictionnaire); premier.Rank != rang {
+				t.Errorf("rang %d, attendu %d (celui de %q)", premier.Rank, rang, cas.minuscules)
 			}
 		})
+	}
+}
+
+// correspondance cherche, parmi tous les motifs trouvés (pas seulement la
+// séquence retenue), le mot du dictionnaire nom qui couvre motDePasse[i:j+1].
+func correspondance(motDePasse, nom string, i, j int) *match.Match {
+	for _, m := range matching.OmnimatchAvec(motDePasse, nil, charger()) {
+		if m.Pattern == "dictionary" && m.DictionaryName == nom && m.I == i && m.J == j {
+			return m
+		}
+	}
+	return nil
+}
+
+// rangDans rend le rang de mot (tel quel, entier) dans le dictionnaire nom.
+func rangDans(t *testing.T, mot, nom string) int {
+	t.Helper()
+	m := correspondance(mot, nom, 0, len(mot)-1)
+	if m == nil {
+		t.Fatalf("%q absent de %s", mot, nom)
+	}
+	return m.Rank
+}
+
+// R-PHR-08 : le fichier de l'Insee écrit les noms sans accent. Tapés avec
+// leurs accents, ils doivent être reconnus au même rang, et le motif doit
+// couvrir la saisie d'origine (positions en octets, jeton inchangé).
+func TestNomsAccentuesReconnus(t *testing.T) {
+	for _, cas := range []struct{ motDePasse, sansAccent string }{
+		{"lefèvre", "lefevre"},
+		{"Hébert", "hebert"},
+		{"ménard", "menard"},
+	} {
+		t.Run(cas.motDePasse, func(t *testing.T) {
+			m := correspondance(cas.motDePasse, frequency.NomNomsFr, 0, len(cas.motDePasse)-1)
+			if m == nil {
+				t.Fatalf("%q non reconnu dans %s", cas.motDePasse, frequency.NomNomsFr)
+			}
+			if m.Token != cas.motDePasse || m.MatchedWord != cas.sansAccent {
+				t.Errorf("jeton %q, mot %q ; attendus %q, %q", m.Token, m.MatchedWord, cas.motDePasse, cas.sansAccent)
+			}
+			if rang := rangDans(t, cas.sansAccent, frequency.NomNomsFr); m.Rank != rang {
+				t.Errorf("rang %d, attendu %d (celui de %q)", m.Rank, rang, cas.sansAccent)
+			}
+		})
+	}
+}
+
+// Une saisie collée depuis le Finder arrive décomposée (NFD) : « é » y est un
+// « e » suivi d'un accent détaché (U+0301). Elle doit valoir la forme composée.
+func TestPrenomDecomposeReconnu(t *testing.T) {
+	fixerAnneeReference(t, anneeReferenceParite)
+	const (
+		compose   = "Hélène1990"
+		decompose = "He\u0301le\u0300ne1990"
+		prenom    = "He\u0301le\u0300ne"
+	)
+	if correspondance(decompose, frequency.NomPrenomsFr, 0, len(prenom)-1) == nil {
+		t.Fatalf("%q (NFD) non reconnu dans %s", prenom, frequency.NomPrenomsFr)
+	}
+	if ecart := math.Abs(bitsDe(decompose) - bitsDe(compose)); ecart > 1 {
+		t.Errorf("NFD %.1f bits, NFC %.1f bits : même valeur attendue", bitsDe(decompose), bitsDe(compose))
 	}
 }
 

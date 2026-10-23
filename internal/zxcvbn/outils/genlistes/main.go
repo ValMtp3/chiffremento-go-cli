@@ -32,6 +32,8 @@ import (
 	"strconv"
 	"strings"
 
+	"chiffremento-cli/internal/zxcvbn/frequency"
+
 	"github.com/klauspost/compress/zstd"
 )
 
@@ -130,10 +132,10 @@ func texteInsee(nom, chemin, sha string, classer func(io.Reader) ([]effectif, er
 // versTexte écrit un mot par ligne ("\n"). Un mot vide ou contenant un saut de
 // ligne casserait le découpage à la lecture : on refuse.
 // Une tabulation est refusée aussi : elle marque les variantes sans accent
-// des listes françaises (voir marqueVariante).
+// des listes françaises (voir frequency.MarqueVariante).
 func versTexte(nom string, mots []string) ([]byte, error) {
 	for i, mot := range mots {
-		if strings.HasPrefix(mot, marqueVariante) {
+		if strings.HasPrefix(mot, frequency.MarqueVariante) {
 			return nil, fmt.Errorf("liste %s, mot n°%d (%q) : commence par la marque de variante", nom, i+1, mot)
 		}
 	}
@@ -145,7 +147,7 @@ func versTexte(nom string, mots []string) ([]byte, error) {
 func versTexteLignes(nom string, lignes []string) ([]byte, error) {
 	var tampon bytes.Buffer
 	for i, ligne := range lignes {
-		mot := strings.TrimPrefix(ligne, marqueVariante)
+		mot := strings.TrimPrefix(ligne, frequency.MarqueVariante)
 		if mot == "" || strings.ContainsAny(mot, "\r\n\t") {
 			return nil, fmt.Errorf("liste %s, ligne n°%d (%q) : vide, avec saut de ligne ou tabulation", nom, i+1, ligne)
 		}

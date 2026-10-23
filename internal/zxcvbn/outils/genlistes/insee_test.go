@@ -93,17 +93,6 @@ func TestLignesFrancaisTropCourt(t *testing.T) {
 	}
 }
 
-func TestSansAccent(t *testing.T) {
-	for entree, attendu := range map[string]string{
-		"élève": "eleve", "où": "ou", "noël": "noel", "maïs": "mais", "garçon": "garcon",
-		"cœur": "coeur", "æon": "aeon", "ÿ": "y", "plain": "plain", "ñandu": "ñandu",
-	} {
-		if got := sansAccent(entree); got != attendu {
-			t.Errorf("sansAccent(%q) = %q, attendu %q", entree, got, attendu)
-		}
-	}
-}
-
 func TestVerifierEmpreinte(t *testing.T) {
 	// SHA-256 de "abc"
 	const sha = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"

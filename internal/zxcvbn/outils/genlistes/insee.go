@@ -9,6 +9,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"chiffremento-cli/internal/zxcvbn/frequency"
 )
 
 // Fichiers de l'Insee, téléchargés à la main (curl) hors du dépôt. Le
@@ -33,10 +35,6 @@ const (
 	prenomsRares   = "_PRENOMS_RARES"
 	autresNoms     = "AUTRES NOMS" // ligne de total des noms rares, pas un nom
 	nbEntreesInsee = 10000
-
-	// marqueVariante ouvre une ligne qui est la forme sans accent de la ligne
-	// précédente : même rang, pas de rang de plus.
-	marqueVariante = "\t"
 )
 
 // effectif est un nom (en majuscules, comme dans le fichier) et son total.
@@ -153,24 +151,10 @@ func lignesFrancais(effectifs []effectif, n int) ([]string, error) {
 	for _, e := range effectifs[:n] {
 		mot := strings.ToLower(e.nom)
 		lignes = append(lignes, mot)
-		if variante := sansAccent(mot); variante != mot && !gardes[variante] {
+		if variante := frequency.SansAccent(mot); variante != mot && !gardes[variante] {
 			gardes[variante] = true
-			lignes = append(lignes, marqueVariante+variante)
+			lignes = append(lignes, frequency.MarqueVariante+variante)
 		}
 	}
 	return lignes, nil
 }
-
-// accents est la table fixe des lettres accentuées du français.
-var accents = strings.NewReplacer(
-	"é", "e", "è", "e", "ê", "e", "ë", "e",
-	"à", "a", "â", "a", "ä", "a",
-	"î", "i", "ï", "i",
-	"ô", "o", "ö", "o",
-	"ù", "u", "û", "u", "ü", "u",
-	"ÿ", "y", "ç", "c",
-	"œ", "oe", "æ", "ae",
-)
-
-// sansAccent s'applique à un mot déjà en minuscules.
-func sansAccent(mot string) string { return accents.Replace(mot) }

@@ -132,10 +132,6 @@ func decoder(fsys fs.FS, noms ...string) map[string]Liste {
 	return listes
 }
 
-// marqueVariante ouvre une ligne qui est la forme sans accent de la ligne
-// précédente : même rang. Le générateur (outils/genlistes) l'écrit.
-const marqueVariante = "\t"
-
 // listeDepuisTexte découpe un mot par ligne. Les mots partagent la mémoire du
 // texte décodé : pas d'allocation par mot. Rangs n'est rempli que si une ligne
 // porte la marque de variante.
@@ -145,13 +141,13 @@ func listeDepuisTexte(texte string) Liste {
 		return Liste{}
 	}
 	mots := strings.Split(texte, "\n")
-	if !strings.Contains(texte, "\n"+marqueVariante) {
+	if !strings.Contains(texte, "\n"+MarqueVariante) {
 		return Liste{Mots: mots}
 	}
 	rangs := make([]int, len(mots))
 	rang := 0
 	for i, mot := range mots {
-		if variante, ok := strings.CutPrefix(mot, marqueVariante); ok {
+		if variante, ok := strings.CutPrefix(mot, MarqueVariante); ok {
 			mots[i] = variante
 		} else {
 			rang++

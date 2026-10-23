@@ -483,10 +483,11 @@ Tests : TestIndicateurDeForceDictionnaire, TestValidatePassword
 L'indicateur de force connaît le français : les mots de la liste des phrases de
 passe (tous au même rang, celui d'un tirage dans cette liste), et les 10 000
 prénoms et 10 000 noms de famille les plus fréquents de l'Insee, avec ou sans
-accent et quelle que soit la casse. Un mot, un prénom ou un nom courant est
-annoncé faible, même suivi d'une année.
+accent (le nom « lefèvre » vaut « lefevre », une saisie décomposée collée
+depuis le Finder vaut la forme composée) et quelle que soit la casse. Un mot,
+un prénom ou un nom courant est annoncé faible, même suivi d'une année.
 
-Tests : TestMotFrancaisFaible, TestMotsFrancaisRangFixe, TestListesFrancaises
+Tests : TestMotFrancaisFaible, TestMotsFrancaisRangFixe, TestListesFrancaises, TestNomsAccentuesReconnus, TestPrenomDecomposeReconnu
 
 ## PERF — repères de légèreté
 
