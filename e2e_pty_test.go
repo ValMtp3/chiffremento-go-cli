@@ -317,6 +317,33 @@ func (p *pilote) attendreProgression() {
 	p.attendre("aead")
 }
 
+// attendreTemporaire attend qu'un fichier temporaire d'écriture
+// (« .chto-tmp-* », créé dans le dossier de la cible) apparaisse dans dossier :
+// l'opération a alors dépassé la dérivation de clé et écrit pour de bon. Échoue
+// si le processus se termine avant, ou après delaiEcran.
+func (p *pilote) attendreTemporaire(dossier string) {
+	p.t.Helper()
+	limite := time.Now().Add(delaiEcran)
+	for {
+		temporaires, err := filepath.Glob(filepath.Join(dossier, ".chto-tmp-*"))
+		if err != nil {
+			p.t.Fatal(err)
+		}
+		if len(temporaires) > 0 {
+			return
+		}
+		select {
+		case <-p.fini:
+			p.t.Fatalf("le processus s'est terminé sans qu'un temporaire n'apparaisse ; fin de l'écran :\n%s", p.queue())
+		default:
+		}
+		if time.Now().After(limite) {
+			p.t.Fatalf("aucun temporaire en %v ; fin de l'écran :\n%s", delaiEcran, p.queue())
+		}
+		time.Sleep(pasDeSondage)
+	}
+}
+
 // attendrePremierEcran attend que le choix de l'opération soit affiché en
 // entier.
 func (p *pilote) attendrePremierEcran() {
@@ -673,9 +700,10 @@ func TestE2EInterruption(t *testing.T) {
 	}
 }
 
-// R-TUI-04 et R-FS-02 : un abandon par Ctrl+C pendant l'opération, écran de
-// progression affiché, sort en 130, rend le terminal, garde l'original intact
-// et ne laisse ni chiffré ni temporaire.
+// R-TUI-04 et R-FS-02 : un abandon par Ctrl+C pendant l'écriture, écran de
+// progression affiché et temporaire déjà créé sur le disque, sort en 130, rend
+// le terminal, garde l'original intact et supprime le temporaire sans laisser
+// de chiffré.
 func TestE2EInterruptionPendantOperation(t *testing.T) {
 	dossier := t.TempDir()
 	// Assez gros pour que l'opération soit en cours à l'arrivée de Ctrl+C.
@@ -689,6 +717,7 @@ func TestE2EInterruptionPendantOperation(t *testing.T) {
 	p.validerOptionsParDefaut()
 	p.saisirPhrase("phrase d'abandon", true)
 	p.attendreProgression()
+	p.attendreTemporaire(dossier)
 	p.abandonnerParCtrlC()
 
 	if code := p.codeDeSortie(); code != exitInterrompu {

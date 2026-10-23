@@ -150,9 +150,10 @@ Tests : TestE2EVerifier
 Ctrl+C dans l'interface sort avec le code 130, sans message d'erreur, et rend
 le terminal (écho, curseur) dans son état d'origine. Un abandon avant le
 lancement de l'opération laisse le dossier tel qu'il était. Pendant le
-chiffrement d'un gros fichier, écran de progression affiché, il sort aussi en
-130, rend le terminal, garde l'original intact et ne laisse ni chiffré ni
-temporaire. Échap ne fait pas quitter l'interface : son rôle sera fixé à la refonte plein écran.
+chiffrement d'un gros fichier, écran de progression affiché et temporaire
+`.chto-tmp-*` déjà présent sur le disque, il sort aussi en 130, rend le
+terminal, garde l'original intact, supprime le temporaire et ne laisse aucun
+chiffré. Échap ne fait pas quitter l'interface : son rôle sera fixé à la refonte plein écran.
 
 Tests : TestE2EInterruption, TestE2EInterruptionPendantOperation
 
@@ -344,7 +345,9 @@ Tests : TestRefusEcrasementCLI, TestDestinationExistanteRefusee, TestOpenDestRef
 Après une erreur de déchiffrement, une destination déjà présente n'est pas
 détruite, aucun `.chto-tmp-*` ne reste, et aucun dossier à moitié extrait
 n'apparaît. L'interruption nettoie les temporaires en cours. Un abandon dans
-l'interface, avant ou pendant le chiffrement d'un gros fichier, n'écrit rien.
+l'interface avant le lancement de l'opération n'écrit rien ; un abandon pendant
+l'écriture, temporaire `.chto-tmp-*` déjà créé, le supprime et ne laisse aucun
+chiffré.
 
 Tests : TestEchecNeDetruitPasLaCible, TestDecryptFluxMauvaisMotDePasseGardeLaDestination, TestDecryptFluxMauvaisMotDePasseNeLaissePasDeFichier, TestNettoyageTemporaires, TestDossierMauvaisMotDePasse, TestE2EInterruption, TestE2EInterruptionPendantOperation, TestNettoyageFermeLeDescripteur, TestEncryptDossierIllisibleRemonteLErreur
 
