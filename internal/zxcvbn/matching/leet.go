@@ -31,8 +31,12 @@ func (lm l33tMatch) Matches(password string) []*match.Match {
 				continue
 			}
 
-			if strings.ToLower(token) == m.MatchedWord {
-				continue // only return the matches that return an actual substitution
+			// only return the matches that return an actual substitution. Le
+			// second test couvre la recherche sans accent des listes
+			// françaises : là, MatchedWord diffère du jeton sans qu'aucune
+			// substitution n'ait eu lieu dans le jeton.
+			if strings.ToLower(token) == m.MatchedWord || token == subbedPassword[m.I:m.J+1] {
+				continue
 			}
 			m.Sub = make(map[string]string)
 			for subbed, chr := range sub {

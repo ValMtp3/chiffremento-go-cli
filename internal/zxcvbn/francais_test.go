@@ -100,6 +100,17 @@ func TestNomsAccentuesReconnus(t *testing.T) {
 	}
 }
 
+// La recherche sans accent ne doit pas fabriquer de faux motifs l33t : dans
+// « lefèvre1 », « lefèvre » ne contient aucune substitution (le « 1 » est
+// hors du jeton), il ne doit donc pas ressortir marqué l33t.
+func TestSansAccentPasDeFauxL33t(t *testing.T) {
+	for _, m := range matching.OmnimatchAvec("lefèvre1", nil, charger()) {
+		if m.L33t && len(m.Sub) == 0 {
+			t.Errorf("motif l33t sans substitution : jeton %q, mot %q, dictionnaire %s", m.Token, m.MatchedWord, m.DictionaryName)
+		}
+	}
+}
+
 // Une saisie collée depuis le Finder arrive décomposée (NFD) : « é » y est un
 // « e » suivi d'un accent détaché (U+0301). Elle doit valoir la forme composée.
 func TestPrenomDecomposeReconnu(t *testing.T) {
