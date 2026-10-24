@@ -340,12 +340,22 @@ func extractArchive(r io.Reader, dest string) error {
 			}
 			var err error
 			f, err = creerFichierExtrait(target, rel, hdr)
+			if err == nil {
+				suivreExtrait(f)
+			}
 			return err
 		})
 		if err != nil || f == nil {
 			return err
 		}
-		return extractFile(f, body, target, rel, hdr, tampon)
+		err = extractFile(f, body, target, rel, hdr, tampon)
+		oublierExtrait(f)
+		// Le fichier a été fermé par FermerTemporaires : l'écriture a
+		// échoué pour cette raison, pas pour une panne du disque.
+		if err != nil && fermes.Load() {
+			return errNettoye
+		}
+		return err
 	})
 }
 

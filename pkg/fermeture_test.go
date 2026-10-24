@@ -1,6 +1,7 @@
 package pkg
 
 import (
+	"archive/tar"
 	"bytes"
 	"errors"
 	"io"
@@ -138,5 +139,68 @@ func TestDechiffrementApresFermetureNeLaisseRien(t *testing.T) {
 	sansTemporaire(t, work)
 	if _, err := os.Lstat(sortie); !os.IsNotExist(err) {
 		t.Errorf("la sortie existe (Lstat : %v)", err)
+	}
+}
+
+// TestExtractionFermeLeFichierOuvert : FermerTemporaires au milieu d'un
+// fichier en cours d'extraction ferme ce fichier. Sous Windows, un fichier
+// ouvert ne se supprime pas : laissé ouvert, il gardait le dossier
+// temporaire, avec son clair, après la sortie. Partout, la copie s'arrête
+// aussitôt (l'écriture suivante échoue) au lieu de lire tout le fichier, et
+// l'erreur rendue est errNettoye, pas une erreur d'écriture déroutante.
+func TestExtractionFermeLeFichierOuvert(t *testing.T) {
+	work := t.TempDir()
+	dest := filepath.Join(work, "extrait")
+	out, err := newAtomicDir(dest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(rouvrirTemporaires)
+
+	const taille = 1 << 20
+	var tampon bytes.Buffer
+	tw := tar.NewWriter(&tampon)
+	if err := tw.WriteHeader(&tar.Header{Name: "gros.bin", Typeflag: tar.TypeReg, Mode: 0600, Size: taille}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tw.Write(make([]byte, taille)); err != nil {
+		t.Fatal(err)
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	// La fermeture tombe après 64 Kio du contenu : le fichier est ouvert.
+	const apres = 64 << 10
+	src := &fermeEnRoute{r: bytes.NewReader(tampon.Bytes()), apres: apres}
+	if err := extractArchive(src, out.path); !errors.Is(err, errNettoye) {
+		t.Errorf("extraction après fermeture = %v, attendu errNettoye", err)
+	}
+	if src.lus > apres+4096 {
+		t.Errorf("%d octets lus après la fermeture : le fichier ouvert n'a pas été fermé", src.lus-apres)
+	}
+	sansTemporaire(t, work)
+}
+
+// TestChangePasswordSauvegardeNettoyeeNeTouchePasLEntete : un Ctrl+C
+// (FermerTemporaires) entre l'écriture de la sauvegarde d'en-tête et son
+// retrait du registre la supprime. passwd s'arrête alors sans réécrire
+// l'en-tête : le fichier n'est jamais modifié sans sauvegarde.
+func TestChangePasswordSauvegardeNettoyeeNeTouchePasLEntete(t *testing.T) {
+	chto := chiffreV4(t, []byte("contenu"), Options{})
+	avant := lireEntete(t, chto)
+	origine := apresSauvegarde
+	t.Cleanup(func() { apresSauvegarde = origine; rouvrirTemporaires() })
+	apresSauvegarde = func() { FermerTemporaires() }
+
+	err := ChangePassword(chto, []byte(motDePasseV4), []byte("nouveau-mot-de-passe"))
+	if !errors.Is(err, errNettoye) {
+		t.Errorf("ChangePassword = %v, attendu errNettoye", err)
+	}
+	if !bytes.Equal(lireEntete(t, chto), avant) {
+		t.Error("l'en-tête a été réécrit alors que sa sauvegarde a été nettoyée")
+	}
+	if _, err := os.Lstat(chto + suffixeSauvegarde); !os.IsNotExist(err) {
+		t.Errorf("la sauvegarde est restée (Lstat : %v)", err)
 	}
 }

@@ -117,6 +117,7 @@ func ChangePassword(path string, oldPassword, newPassword []byte) error {
 	if err := ecrireSauvegarde(sauvegarde, ancienEntete); err != nil {
 		return err
 	}
+	apresSauvegarde()
 
 	// À partir d'ici la sauvegarde sort du registre des temporaires : elle devient
 	// le seul en-tête dont on soit sûr, et un Ctrl+C ne doit surtout plus
@@ -176,6 +177,10 @@ func ChangePassword(path string, oldPassword, newPassword []byte) error {
 var (
 	syncFichier      = func(f *os.File) error { return f.Sync() }
 	ecrireAOctetZero = func(f *os.File, b []byte) (int, error) { return f.WriteAt(b, 0) }
+	// apresSauvegarde ne fait rien ; les tests y placent un Ctrl+C
+	// (FermerTemporaires) entre l'écriture de la sauvegarde et son retrait du
+	// registre.
+	apresSauvegarde = func() {}
 )
 
 // conseilSauvegarde dit quoi faire quand le nouvel en-tête est écrit sans avoir
