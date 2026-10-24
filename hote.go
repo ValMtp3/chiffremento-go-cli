@@ -232,6 +232,7 @@ func (h *hote) ouvrir(d demandeEcran) tea.Cmd {
 		h.terminer(errMenu)
 	}
 	h.courant, h.demande = d.ecran, d
+	h.aideOuverte = false
 	h.idCourant = h.prochainID
 	h.prochainID++
 
@@ -242,10 +243,12 @@ func (h *hote) ouvrir(d demandeEcran) tea.Cmd {
 	return tea.Batch(cmds...)
 }
 
-// terminer rend la réponse au parcours et libère le cadre.
+// terminer rend la réponse au parcours et libère le cadre. L'aide se ferme
+// avec l'écran : laissée ouverte, elle cacherait la question suivante.
 func (h *hote) terminer(err error) {
 	h.demande.reponse <- resultatEcran{modele: h.courant, err: err}
 	h.courant, h.demande, h.idCourant = nil, demandeEcran{}, 0
+	h.aideOuverte = false
 }
 
 // transmettre passe un message au sous-écran courant et étiquette les
@@ -317,7 +320,13 @@ func filDAriane(operation, etape string) string {
 // le programme tels quels, sans étiquette, sinon il ne les reconnaît plus.
 var paquetBubbletea = reflect.TypeOf(tea.QuitMsg{}).PkgPath()
 
-var typeCmd = reflect.TypeOf(tea.Cmd(nil))
+// typeSuite est le type, non exporté, que rend une tea.Sequence. On le tient
+// de Bubble Tea lui-même plutôt que de sa forme (une tranche de commandes) :
+// si une version future change ce type, la reconnaissance suit, et rien
+// d'autre qu'une vraie suite n'est pris pour elle.
+var typeSuite = reflect.TypeOf(tea.Sequence(rienAFaire, rienAFaire)())
+
+func rienAFaire() tea.Msg { return nil }
 
 // etiqueter enveloppe une commande du sous-écran id : ses messages
 // reviendront marqués de ce numéro, et sa demande de sortie (tea.Quit) ne
@@ -353,10 +362,10 @@ func traduire(id uint64, msg tea.Msg) tea.Msg {
 		return messageEcran{id: id, msg: msg}
 	}
 	// tea.Sequence rend un type non exporté, qu'on ne peut pas nommer dans un
-	// case : on le reconnaît à sa forme, une liste de commandes. Ses
-	// commandes doivent être étiquetées elles aussi, sinon un tea.Quit placé
-	// dans une suite fermerait tout le programme.
-	if t.Kind() == reflect.Slice && t.Elem() == typeCmd {
+	// case : on le reconnaît à son identité (typeSuite). Ses commandes doivent
+	// être étiquetées elles aussi, sinon un tea.Quit placé dans une suite
+	// fermerait tout le programme.
+	if t == typeSuite {
 		v := reflect.ValueOf(msg)
 		cmds := make([]tea.Cmd, v.Len())
 		for i := range cmds {

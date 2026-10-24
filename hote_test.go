@@ -393,3 +393,69 @@ func TestRelaisSansCourse(t *testing.T) {
 		t.Fatalf("programme : %v", errProgramme)
 	}
 }
+
+// quitteEnSuite se termine par un tea.Quit placé au bout d'une tea.Sequence :
+// le chemin que prend un sous-écran qui enchaîne des commandes avant de rendre
+// la main.
+type quitteEnSuite struct{}
+
+func (quitteEnSuite) Init() tea.Cmd {
+	rien := func() tea.Msg { return nil }
+	return tea.Sequence(rien, rien, tea.Quit)
+}
+func (m quitteEnSuite) Update(tea.Msg) (tea.Model, tea.Cmd) { return m, nil }
+func (quitteEnSuite) View() string                          { return "suite" }
+
+// TestSuiteDeCommandesReconnue : un tea.Quit au bout d'une tea.Sequence ferme
+// le sous-écran, pas tout le programme. Il faut un vrai programme : c'est lui
+// qui déplie la suite, et derouleHote le ferait à sa place.
+func TestSuiteDeCommandesReconnue(t *testing.T) {
+	var programme *tea.Program
+	h := nouvelHote(func(msg tea.Msg) { programme.Send(msg) })
+	programme = tea.NewProgram(h,
+		tea.WithInput(nil), tea.WithOutput(io.Discard), tea.WithoutSignalHandler())
+	minuteur := time.AfterFunc(30*time.Second, programme.Kill)
+	defer minuteur.Stop()
+
+	erreurs := make(chan error, 1)
+	go func() {
+		defer programme.Quit()
+		for i := range 2 {
+			if _, err := h.afficher(&ecranDeTest{modele: quitteEnSuite{}}); err != nil {
+				erreurs <- fmt.Errorf("écran %d : %w (la suite a fermé le programme)", i+1, err)
+				return
+			}
+		}
+		erreurs <- nil
+	}()
+
+	_, errProgramme := programme.Run()
+	h.fermer()
+	if err := <-erreurs; err != nil {
+		t.Fatal(err)
+	}
+	if errProgramme != nil {
+		t.Fatalf("programme : %v", errProgramme)
+	}
+}
+
+// TestAideFermeeQuandLEcranChange : l'aide ouverte sur un écran ne recouvre
+// pas le suivant — sinon l'utilisateur ne verrait pas qu'on lui pose une
+// nouvelle question.
+func TestAideFermeeQuandLEcranChange(t *testing.T) {
+	h := hoteDeTest(t, 100, 30)
+	montrer(t, h, &ecranDeTest{modele: texteFixe{"premier"}})
+	taper(t, h, "?")
+	// Le premier écran se termine par une commande, aide ouverte.
+	envoyerHote(t, h, finEcranMsg{id: h.idCourant})
+	if strings.Contains(h.View(), "raccourcis") {
+		t.Errorf("l'aide reste ouverte après la fin de l'écran :\n%s", h.View())
+	}
+
+	// Aide ouverte sans écran, puis un écran arrive.
+	taper(t, h, "?")
+	montrer(t, h, &ecranDeTest{modele: texteFixe{"second"}})
+	if !strings.Contains(h.View(), "second") || strings.Contains(h.View(), "raccourcis") {
+		t.Errorf("l'aide recouvre le nouvel écran :\n%s", h.View())
+	}
+}
