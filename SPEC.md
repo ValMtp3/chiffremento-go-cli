@@ -368,10 +368,11 @@ détruite, aucun `.chto-tmp-*` ne reste, et aucun dossier à moitié extrait
 n'apparaît. L'interruption nettoie les temporaires en cours. Un abandon dans
 l'interface avant le lancement de l'opération n'écrit rien ; un abandon pendant
 l'écriture, temporaire `.chto-tmp-*` déjà créé, le supprime et ne laisse aucun
-chiffré. Une opération qui se termine après ce nettoyage ne peut plus installer
-son temporaire sur la destination.
+chiffré. Après le nettoyage d'une interruption, l'opération qui tourne encore
+jusqu'à la sortie du processus ne peut plus rien créer ni installer : aucune
+sortie, aucun temporaire, aucun dossier d'extraction recréé.
 
-Tests : TestEchecNeDetruitPasLaCible, TestDecryptFluxMauvaisMotDePasseGardeLaDestination, TestDecryptFluxMauvaisMotDePasseNeLaissePasDeFichier, TestNettoyageTemporaires, TestDossierMauvaisMotDePasse, TestE2EInterruption, TestE2EInterruptionPendantOperation, TestNettoyageFermeLeDescripteur, TestEncryptDossierIllisibleRemonteLErreur, TestCommitApresNettoyageRefuse
+Tests : TestEchecNeDetruitPasLaCible, TestDecryptFluxMauvaisMotDePasseGardeLaDestination, TestDecryptFluxMauvaisMotDePasseNeLaissePasDeFichier, TestNettoyageTemporaires, TestDossierMauvaisMotDePasse, TestE2EInterruption, TestE2EInterruptionPendantOperation, TestNettoyageFermeLeDescripteur, TestEncryptDossierIllisibleRemonteLErreur, TestCommitApresNettoyageRefuse, TestFermerTemporairesRefuseLesNouveaux, TestFermerTemporairesSupprimeCeQuiArrive, TestExtractionInterrompueNeLaisseRien, TestDechiffrementApresFermetureNeLaisseRien, TestE2EInterruptionPendantExtraction, TestRunJobApresFermetureNeLancePasLOperation
 
 ### R-FS-03 — Fichier vide : aller-retour exact
 Un fichier vide se chiffre et se déchiffre en un fichier vide, ainsi qu'un

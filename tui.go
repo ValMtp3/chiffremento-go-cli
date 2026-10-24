@@ -62,10 +62,11 @@ func runTUI() (int, error) {
 
 	interrompu, err := h.executer(programme)
 	if interrompu || err != nil {
-		// Une opération menée dans le parcours (le changement de mot de
-		// passe) a pu laisser un temporaire : le processus va sortir sans
-		// attendre qu'elle se termine.
-		pkg.CleanupTemporaries()
+		// L'opération en cours (progression, changement de mot de passe)
+		// tourne encore dans la goroutine du parcours : le processus va
+		// sortir sans l'attendre. FermerTemporaires supprime ses temporaires
+		// et l'empêche d'en créer d'autres d'ici la sortie.
+		pkg.FermerTemporaires()
 	}
 	// L'écran alternatif est quitté : ce qui y a été annoncé s'imprime
 	// maintenant, sur le terminal ordinaire.
@@ -1187,6 +1188,13 @@ func lancerOperation(info jobInfo, op func(progress func(done, total int64)) err
 // fin de l'opération : l'appelant effacerait sinon le mot de passe (zero)
 // pendant qu'Argon2 ou le chiffrement le lisent encore.
 func runJobDansHote(h *hote, info jobInfo, op func(progress func(done, total int64)) error) error {
+	// Ctrl+C a pu fermer l'hôte juste avant : l'opération ne doit alors
+	// même pas commencer, elle écrirait pendant que le processus sort.
+	select {
+	case <-h.termine:
+		return huh.ErrUserAborted
+	default:
+	}
 	// La largeur de départ est provisoire : l'hôte donne celle du cadre dès
 	// l'ouverture de l'écran.
 	ecran, finie := lancerOperation(info, op, contentWidth+2)
@@ -1221,14 +1229,14 @@ func runJobSeul(info jobInfo, op func(progress func(done, total int64)) error) e
 		// temporaires puis on quitte, comme le handler de signal — la mort du
 		// processus est ce qui interrompt réellement le chiffrement.
 		if errors.Is(err, tea.ErrInterrupted) || errors.Is(err, tea.ErrProgramKilled) {
-			pkg.CleanupTemporaries()
+			pkg.FermerTemporaires()
 			fmt.Fprintln(os.Stderr, "\ninterrompu")
 			os.Exit(exitInterrompu)
 		}
 		// Toute autre panne de l'affichage laisse l'opération en cours : la même
 		// sortie franche s'impose, sinon le processus meurt sur le retour d'erreur
 		// en abandonnant un .chto-tmp-* dans le dossier de l'utilisateur.
-		pkg.CleanupTemporaries()
+		pkg.FermerTemporaires()
 		return err
 	}
 	// Le programme ne sort normalement qu'après doneMsg : l'erreur de

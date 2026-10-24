@@ -180,7 +180,7 @@ func installSignalHandler() {
 	go func() {
 		<-c
 		restaurerTerminal()
-		pkg.CleanupTemporaries()
+		pkg.FermerTemporaires()
 		fmt.Fprintln(os.Stderr, "\ninterrompu")
 		os.Exit(exitInterrompu)
 	}()

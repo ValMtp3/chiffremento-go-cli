@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 
 	"github.com/klauspost/compress/zstd"
 	"github.com/minio/sio"
@@ -113,14 +114,38 @@ var (
 	// supprimer un fichier encore ouvert, il faut donc le fermer d'abord. Elle
 	// est nil pour les répertoires temporaires d'extraction.
 	pending = map[string]*os.File{}
+
+	// fermes : FermerTemporaires est passé, le processus va sortir. Écrit
+	// sous pendingMu ; atomique pour rester lisible sans verrou.
+	fermes atomic.Bool
 )
 
 // CleanupTemporaries supprime les temporaires encore en cours d'écriture.
-// À appeler depuis un gestionnaire de signal. RemoveAll et non Remove : une
-// extraction de dossier travaille dans un répertoire temporaire.
+// RemoveAll et non Remove : une extraction de dossier travaille dans un
+// répertoire temporaire. Pour une sortie du processus, préférer
+// FermerTemporaires, qui empêche aussi d'en créer d'autres.
 func CleanupTemporaries() {
 	pendingMu.Lock()
 	defer pendingMu.Unlock()
+	nettoyerRegistre()
+}
+
+// FermerTemporaires nettoie les temporaires pour de bon, juste avant la
+// sortie du processus (Ctrl+C, signal). L'opération interrompue tourne encore
+// dans sa goroutine jusqu'à os.Exit : désormais elle ne peut plus rien créer
+// (errNettoye), un temporaire qu'elle enregistrerait est supprimé aussitôt, et
+// l'extraction s'arrête à l'entrée suivante. Sans ça, l'entrée suivante
+// recréait le dossier temporaire supprimé et y écrivait du clair, que rien ne
+// nettoyait plus.
+func FermerTemporaires() {
+	pendingMu.Lock()
+	defer pendingMu.Unlock()
+	fermes.Store(true)
+	nettoyerRegistre()
+}
+
+// nettoyerRegistre s'appelle sous pendingMu.
+func nettoyerRegistre() {
 	for p, f := range pending {
 		if f != nil {
 			f.Close()
@@ -130,12 +155,50 @@ func CleanupTemporaries() {
 	}
 }
 
-func trackTemp(p string) { trackTempFile(p, nil) }
+func trackTemp(p string) error { return trackTempFile(p, nil) }
 
-func trackTempFile(p string, f *os.File) {
+// trackTempFile enregistre un temporaire. Après FermerTemporaires, il est
+// supprimé sur-le-champ et errNettoye est rendu : l'appelant s'arrête.
+func trackTempFile(p string, f *os.File) error {
 	pendingMu.Lock()
+	defer pendingMu.Unlock()
+	if fermes.Load() {
+		if f != nil {
+			f.Close()
+		}
+		os.RemoveAll(p)
+		return errNettoye
+	}
 	pending[p] = f
-	pendingMu.Unlock()
+	return nil
+}
+
+// sortirDuRegistre retire un temporaire du registre parce qu'il devient un
+// fichier à garder (la sauvegarde d'en-tête de passwd). Refusé s'il a déjà
+// été nettoyé : l'appelant ne doit pas continuer sans lui.
+func sortirDuRegistre(p string) error {
+	pendingMu.Lock()
+	defer pendingMu.Unlock()
+	if _, suivi := pending[p]; !suivi {
+		return errNettoye
+	}
+	delete(pending, p)
+	return nil
+}
+
+// dansLeTemporaire exécute creer (création de dossiers ou de fichiers dans
+// un temporaire d'extraction) sous le verrou du registre, sauf après
+// FermerTemporaires : soit la fermeture passe avant et rien n'est créé, soit
+// la création passe avant et la fermeture la supprime avec le reste. Le
+// verrou n'est tenu que le temps des appels de création, jamais pendant la
+// copie des données.
+func dansLeTemporaire(creer func() error) error {
+	pendingMu.Lock()
+	defer pendingMu.Unlock()
+	if fermes.Load() {
+		return errNettoye
+	}
+	return creer()
 }
 
 func untrackTemp(p string) {
@@ -197,7 +260,9 @@ func newAtomicFile(dest string, force bool) (*atomicFile, error) {
 		os.Remove(f.Name())
 		return nil, fmt.Errorf("permissions du fichier temporaire: %w", err)
 	}
-	trackTempFile(f.Name(), f)
+	if err := trackTempFile(f.Name(), f); err != nil {
+		return nil, err
+	}
 	return &atomicFile{f: f, dest: dest}, nil
 }
 
@@ -275,7 +340,9 @@ func newAtomicDir(dest string) (*atomicDir, error) {
 		os.RemoveAll(p)
 		return nil, fmt.Errorf("permissions du dossier temporaire: %w", err)
 	}
-	trackTemp(p)
+	if err := trackTemp(p); err != nil {
+		return nil, err
+	}
 	return &atomicDir{path: p, dest: dest}, nil
 }
 

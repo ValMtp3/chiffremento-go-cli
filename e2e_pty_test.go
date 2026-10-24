@@ -5,6 +5,8 @@ package main
 import (
 	"bytes"
 	"errors"
+	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -781,6 +783,71 @@ func TestE2EInterruptionPendantOperation(t *testing.T) {
 	}
 	if !bytes.Equal(obtenu, original) {
 		t.Fatal("l'original a été modifié par l'abandon")
+	}
+}
+
+// R-FS-02 : Ctrl+C pendant l'extraction d'un dossier (beaucoup de petits
+// fichiers) sort en 130 sans laisser de .chto-tmp-* nulle part — l'extraction
+// recréait le dossier temporaire supprimé et y écrivait du clair — ni de
+// destination, et sans toucher au .chto.
+func TestE2EInterruptionPendantExtraction(t *testing.T) {
+	dossier := t.TempDir()
+	source := filepath.Join(dossier, "archive")
+	// Assez d'entrées pour que l'extraction soit en cours à l'arrivée de
+	// Ctrl+C (~0,4 s pour 5 000 fichiers).
+	const fichiers = 20000
+	for i := range fichiers {
+		sous := filepath.Join(source, fmt.Sprintf("d%02d", i%20))
+		if i < 20 {
+			if err := os.MkdirAll(sous, 0700); err != nil {
+				t.Fatal(err)
+			}
+		}
+		ecrireFichier(t, filepath.Join(sous, fmt.Sprintf("f%05d.txt", i)), []byte("clair à ne pas laisser\n"))
+	}
+	chiffre := filepath.Join(dossier, "archive.chto")
+	chiffrerPourTest(t, source, chiffre, "phrase du dossier")
+	if err := os.RemoveAll(source); err != nil {
+		t.Fatal(err)
+	}
+	avant, err := os.ReadFile(chiffre)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	p := lancerPilote(t, dossier)
+	p.choisirAction("déchiffrer")
+	p.saisirChemin("archive.chto")
+	p.saisirPhrase("phrase du dossier", false)
+	p.attendreProgression()
+	p.attendreTemporaire(dossier)
+	p.abandonnerParCtrlC()
+
+	if code := p.codeDeSortie(); code != exitInterrompu {
+		t.Fatalf("code %d, attendu %d ; fin de l'écran :\n%s", code, exitInterrompu, p.queue())
+	}
+	p.terminalRestaure()
+	err = filepath.WalkDir(dossier, func(chemin string, _ fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if strings.HasPrefix(filepath.Base(chemin), ".chto-tmp-") {
+			t.Errorf("temporaire resté après l'interruption : %s", chemin)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(source); !os.IsNotExist(err) {
+		t.Errorf("la destination existe après l'interruption (Lstat : %v)", err)
+	}
+	apres, err := os.ReadFile(chiffre)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(avant, apres) {
+		t.Error("le .chto a été modifié par l'interruption")
 	}
 }
 

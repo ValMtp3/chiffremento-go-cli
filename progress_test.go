@@ -395,3 +395,25 @@ func TestProgressionAutonomeLargeurFixe(t *testing.T) {
 		}
 	}
 }
+
+// TestRunJobApresFermetureNeLancePasLOperation : si Ctrl+C a déjà fermé
+// l'hôte, runJob ne lance pas l'opération — elle écrirait un temporaire
+// pendant que le processus sort.
+func TestRunJobApresFermetureNeLancePasLOperation(t *testing.T) {
+	h := nouvelHote(func(tea.Msg) {})
+	h.fermer()
+	hoteCourant = h
+	t.Cleanup(func() { hoteCourant = nil })
+
+	lancee := false
+	err := runJob(jobInfo{Action: "test", In: "/etc/hosts"}, func(func(int64, int64)) error {
+		lancee = true
+		return nil
+	})
+	if !errors.Is(err, huh.ErrUserAborted) {
+		t.Errorf("runJob = %v, attendu huh.ErrUserAborted", err)
+	}
+	if lancee {
+		t.Error("l'opération a été lancée alors que l'hôte est fermé")
+	}
+}

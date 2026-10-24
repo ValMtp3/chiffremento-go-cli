@@ -122,7 +122,13 @@ func ChangePassword(path string, oldPassword, newPassword []byte) error {
 	// le seul en-tête dont on soit sûr, et un Ctrl+C ne doit surtout plus
 	// l'effacer. Le prix est qu'une interruption la laisse sur le disque — voir
 	// l'avertissement de révocation en tête de fichier.
-	untrackTemp(sauvegarde)
+	//
+	// Si un Ctrl+C l'a déjà nettoyée (FermerTemporaires), on s'arrête là : le
+	// fichier n'a pas encore été touché, et le modifier sans sauvegarde serait
+	// le pire des cas.
+	if err := sortirDuRegistre(sauvegarde); err != nil {
+		return err
+	}
 
 	if _, err := ecrireAOctetZero(f, entete); err != nil {
 		// Tentative de retour en arrière avec ce qu'on a encore en mémoire.
@@ -231,7 +237,9 @@ func ecrireSauvegarde(nom string, entete []byte) error {
 	// intact, donc une sauvegarde à moitié écrite ne sert à rien et vaut mieux
 	// nettoyée qu'abandonnée. L'appelant la sort du registre avant de toucher au
 	// fichier, quand elle devient le filet.
-	trackTempFile(nom, f)
+	if err := trackTempFile(nom, f); err != nil {
+		return fmt.Errorf("sauvegarde de l'en-tête: %w", err)
+	}
 
 	// Le Close vient avant le Remove, et non par un defer : Windows refuse de
 	// supprimer un fichier encore ouvert, et l'erreur passerait inaperçue —
@@ -257,6 +265,8 @@ func ecrireSauvegarde(nom string, entete []byte) error {
 		return abandon(err)
 	}
 	// Le descripteur est fermé : le registre garde le chemin, plus le descripteur.
-	trackTempFile(nom, nil)
+	if err := trackTempFile(nom, nil); err != nil {
+		return fmt.Errorf("sauvegarde de l'en-tête: %w", err)
+	}
 	return nil
 }
