@@ -217,6 +217,11 @@ func (h *hote) fermer() {
 func (h *hote) Init() tea.Cmd { return nil }
 
 func (h *hote) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	// Tout message arrivé après l'échéance efface la phrase sans attendre le
+	// minuteur : au réveil d'une veille, celui-ci arrive en retard, et une
+	// image de l'animation ou un retour de focus passe souvent avant lui. Le
+	// coût : un verrou et deux lectures d'horloge par message, pas par image.
+	h.phrase.restant()
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		h.largeur, h.hauteur = msg.Width, msg.Height

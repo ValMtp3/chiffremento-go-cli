@@ -142,26 +142,57 @@ func annoncer(w io.Writer, format string, args ...any) {
 const delaiOubli = 5 * time.Minute
 
 type phraseSession struct {
-	mu       sync.Mutex
-	octets   []byte
-	echeance time.Time
+	mu     sync.Mutex
+	octets []byte
+	// derniere : l'instant de la garde ou de la dernière touche, lu sur les
+	// deux horloges (voir instant).
+	derniere instant
 	// fermee : la session est finie, plus rien ne sera gardé. Un parcours
 	// encore en vie après Ctrl+C ne doit pas reposer une phrase après
 	// l'oubli de la sortie.
 	fermee bool
-	// horloge rend l'heure : time.Now en vrai, une horloge de test sinon.
-	horloge func() time.Time
+	// horloge rend l'instant : instantReel en vrai, une horloge de test
+	// sinon.
+	horloge func() instant
 }
 
-// maintenant rend l'heure murale, sans lecture monotone (Round(0)). Sous
-// macOS, l'horloge monotone de Go s'arrête pendant la veille : avec elle, une
-// heure de capot fermé ne compterait pas, et la phrase survivrait bien
-// au-delà des 5 minutes annoncées. L'heure murale, elle, avance.
-func (p *phraseSession) maintenant() time.Time {
+// instant est une heure lue sur deux horloges qui ne mentent pas de la même
+// façon. L'heure murale avance pendant la veille, mais peut reculer (NTP,
+// réglage à la main) ; l'horloge monotone ne recule jamais, mais s'arrête
+// pendant la veille sous macOS. Le délai est échu dès que l'une des deux le
+// dit : aucune ne peut à elle seule prolonger la phrase.
+type instant struct {
+	mur  time.Time     // heure murale, sans lecture monotone
+	mono time.Duration // horloge monotone, depuis le lancement
+}
+
+// lancement sert d'origine à l'horloge monotone : time.Since le compare avec
+// sa lecture monotone, jamais avec l'heure murale.
+var lancement = time.Now()
+
+func instantReel() instant {
+	return instant{mur: time.Now().Round(0), mono: time.Since(lancement)}
+}
+
+func (p *phraseSession) maintenant() instant {
 	if p.horloge != nil {
-		return p.horloge().Round(0)
+		return p.horloge()
 	}
-	return time.Now().Round(0)
+	return instantReel()
+}
+
+// resteVerrouille : ce qu'il reste du délai, le plus court des deux restes.
+// Une heure murale revenue avant la dernière activité compte comme échue :
+// impossible de savoir combien de temps a vraiment passé.
+func (p *phraseSession) resteVerrouille() time.Duration {
+	if len(p.octets) == 0 {
+		return 0
+	}
+	now := p.maintenant()
+	if now.mur.Before(p.derniere.mur) {
+		return 0
+	}
+	return delaiOubli - max(now.mur.Sub(p.derniere.mur), now.mono-p.derniere.mono)
 }
 
 // garder remplace la phrase gardée par une copie de secret : l'appelant reste
@@ -177,7 +208,7 @@ func (p *phraseSession) garder(secret []byte) {
 	}
 	zero(p.octets)
 	p.octets = append(make([]byte, 0, len(secret)), secret...)
-	p.echeance = p.maintenant().Add(delaiOubli)
+	p.derniere = p.maintenant()
 }
 
 // prendre rend une copie neuve de la phrase, que l'appelant met à zéro après
@@ -217,7 +248,7 @@ func (p *phraseSession) fermer() {
 
 func (p *phraseSession) oublierVerrouillee() {
 	zero(p.octets)
-	p.octets, p.echeance = nil, time.Time{}
+	p.octets, p.derniere = nil, instant{}
 }
 
 // active dit si une phrase est gardée. Une phrase dont l'échéance est passée
@@ -233,7 +264,7 @@ func (p *phraseSession) active() bool {
 }
 
 func (p *phraseSession) activeVerrouillee() bool {
-	return len(p.octets) > 0 && p.maintenant().Before(p.echeance)
+	return p.resteVerrouille() > 0
 }
 
 // repousser : une touche vient d'être pressée, l'échéance recule d'autant.
@@ -247,7 +278,7 @@ func (p *phraseSession) repousser() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.activeVerrouillee() {
-		p.echeance = p.maintenant().Add(delaiOubli)
+		p.derniere = p.maintenant()
 		return
 	}
 	p.oublierVerrouillee()
@@ -262,9 +293,10 @@ func (p *phraseSession) restant() (time.Duration, bool) {
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if !p.activeVerrouillee() {
+	reste := p.resteVerrouille()
+	if reste <= 0 {
 		p.oublierVerrouillee()
 		return 0, false
 	}
-	return p.echeance.Sub(p.maintenant()), true
+	return reste, true
 }

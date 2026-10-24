@@ -476,10 +476,17 @@ toujours une saisie.
 La phrase est oubliée, octets mis à zéro et indicateur éteint, après 5 min
 sans touche (sur n'importe quel écran, progression comprise), par la touche
 `o` (hors d'un champ texte), et à la sortie, normale ou par Ctrl+C, avant la
-fin du processus. Seule la phrase est gardée, jamais une clé dérivée. Un seul
+fin du processus. Le délai court à la fois sur l'heure murale et sur
+l'horloge monotone : ni une heure qui recule (réglage, NTP) ni une mise en
+veille ne prolongent la phrase, et le premier message reçu après l'échéance
+l'efface. Seule la phrase est gardée, jamais une clé dérivée. Un seul
 minuteur est en attente quand une phrase est gardée, aucun sinon.
 
-Tests : TestPrendreRendUneCopie, TestPhraseOublieeApresDelai, TestToucheOOublie, TestPhraseOublieeALaSortie, TestUnSeulMinuteur, TestGarderDemandeAccord, TestPhraseProposeeALaSaisie, TestPasswdNeProposePasLaPhrase, TestE2EPhraseGardeePourLaSession
+Limite acceptée : la mémoire n'est pas verrouillée (pas de `mlock`) ; comme
+toute phrase tapée, la phrase gardée peut être écrite dans le fichier
+d'échange du système.
+
+Tests : TestPrendreRendUneCopie, TestPhraseOublieeApresDelai, TestPhraseOublieeMemeSiLHorlogeBouge, TestToucheOOublie, TestPhraseOublieeALaSortie, TestUnSeulMinuteur, TestGarderDemandeAccord, TestPhraseProposeeALaSaisie, TestPasswdNeProposePasLaPhrase, TestE2EPhraseGardeePourLaSession
 
 ## PHR — phrase de passe
 

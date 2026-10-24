@@ -19,10 +19,21 @@ import (
 // oubli au délai, par o et à la sortie, un seul minuteur à la fois.
 
 // horlogeDeTest avance à la main : aucun test n'attend cinq vraies minutes.
-type horlogeDeTest struct{ t time.Time }
+// Elle tient séparément l'heure murale et l'horloge monotone, pour simuler ce
+// qui les fait diverger : une mise en veille (la monotone s'arrête) ou un
+// réglage de l'heure (la murale saute).
+type horlogeDeTest struct {
+	mur  time.Time
+	mono time.Duration
+}
 
-func (h *horlogeDeTest) maintenant() time.Time   { return h.t }
-func (h *horlogeDeTest) avancer(d time.Duration) { h.t = h.t.Add(d) }
+func (h *horlogeDeTest) maintenant() instant { return instant{mur: h.mur, mono: h.mono} }
+
+// avancer : le temps passe pour les deux horloges.
+func (h *horlogeDeTest) avancer(d time.Duration) { h.mur, h.mono = h.mur.Add(d), h.mono+d }
+
+// deplacerMur : seule l'heure murale bouge (réglage, NTP, veille).
+func (h *horlogeDeTest) deplacerMur(d time.Duration) { h.mur = h.mur.Add(d) }
 
 // minuterieDeTest remplace tea.Tick : elle note chaque minuteur programmé et
 // ne rend aucune commande. Le test déclenche lui-même l'échéance, en
@@ -39,7 +50,7 @@ func (m *minuterieDeTest) programmer(d time.Duration) tea.Cmd {
 func hoteAvecPhrase(t *testing.T) (*hote, *phraseSession, *horlogeDeTest, *minuterieDeTest) {
 	t.Helper()
 	h := hoteDeTest(t, 100, 30)
-	horloge := &horlogeDeTest{t: time.Date(2026, 10, 24, 12, 0, 0, 0, time.UTC)}
+	horloge := &horlogeDeTest{mur: time.Date(2026, 10, 24, 12, 0, 0, 0, time.UTC)}
 	minuterie := &minuterieDeTest{}
 	p := &phraseSession{horloge: horloge.maintenant}
 	h.phrase, h.minuterie = p, minuterie.programmer
@@ -240,7 +251,7 @@ func TestPhraseOublieeALaSortie(t *testing.T) {
 		}
 	})
 	t.Run("quitter", func(t *testing.T) {
-		horloge := &horlogeDeTest{t: time.Now()}
+		horloge := &horlogeDeTest{mur: time.Now()}
 		p := &phraseSession{horloge: horloge.maintenant}
 		minuterie := &minuterieDeTest{}
 		var programme *tea.Program
@@ -449,4 +460,68 @@ func TestPasswdNeProposePasLaPhrase(t *testing.T) {
 	if err := issueRecue(t, issue); !errors.Is(err, errMenu) {
 		t.Errorf("tuiPasswd après Échap = %v, attendu errMenu", err)
 	}
+}
+
+// TestPhraseOublieeMemeSiLHorlogeBouge : le délai vaut sur l'heure murale ET
+// sur l'horloge monotone. Une heure murale qui recule (NTP, réglage) ne
+// prolonge pas la phrase ; une veille (la monotone s'arrête, la murale
+// avance) ne la prolonge pas non plus, et le premier message reçu après
+// l'échéance efface les octets, sans attendre le minuteur en retard.
+func TestPhraseOublieeMemeSiLHorlogeBouge(t *testing.T) {
+	t.Run("heure murale qui recule", func(t *testing.T) {
+		h, p, horloge, minuterie := hoteAvecPhrase(t)
+		montrer(t, h, &ecranDeTest{modele: texteFixe{"menu"}, titre: "menu"})
+		garde := garderSurLHote(t, h, p, "correct horse battery staple")
+
+		horloge.deplacerMur(-365 * 24 * time.Hour)
+		horloge.avancer(delaiOubli)
+		envoyerHote(t, h, echeancePhraseMsg{})
+		if p.active() || !toutAZero(garde) {
+			t.Errorf("phrase prolongée par une heure murale qui recule : %q", garde)
+		}
+		if len(minuterie.delais) != 1 {
+			t.Errorf("minuteur reprogrammé après le délai : %v", minuterie.delais)
+		}
+	})
+	t.Run("veille", func(t *testing.T) {
+		h, p, horloge, _ := hoteAvecPhrase(t)
+		montrer(t, h, &ecranDeTest{modele: texteFixe{"progression"}, titre: "progression", echap: true})
+		garde := garderSurLHote(t, h, p, "correct horse battery staple")
+
+		// Une heure de capot fermé : la monotone n'a avancé que d'une minute.
+		horloge.avancer(time.Minute)
+		horloge.deplacerMur(time.Hour)
+		// N'importe quel message, ici une image de l'animation, suffit.
+		envoyerHote(t, h, messageEcran{id: h.idCourant, msg: tickMsg(horloge.mur)})
+		if p.active() || !toutAZero(garde) {
+			t.Errorf("phrase encore en mémoire après la veille : %q", garde)
+		}
+		if indicateurAffiche(h) {
+			t.Error("indicateur encore affiché après la veille")
+		}
+	})
+	t.Run("minuteur sur le plus court des deux restes", func(t *testing.T) {
+		h, p, horloge, minuterie := hoteAvecPhrase(t)
+		montrer(t, h, &ecranDeTest{modele: texteFixe{"menu"}, titre: "menu"})
+		garderSurLHote(t, h, p, "correct horse battery staple")
+
+		// Monotone +5 min (le minuteur arrive), murale +4 min seulement
+		// (recul d'1 min entre-temps) : la monotone est échue, la phrase aussi.
+		horloge.avancer(4 * time.Minute)
+		horloge.mono += time.Minute
+		envoyerHote(t, h, echeancePhraseMsg{})
+		if p.active() {
+			t.Fatal("phrase gardée alors que l'horloge monotone est échue")
+		}
+
+		// Murale +3 min, monotone +1 min : reste 2 min, pas 4.
+		garderSurLHote(t, h, p, "seconde phrase")
+		n := len(minuterie.delais)
+		horloge.avancer(time.Minute)
+		horloge.deplacerMur(2 * time.Minute)
+		envoyerHote(t, h, echeancePhraseMsg{})
+		if len(minuterie.delais) != n+1 || minuterie.delais[n] != 2*time.Minute {
+			t.Errorf("minuteurs = %v, attendu un dernier de 2m0s", minuterie.delais)
+		}
+	})
 }
