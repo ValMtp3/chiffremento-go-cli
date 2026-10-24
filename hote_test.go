@@ -1,0 +1,395 @@
+package main
+
+import (
+	"errors"
+	"fmt"
+	"io"
+	"reflect"
+	"strings"
+	"testing"
+	"time"
+
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/huh"
+	"github.com/charmbracelet/lipgloss"
+)
+
+// ecranDeTest donne à n'importe quel modèle ce qu'il faut pour être un
+// sous-écran : un titre, ses touches, et éventuellement les touches qu'il garde
+// pour lui (saisie de texte, Échap).
+type ecranDeTest struct {
+	modele  tea.Model
+	titre   string
+	touches string
+	saisie  bool
+	echap   bool
+}
+
+func (e *ecranDeTest) Init() tea.Cmd { return e.modele.Init() }
+
+func (e *ecranDeTest) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	m, cmd := e.modele.Update(msg)
+	e.modele = m
+	return e, cmd
+}
+
+func (e *ecranDeTest) View() string        { return e.modele.View() }
+func (e *ecranDeTest) Titre() string       { return e.titre }
+func (e *ecranDeTest) Touches() string     { return e.touches }
+func (e *ecranDeTest) saisitDuTexte() bool { return e.saisie }
+func (e *ecranDeTest) gardeEchap() bool    { return e.echap }
+
+// texteFixe est un modèle qui n'affiche qu'un texte et ne réagit à rien.
+type texteFixe struct{ texte string }
+
+func (m texteFixe) Init() tea.Cmd                       { return nil }
+func (m texteFixe) Update(tea.Msg) (tea.Model, tea.Cmd) { return m, nil }
+func (m texteFixe) View() string                        { return m.texte }
+
+// seFermeTout de suite se termine dès son ouverture, comme un formulaire
+// validé : c'est le cas le plus serré pour le relais.
+type seFermeToutDeSuite struct{ numero int }
+
+func (m seFermeToutDeSuite) Init() tea.Cmd                       { return tea.Quit }
+func (m seFermeToutDeSuite) Update(tea.Msg) (tea.Model, tea.Cmd) { return m, nil }
+func (m seFermeToutDeSuite) View() string                        { return fmt.Sprintf("écran %d", m.numero) }
+
+// hoteDeTest construit un hôte sans programme ni terminal, à la taille donnée.
+func hoteDeTest(t *testing.T, largeur, hauteur int) *hote {
+	t.Helper()
+	h := nouvelHote(func(tea.Msg) {})
+	envoyerHote(t, h, tea.WindowSizeMsg{Width: largeur, Height: hauteur})
+	return h
+}
+
+// montrer remet un sous-écran à l'hôte comme le ferait afficher, sans passer
+// par un programme, et rend la demande pour lire sa réponse.
+func montrer(t *testing.T, h *hote, ecran sousEcran) demandeEcran {
+	t.Helper()
+	demande := nouvelleDemande(ecran)
+	envoyerHote(t, h, demande)
+	return demande
+}
+
+func envoyerHote(t *testing.T, h *hote, msg tea.Msg) {
+	t.Helper()
+	_, cmd := h.Update(msg)
+	derouleHote(t, h, cmd, 0)
+}
+
+// derouleHote joue le rôle de la boucle de Bubble Tea : exécute la commande,
+// réinjecte son message. Même garde-fous que derouleEtape (navigation_test.go).
+func derouleHote(t *testing.T, h *hote, cmd tea.Cmd, profondeur int) {
+	t.Helper()
+	if cmd == nil || profondeur > 40 {
+		return
+	}
+	msg := cmd()
+	if msg == nil {
+		return
+	}
+	interieur := msg
+	if m, ok := msg.(messageEcran); ok {
+		interieur = m.msg
+	}
+	// Le clignotement du curseur se réarme sans fin : aucun test ne le regarde.
+	if reflect.TypeOf(interieur).Name() == "BlinkMsg" {
+		return
+	}
+	switch msg.(type) {
+	case tea.QuitMsg, tea.InterruptMsg:
+		return
+	}
+	if v := reflect.ValueOf(msg); v.Kind() == reflect.Slice && v.Type().Elem() == reflect.TypeOf(tea.Cmd(nil)) {
+		for i := range v.Len() {
+			derouleHote(t, h, v.Index(i).Interface().(tea.Cmd), profondeur+1)
+		}
+		return
+	}
+	_, suivante := h.Update(msg)
+	derouleHote(t, h, suivante, profondeur+1)
+}
+
+func taper(t *testing.T, h *hote, texte string) {
+	t.Helper()
+	for _, r := range texte {
+		envoyerHote(t, h, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+	}
+}
+
+// reponseRecue lit la réponse d'une demande sans jamais bloquer le test.
+func reponseRecue(t *testing.T, demande demandeEcran) (resultatEcran, bool) {
+	t.Helper()
+	select {
+	case r := <-demande.reponse:
+		return r, true
+	default:
+		return resultatEcran{}, false
+	}
+}
+
+// TestRedimensionnementGardeLaSaisie : redimensionner pendant une saisie ne
+// perd ni le texte tapé ni le focus (Review Focus 1).
+func TestRedimensionnementGardeLaSaisie(t *testing.T) {
+	var valeur string
+	champ := huh.NewInput().Title("phrase").Value(&valeur)
+	autre := huh.NewInput().Title("autre")
+	form := huh.NewForm(huh.NewGroup(champ, autre)).WithShowHelp(false)
+
+	h := hoteDeTest(t, 100, 30)
+	montrer(t, h, &ecranDeTest{modele: form, titre: "saisie", touches: "⏎ valider", saisie: true})
+	taper(t, h, "abc")
+	envoyerHote(t, h, tea.WindowSizeMsg{Width: 60, Height: 20})
+
+	if form.GetFocusedField() != champ {
+		t.Fatal("le focus a quitté le champ après le redimensionnement")
+	}
+	if got := champ.GetValue(); got != "abc" {
+		t.Fatalf("saisie après redimensionnement = %q, attendu « abc »", got)
+	}
+	// Le focus est réel : la frappe suivante s'ajoute au même champ.
+	taper(t, h, "d")
+	if got := champ.GetValue(); got != "abcd" {
+		t.Fatalf("saisie après une frappe de plus = %q, attendu « abcd »", got)
+	}
+	if !strings.Contains(h.View(), "abcd") {
+		t.Errorf("la saisie n'est pas affichée :\n%s", h.View())
+	}
+	for _, ligne := range strings.Split(h.View(), "\n") {
+		if w := lipgloss.Width(ligne); w > 60 {
+			t.Errorf("ligne de largeur %d > 60 après redimensionnement : %q", w, ligne)
+		}
+	}
+}
+
+// TestAideSOuvreEtSeFerme : ? ouvre l'aide ; ?, Échap ou ⏎ la referment.
+func TestAideSOuvreEtSeFerme(t *testing.T) {
+	for _, fermeture := range []tea.KeyMsg{
+		{Type: tea.KeyRunes, Runes: []rune{'?'}},
+		{Type: tea.KeyEsc},
+		{Type: tea.KeyEnter},
+	} {
+		t.Run(fermeture.String(), func(t *testing.T) {
+			h := hoteDeTest(t, 100, 30)
+			demande := montrer(t, h, &ecranDeTest{modele: texteFixe{"menu principal"}, titre: "menu"})
+
+			taper(t, h, "?")
+			if !strings.Contains(h.View(), "raccourcis") {
+				t.Fatalf("? n'ouvre pas l'aide :\n%s", h.View())
+			}
+			if strings.Contains(h.View(), "menu principal") {
+				t.Errorf("l'écran courant reste visible sous l'aide :\n%s", h.View())
+			}
+
+			envoyerHote(t, h, fermeture)
+			if strings.Contains(h.View(), "raccourcis") {
+				t.Fatalf("%s ne referme pas l'aide :\n%s", fermeture, h.View())
+			}
+			if !strings.Contains(h.View(), "menu principal") {
+				t.Errorf("l'écran courant n'est pas revenu :\n%s", h.View())
+			}
+			// Fermer l'aide ne doit rien décider pour l'écran en dessous :
+			// Échap ou ⏎ ne remontent pas jusqu'à lui.
+			if r, recue := reponseRecue(t, demande); recue {
+				t.Errorf("fermer l'aide a terminé l'écran courant : %+v", r)
+			}
+		})
+	}
+}
+
+// TestPointDInterrogationDansUneSaisie : dans un champ texte, ? est un
+// caractère comme un autre — une phrase de passe peut en contenir.
+func TestPointDInterrogationDansUneSaisie(t *testing.T) {
+	champ := huh.NewInput().Title("phrase")
+	form := huh.NewForm(huh.NewGroup(champ)).WithShowHelp(false)
+	h := hoteDeTest(t, 100, 30)
+	montrer(t, h, &ecranDeTest{modele: form, titre: "phrase", saisie: true})
+
+	taper(t, h, "a?b")
+	if got := champ.GetValue(); got != "a?b" {
+		t.Fatalf("saisie = %q, attendu « a?b » : ? a été pris par l'hôte", got)
+	}
+	if strings.Contains(h.View(), "raccourcis") {
+		t.Error("l'aide s'est ouverte pendant une saisie")
+	}
+}
+
+// TestTerminalMinuscule : en 40×10, rien ne panique ni ne déborde, aide
+// ouverte ou non (Review Focus 5).
+func TestTerminalMinuscule(t *testing.T) {
+	h := hoteDeTest(t, 100, 30)
+	long := strings.Repeat("une ligne beaucoup trop longue pour le cadre ", 5)
+	corps := strings.TrimSuffix(strings.Repeat(long+"\n", 30), "\n")
+	montrer(t, h, &ecranDeTest{modele: texteFixe{corps}, titre: "une étape au nom très long", touches: strings.Repeat("x choisir  ", 20)})
+	envoyerHote(t, h, tea.WindowSizeMsg{Width: 40, Height: 10})
+
+	verifier := func(etat string) {
+		t.Helper()
+		lignes := strings.Split(h.View(), "\n")
+		if len(lignes) > 10 {
+			t.Errorf("%s : %d lignes pour un terminal de 10", etat, len(lignes))
+		}
+		for _, ligne := range lignes {
+			if w := lipgloss.Width(ligne); w > 40 {
+				t.Errorf("%s : ligne de largeur %d > 40 : %q", etat, w, ligne)
+			}
+		}
+	}
+	verifier("écran courant")
+	taper(t, h, "?")
+	verifier("aide ouverte")
+}
+
+// TestBarres : le fil d'Ariane en haut, les touches de l'écran et les touches
+// globales en bas, l'indicateur de phrase à droite quand il est actif.
+func TestBarres(t *testing.T) {
+	h := hoteDeTest(t, 100, 30)
+	envoyerHote(t, h, operationMsg("chiffrement"))
+	montrer(t, h, &ecranDeTest{modele: texteFixe{"options"}, titre: "options", touches: "↑↓ choisir  → valider"})
+
+	lignes := strings.Split(h.View(), "\n")
+	haut, bas := lignes[0], lignes[len(lignes)-1]
+	if !strings.Contains(haut, "chiffremento "+version+" · chiffrement › options") {
+		t.Errorf("barre du haut = %q", haut)
+	}
+	if strings.Contains(haut, "●") {
+		t.Errorf("indicateur de phrase affiché sans phrase gardée : %q", haut)
+	}
+	for _, attendu := range []string{"↑↓ choisir  → valider", "? aide", "ctrl+c quitter"} {
+		if !strings.Contains(bas, attendu) {
+			t.Errorf("barre du bas sans %q : %q", attendu, bas)
+		}
+	}
+
+	envoyerHote(t, h, indicateurPhraseMsg(true))
+	haut = strings.Split(h.View(), "\n")[0]
+	if !strings.Contains(haut, "● phrase en mémoire") {
+		t.Errorf("indicateur de phrase absent : %q", haut)
+	}
+	// Collé au bord droit du cadre : même colonne de fin que la bordure.
+	if w := lipgloss.Width(haut); w != (100-80)/2+80 {
+		t.Errorf("la barre du haut finit à la colonne %d, attendu %d : %q", w, (100-80)/2+80, haut)
+	}
+}
+
+// TestCtrlCRendErrUserAborted : Ctrl+C termine l'écran courant par
+// huh.ErrUserAborted et interrompt le programme, même aide ouverte.
+func TestCtrlCRendErrUserAborted(t *testing.T) {
+	h := hoteDeTest(t, 100, 30)
+	demande := montrer(t, h, &ecranDeTest{modele: texteFixe{"x"}})
+	taper(t, h, "?")
+
+	_, cmd := h.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+	if cmd == nil {
+		t.Fatal("Ctrl+C ne renvoie aucune commande")
+	}
+	if _, ok := cmd().(tea.InterruptMsg); !ok {
+		t.Error("Ctrl+C n'interrompt pas le programme")
+	}
+	r, recue := reponseRecue(t, demande)
+	if !recue || !errors.Is(r.err, huh.ErrUserAborted) {
+		t.Fatalf("réponse = %+v (reçue : %v), attendu huh.ErrUserAborted", r, recue)
+	}
+	// Plus personne n'affichera rien : afficher rend la main tout de suite.
+	if _, err := h.afficher(&ecranDeTest{modele: texteFixe{"y"}}); !errors.Is(err, huh.ErrUserAborted) {
+		t.Errorf("afficher après Ctrl+C = %v, attendu huh.ErrUserAborted", err)
+	}
+}
+
+// TestEchapRevientAuMenu : Échap termine l'écran par errMenu, sauf s'il garde
+// la touche pour lui (explorateur, progression).
+func TestEchapRevientAuMenu(t *testing.T) {
+	h := hoteDeTest(t, 100, 30)
+	demande := montrer(t, h, &ecranDeTest{modele: texteFixe{"x"}})
+	envoyerHote(t, h, tea.KeyMsg{Type: tea.KeyEsc})
+	if r, recue := reponseRecue(t, demande); !recue || !errors.Is(r.err, errMenu) {
+		t.Fatalf("réponse = %+v (reçue : %v), attendu errMenu", r, recue)
+	}
+
+	demande = montrer(t, h, &ecranDeTest{modele: texteFixe{"x"}, echap: true})
+	envoyerHote(t, h, tea.KeyMsg{Type: tea.KeyEsc})
+	if r, recue := reponseRecue(t, demande); recue {
+		t.Fatalf("un écran qui garde Échap a été terminé : %+v", r)
+	}
+}
+
+// TestFinDeLEcranRendLeModeleFinal : un sous-écran qui se termine par
+// tea.Quit rend la main sans erreur, avec son modèle final, et le programme,
+// lui, continue.
+func TestFinDeLEcranRendLeModeleFinal(t *testing.T) {
+	h := hoteDeTest(t, 100, 30)
+	ecran := &ecranDeTest{modele: seFermeToutDeSuite{numero: 7}}
+	demande := montrer(t, h, ecran)
+	r, recue := reponseRecue(t, demande)
+	if !recue || r.err != nil {
+		t.Fatalf("réponse = %+v (reçue : %v), attendu une fin sans erreur", r, recue)
+	}
+	if r.modele != ecran {
+		t.Errorf("modèle final = %v, attendu l'écran affiché", r.modele)
+	}
+	if strings.Contains(h.View(), "écran 7") {
+		t.Errorf("l'écran terminé reste affiché :\n%s", h.View())
+	}
+}
+
+// TestMessagePerimeIgnore : un message produit par un écran déjà terminé —
+// son tick d'animation, sa fin tardive — ne touche pas l'écran suivant.
+func TestMessagePerimeIgnore(t *testing.T) {
+	h := hoteDeTest(t, 100, 30)
+	premier := montrer(t, h, &ecranDeTest{modele: texteFixe{"premier"}})
+	envoyerHote(t, h, tea.KeyMsg{Type: tea.KeyEsc})
+	if _, recue := reponseRecue(t, premier); !recue {
+		t.Fatal("le premier écran ne s'est pas terminé")
+	}
+	idPerime := h.prochainID - 1
+
+	second := montrer(t, h, &ecranDeTest{modele: texteFixe{"second"}})
+	envoyerHote(t, h, finEcranMsg{id: idPerime})
+	if r, recue := reponseRecue(t, second); recue {
+		t.Fatalf("la fin d'un écran périmé a terminé le suivant : %+v", r)
+	}
+	if !strings.Contains(h.View(), "second") {
+		t.Errorf("le second écran n'est plus affiché :\n%s", h.View())
+	}
+}
+
+// TestRelaisSansCourse : 100 écrans de suite confiés depuis la goroutine d'un
+// parcours à un vrai programme. go test -race y relève toute donnée partagée
+// sans synchronisation.
+func TestRelaisSansCourse(t *testing.T) {
+	var programme *tea.Program
+	h := nouvelHote(func(msg tea.Msg) { programme.Send(msg) })
+	programme = tea.NewProgram(h,
+		tea.WithInput(nil), tea.WithOutput(io.Discard), tea.WithoutSignalHandler())
+
+	// Garde-fou : un relais bloqué ferait pendre le test jusqu'au délai global
+	// de go test. On tue le programme, et l'erreur remonte ci-dessous.
+	minuteur := time.AfterFunc(30*time.Second, programme.Kill)
+	defer minuteur.Stop()
+
+	erreurs := make(chan error, 1)
+	go func() {
+		defer programme.Quit()
+		for i := range 100 {
+			modele, err := h.afficher(&ecranDeTest{modele: seFermeToutDeSuite{numero: i}, titre: "relais"})
+			if err != nil {
+				erreurs <- fmt.Errorf("écran %d : %w", i, err)
+				return
+			}
+			if got := modele.(*ecranDeTest).modele.(seFermeToutDeSuite).numero; got != i {
+				erreurs <- fmt.Errorf("écran %d : modèle final de l'écran %d", i, got)
+				return
+			}
+		}
+		erreurs <- nil
+	}()
+
+	_, errProgramme := programme.Run()
+	h.fermer()
+	if err := <-erreurs; err != nil {
+		t.Fatal(err)
+	}
+	if errProgramme != nil {
+		t.Fatalf("programme : %v", errProgramme)
+	}
+}
