@@ -6,6 +6,7 @@ import (
 	"reflect"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/huh"
@@ -87,8 +88,13 @@ type messageEcran struct {
 // operationMsg change l'opération affichée dans le fil d'Ariane.
 type operationMsg string
 
-// indicateurPhraseMsg allume ou éteint « ● phrase en mémoire ».
-type indicateurPhraseMsg bool
+// phraseGardeeMsg : le parcours vient de garder une phrase pour la session.
+// L'hôte arme alors le minuteur d'oubli.
+type phraseGardeeMsg struct{}
+
+// echeancePhraseMsg : le minuteur d'oubli est arrivé. La phrase est oubliée si
+// aucune touche n'a repoussé l'échéance entre-temps.
+type echeancePhraseMsg struct{}
 
 type hote struct {
 	// envoyer remet un message à la boucle de Bubble Tea : programme.Send en
@@ -112,12 +118,28 @@ type hote struct {
 	idCourant        uint64 // 0 : aucun écran
 	prochainID       uint64
 	operation        string
-	phraseEnMemoire  bool
 	aideOuverte      bool
+
+	// phrase est la phrase gardée de la session, nil sans session. Elle a
+	// son propre verrou : le parcours y écrit depuis sa goroutine.
+	phrase *phraseSession
+	// minuterie programme le minuteur d'oubli : tea.Tick en vrai, une
+	// minuterie de test sinon — aucun test n'attend cinq minutes.
+	minuterie func(time.Duration) tea.Cmd
+	// minuteurArme : un minuteur d'oubli est en attente. Il n'y en a jamais
+	// plus d'un : une touche repousse l'échéance sans en programmer d'autre,
+	// et c'est à son arrivée qu'on regarde s'il faut en relancer un.
+	minuteurArme bool
 }
 
 func nouvelHote(envoyer func(tea.Msg)) *hote {
-	return &hote{envoyer: envoyer, termine: make(chan struct{}), prochainID: 1}
+	return &hote{envoyer: envoyer, termine: make(chan struct{}), prochainID: 1, minuterie: minuterieOubli}
+}
+
+// minuterieOubli programme un seul réveil, à l'échéance : aucune boucle ne
+// tourne au repos pour surveiller l'inactivité.
+func minuterieOubli(d time.Duration) tea.Cmd {
+	return tea.Tick(d, func(time.Time) tea.Msg { return echeancePhraseMsg{} })
 }
 
 // afficher confie un sous-écran à l'hôte et attend sa fin. Appelée depuis la
@@ -147,8 +169,9 @@ func (h *hote) afficher(ecran sousEcran) (tea.Model, error) {
 // vue est en train de lire.
 func (h *hote) definirOperation(nom string) { h.envoyer(operationMsg(nom)) }
 
-// signalerPhrase allume ou éteint l'indicateur de phrase en mémoire.
-func (h *hote) signalerPhrase(active bool) { h.envoyer(indicateurPhraseMsg(active)) }
+// signalerPhraseGardee prévient l'hôte qu'une phrase vient d'être gardée :
+// il arme le minuteur d'oubli. L'indicateur, lui, suit la phrase elle-même.
+func (h *hote) signalerPhraseGardee() { h.envoyer(phraseGardeeMsg{}) }
 
 // quitter termine le programme à la demande du parcours. Le QuitMsg est
 // envoyé tel quel, sans passer par Update : Bubble Tea le traite lui-même et
@@ -177,9 +200,19 @@ func (h *hote) executer(p *tea.Program) (interrompu bool, err error) {
 	return !h.quitte.Load(), nil
 }
 
-// fermer libère les parcours qui attendent encore. À appeler dès que le
-// programme est sorti ; sans risque si c'est fait plusieurs fois.
-func (h *hote) fermer() { h.fermeture.Do(func() { close(h.termine) }) }
+// fermer libère les parcours qui attendent encore, et oublie pour de bon la
+// phrase de session. À appeler dès que le programme est sorti ; sans risque
+// si c'est fait plusieurs fois.
+//
+// executer l'appelle toujours avant de rendre la main, et Ctrl+C dès la
+// touche : la phrase est donc à zéro avant que main n'appelle os.Exit, quelle
+// que soit la façon de sortir.
+func (h *hote) fermer() {
+	h.fermeture.Do(func() {
+		h.phrase.fermer()
+		close(h.termine)
+	})
+}
 
 func (h *hote) Init() tea.Cmd { return nil }
 
@@ -193,9 +226,11 @@ func (h *hote) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case operationMsg:
 		h.operation = string(msg)
 		return h, nil
-	case indicateurPhraseMsg:
-		h.phraseEnMemoire = bool(msg)
-		return h, nil
+	case phraseGardeeMsg:
+		return h, h.armerOubli()
+	case echeancePhraseMsg:
+		h.minuteurArme = false
+		return h, h.armerOubli()
 	case finEcranMsg:
 		if h.courant != nil && msg.id == h.idCourant {
 			h.terminer(msg.err)
@@ -207,6 +242,8 @@ func (h *hote) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return h, h.transmettre(msg.msg)
 	case tea.KeyMsg:
+		// Toute touche compte comme une présence, sur n'importe quel écran.
+		h.phrase.repousser()
 		return h, h.touche(msg)
 	}
 	return h, h.transmettre(msg)
@@ -238,6 +275,10 @@ func (h *hote) touche(k tea.KeyMsg) tea.Cmd {
 	case k.String() == "?" && !saisie:
 		h.aideOuverte = true
 		return nil
+	case k.String() == "o" && !saisie && h.phrase.active():
+		// Jamais pendant une saisie : o peut faire partie d'une phrase.
+		h.phrase.oublier()
+		return nil
 	case k.Type == tea.KeyEsc && h.courant != nil:
 		if e, ok := h.courant.(ecranGardeEchap); !ok || !e.gardeEchap() {
 			h.terminer(errMenu)
@@ -245,6 +286,25 @@ func (h *hote) touche(k tea.KeyMsg) tea.Cmd {
 		}
 	}
 	return h.transmettre(k)
+}
+
+// armerOubli programme le minuteur d'oubli s'il en faut un : une phrase
+// gardée, et aucun minuteur déjà en attente. Une phrase dont l'échéance est
+// atteinte est oubliée sur-le-champ (restant), sans minuteur.
+//
+// La commande est rendue par Update lui-même, jamais par transmettre : elle
+// n'appartient à aucun sous-écran, et ne doit pas être jetée quand l'écran
+// change.
+func (h *hote) armerOubli() tea.Cmd {
+	if h.minuteurArme {
+		return nil
+	}
+	reste, active := h.phrase.restant()
+	if !active {
+		return nil
+	}
+	h.minuteurArme = true
+	return h.minuterie(reste)
 }
 
 // ouvrir installe le sous-écran d'une demande et lui donne tout de suite la
@@ -324,7 +384,7 @@ func (h *hote) View() string {
 
 	l := largeurCadre(h.largeur)
 	indicateur := ""
-	if h.phraseEnMemoire {
+	if h.phrase.active() {
 		indicateur = "● phrase en mémoire"
 	}
 	haut := barre(filDAriane(h.operation, titre), indicateur, l, styleDim, styleAccent)

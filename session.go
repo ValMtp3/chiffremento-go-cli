@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"sync"
+	"time"
 )
 
 // Session du plein écran : ce qui vit d'une opération à l'autre, du premier
@@ -29,6 +30,9 @@ type session struct {
 	// l'animation continue (au moins 4 s). Ctrl+C à ce moment-là sort sans ✓ ;
 	// cette ligne dit au moins que le fichier existe.
 	ecritAvantInterruption string
+	// phrase est la phrase gardée pour la session, si l'utilisateur l'a
+	// voulu. Elle a son propre verrou : l'interface la lit à chaque image.
+	phrase phraseSession
 }
 
 // sessionCourante est la session du plein écran, nil en dehors. Posée avant
@@ -116,4 +120,151 @@ func annoncer(w io.Writer, format string, args ...any) {
 		return
 	}
 	fmt.Fprint(w, texte)
+}
+
+// Phrase gardée pour la session.
+//
+// Après une opération réussie, l'utilisateur peut garder la phrase qu'il vient
+// de saisir : elle lui est proposée à la saisie suivante, comme un trousseau
+// qu'on laisse sur la table le temps de ranger la maison, et qu'on reprend dès
+// qu'on s'absente. Elle est oubliée — octets mis à zéro — après delaiOubli
+// sans aucune touche, par la touche o, et à la sortie.
+//
+// Seule la phrase est gardée, jamais la clé qui en dérive : Argon2 tourne à
+// chaque opération, et une clé n'ouvrirait de toute façon qu'un seul fichier,
+// chacun ayant son sel.
+//
+// Deux goroutines s'en servent : le parcours garde et prend, l'interface
+// repousse l'échéance et oublie. D'où le verrou, tenu le temps d'une copie au
+// plus.
+
+// delaiOubli : sans touche pendant ce délai, la phrase est oubliée.
+const delaiOubli = 5 * time.Minute
+
+type phraseSession struct {
+	mu       sync.Mutex
+	octets   []byte
+	echeance time.Time
+	// fermee : la session est finie, plus rien ne sera gardé. Un parcours
+	// encore en vie après Ctrl+C ne doit pas reposer une phrase après
+	// l'oubli de la sortie.
+	fermee bool
+	// horloge rend l'heure : time.Now en vrai, une horloge de test sinon.
+	horloge func() time.Time
+}
+
+// maintenant rend l'heure murale, sans lecture monotone (Round(0)). Sous
+// macOS, l'horloge monotone de Go s'arrête pendant la veille : avec elle, une
+// heure de capot fermé ne compterait pas, et la phrase survivrait bien
+// au-delà des 5 minutes annoncées. L'heure murale, elle, avance.
+func (p *phraseSession) maintenant() time.Time {
+	if p.horloge != nil {
+		return p.horloge().Round(0)
+	}
+	return time.Now().Round(0)
+}
+
+// garder remplace la phrase gardée par une copie de secret : l'appelant reste
+// libre d'effacer la sienne. L'ancienne est mise à zéro avant d'être lâchée.
+func (p *phraseSession) garder(secret []byte) {
+	if p == nil || len(secret) == 0 {
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.fermee {
+		return
+	}
+	zero(p.octets)
+	p.octets = append(make([]byte, 0, len(secret)), secret...)
+	p.echeance = p.maintenant().Add(delaiOubli)
+}
+
+// prendre rend une copie neuve de la phrase, que l'appelant met à zéro après
+// usage : celle de la session peut être oubliée pendant qu'il s'en sert.
+func (p *phraseSession) prendre() ([]byte, bool) {
+	if p == nil {
+		return nil, false
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if !p.activeVerrouillee() {
+		return nil, false
+	}
+	return append(make([]byte, 0, len(p.octets)), p.octets...), true
+}
+
+// oublier met la phrase à zéro. Sans effet s'il n'y en a pas.
+func (p *phraseSession) oublier() {
+	if p == nil {
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.oublierVerrouillee()
+}
+
+// fermer oublie la phrase pour de bon : plus rien ne sera gardé ensuite.
+func (p *phraseSession) fermer() {
+	if p == nil {
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.oublierVerrouillee()
+	p.fermee = true
+}
+
+func (p *phraseSession) oublierVerrouillee() {
+	zero(p.octets)
+	p.octets, p.echeance = nil, time.Time{}
+}
+
+// active dit si une phrase est gardée. Une phrase dont l'échéance est passée
+// ne l'est plus, même si le minuteur ne l'a pas encore effacée : elle ne doit
+// plus servir.
+func (p *phraseSession) active() bool {
+	if p == nil {
+		return false
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.activeVerrouillee()
+}
+
+func (p *phraseSession) activeVerrouillee() bool {
+	return len(p.octets) > 0 && p.maintenant().Before(p.echeance)
+}
+
+// repousser : une touche vient d'être pressée, l'échéance recule d'autant.
+// Une phrase déjà échue n'est pas ranimée : elle est effacée sur-le-champ.
+// C'est le cas au réveil d'une mise en veille, où le minuteur, compté sur
+// l'horloge monotone, arrive en retard.
+func (p *phraseSession) repousser() {
+	if p == nil {
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.activeVerrouillee() {
+		p.echeance = p.maintenant().Add(delaiOubli)
+		return
+	}
+	p.oublierVerrouillee()
+}
+
+// restant dit combien de temps la phrase a encore à vivre. Une phrase dont
+// l'échéance est atteinte est oubliée sur-le-champ, et restant rend false :
+// il n'y a plus rien à attendre.
+func (p *phraseSession) restant() (time.Duration, bool) {
+	if p == nil {
+		return 0, false
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if !p.activeVerrouillee() {
+		p.oublierVerrouillee()
+		return 0, false
+	}
+	return p.echeance.Sub(p.maintenant()), true
 }

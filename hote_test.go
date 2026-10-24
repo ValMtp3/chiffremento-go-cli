@@ -58,9 +58,15 @@ func (m seFermeToutDeSuite) View() string                        { return fmt.Sp
 func hoteDeTest(t *testing.T, largeur, hauteur int) *hote {
 	t.Helper()
 	h := nouvelHote(func(tea.Msg) {})
+	// Un vrai tea.Tick de cinq minutes bloquerait derouleHote d'autant.
+	h.minuterie = minuterieInerte
 	envoyerHote(t, h, tea.WindowSizeMsg{Width: largeur, Height: hauteur})
 	return h
 }
+
+// minuterieInerte ne programme rien : les tests qui regardent le minuteur
+// d'oubli posent la leur (minuterieDeTest, session_test.go).
+func minuterieInerte(time.Duration) tea.Cmd { return nil }
 
 // montrer remet un sous-écran à l'hôte comme le ferait afficher, sans passer
 // par un programme, et rend la demande pour lire sa réponse.
@@ -261,7 +267,9 @@ func TestBarres(t *testing.T) {
 		}
 	}
 
-	envoyerHote(t, h, indicateurPhraseMsg(true))
+	h.phrase = &phraseSession{}
+	h.phrase.garder([]byte("phrase gardée"))
+	envoyerHote(t, h, phraseGardeeMsg{})
 	haut = strings.Split(h.View(), "\n")[0]
 	if !strings.Contains(haut, "● phrase en mémoire") {
 		t.Errorf("indicateur de phrase absent : %q", haut)

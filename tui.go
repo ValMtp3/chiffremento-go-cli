@@ -57,6 +57,10 @@ func runTUI() (int, error) {
 	// parcours encore en vie après Ctrl+C (une dérivation Argon2 ne
 	// s'interrompt pas) les lit sans verrou.
 	hoteCourant, sessionCourante = h, s
+	// L'hôte connaît la phrase de session : il arme le minuteur d'oubli et
+	// l'efface à la sortie (fermer, appelé par executer et par Ctrl+C), donc
+	// avant que main n'appelle os.Exit.
+	h.phrase = &s.phrase
 	go parcoursSession(h, s)
 
 	interrompu, err := h.executer(programme)
@@ -503,6 +507,15 @@ type optionsChiffrement struct {
 	// l'avoir enregistrée.
 	genererPhrase bool
 	phrase        string
+
+	// memoire : une phrase est gardée pour la session au moment d'afficher
+	// l'écran, et la question qui la propose est donc posée. Ce n'est pas
+	// une réponse : tuiEncrypt le relit à chaque affichage.
+	memoire bool
+	// saisirMalgreMemoire : l'utilisateur a écarté la phrase en mémoire. Le
+	// zéro vaut « l'utiliser », le défaut voulu, sans toucher à
+	// appliquerDefauts.
+	saisirMalgreMemoire bool
 }
 
 // secretChoisi rend le secret qui chiffrera le fichier : la phrase générée si
@@ -595,12 +608,18 @@ func encryptForm(o *optionsChiffrement, estDossier bool, tailleClair int64) (*hu
 		// bien au-delà de ce qu'un mot de passe tapé à la main atteint. Le
 		// groupe de saisie disparaît alors, et l'écran de la phrase vient après
 		// les options (etapePhrase).
+		// Une phrase gardée pour la session est proposée d'abord. L'utiliser
+		// saute la génération, la saisie et la confirmation : elle a déjà
+		// servi à une opération réussie.
+		huh.NewGroup(questionMemoire(&o.saisirMalgreMemoire)).
+			WithHideFunc(func() bool { return !o.memoire }),
+
 		huh.NewGroup(
 			questionFermee("mot de passe",
 				fmt.Sprintf("une phrase de %d mots tirée au hasard (≈%.0f bits), ou un mot de passe de ton choix",
 					pkg.DefautMotsPhrase, pkg.EntropiePhrase(pkg.DefautMotsPhrase)),
 				"générer une phrase de passe", "le saisir moi-même", &o.genererPhrase),
-		),
+		).WithHideFunc(func() bool { return depuisLaSession(o) }),
 
 		huh.NewGroup(
 			huh.NewInput().
@@ -625,7 +644,7 @@ func encryptForm(o *optionsChiffrement, estDossier bool, tailleClair int64) (*hu
 					}
 					return nil
 				}),
-		).WithHideFunc(func() bool { return o.genererPhrase }),
+		).WithHideFunc(func() bool { return o.genererPhrase || depuisLaSession(o) }),
 	).WithTheme(formTheme()).WithKeyMap(formKeyMap()).WithShowHelp(true)
 
 	return form, algoChamp
@@ -674,6 +693,7 @@ func tuiEncrypt(path string, o *optionsChiffrement) error {
 	// La boucle sert au retour depuis la question de l'écrasement : on
 	// réaffiche les options, avec les réponses déjà saisies.
 	for {
+		o.memoire = phraseCourante().active()
 		form, ancre := encryptForm(o, estDossier, tailleClair)
 		if err := lancerEtapeNommee("options", form, ancre); err != nil {
 			return err
@@ -722,7 +742,8 @@ func tuiEncrypt(path string, o *optionsChiffrement) error {
 		// jamais tirer de phrase pour rien. Revenir aux options depuis l'écran
 		// de la phrase en tire une nouvelle au passage suivant ; aucune n'est
 		// utilisée avant d'avoir été confirmée comme enregistrée.
-		if o.genererPhrase {
+		depuisSession := depuisLaSession(o)
+		if o.genererPhrase && !depuisSession {
 			phrase, err := etapePhrase()
 			if errors.Is(err, errRetour) {
 				continue // retour aux options
@@ -767,7 +788,20 @@ func tuiEncrypt(path string, o *optionsChiffrement) error {
 		//
 		// L'effacement n'a lieu qu'ici, après le lancement de l'opération : plus
 		// haut, un retour en arrière doit encore retrouver la saisie à l'écran.
-		motDePasse := []byte(secretChoisi(o))
+		//
+		// La phrase de session, elle, arrive déjà en []byte (prendre) : aucune
+		// string n'en est tirée. Oubliée depuis la question (délai, touche o),
+		// on réaffiche les options, où la saisie est revenue.
+		var motDePasse []byte
+		if depuisSession {
+			secret, ok := phraseCourante().prendre()
+			if !ok {
+				continue
+			}
+			motDePasse = secret
+		} else {
+			motDePasse = []byte(secretChoisi(o))
+		}
 		defer func() {
 			zero(motDePasse)
 			// Le mot de passe passe par l'accesseur : un calcul de robustesse
@@ -811,7 +845,12 @@ func tuiEncrypt(path string, o *optionsChiffrement) error {
 				annoncer(os.Stderr, "  %s  %s\n\n", styleError.Render("!"), err)
 			}
 		}
-		return errSuppression
+		// Phrase tapée ou générée, opération réussie jusqu'au bout : on
+		// propose de la garder. Pas si elle venait déjà de la session.
+		if errSuppression != nil || depuisSession {
+			return errSuppression
+		}
+		return proposerDeGarder(motDePasse)
 	}
 }
 
@@ -820,11 +859,7 @@ func tuiEncrypt(path string, o *optionsChiffrement) error {
 // aussi le champ de saisie, ancre du retour vers le choix de la cible — la note
 // qui le précède n'est pas sélectionnable, huh la saute.
 func passwordForm(details string, password *string) (*huh.Form, huh.Field) {
-	champ := huh.NewInput().
-		Title("mot de passe").
-		EchoMode(huh.EchoModePassword).
-		Value(password).
-		Validate(validatePassword)
+	champ := champMotDePasse(password)
 
 	form := huh.NewForm(
 		huh.NewGroup(
@@ -834,6 +869,15 @@ func passwordForm(details string, password *string) (*huh.Form, huh.Field) {
 	).WithTheme(formTheme()).WithKeyMap(formKeyMap()).WithShowHelp(true)
 
 	return form, champ
+}
+
+// champMotDePasse est le champ masqué du déchiffrement et de la vérification.
+func champMotDePasse(password *string) huh.Field {
+	return huh.NewInput().
+		Title("mot de passe").
+		EchoMode(huh.EchoModePassword).
+		Value(password).
+		Validate(validatePassword)
 }
 
 func tuiDecrypt(path string) error {
@@ -858,14 +902,16 @@ func tuiDecrypt(path string) error {
 	}
 
 	password := ""
+	saisir := false // la phrase en mémoire, s'il y en a une, par défaut
 	out := strings.TrimSuffix(path, extension)
 	// La boucle sert au retour depuis la question de l'écrasement : on
 	// redemande le mot de passe, déjà saisi et donc déjà rempli.
 	for {
-		form, ancre := passwordForm(details, &password)
+		form, ancre, proposee := formulaireMotDePasse(details, &password, &saisir)
 		if err := lancerEtapeNommee("mot de passe", form, ancre); err != nil {
 			return err
 		}
+		depuisSession := proposee && !saisir
 
 		ecraser, err := confirmerEcrasement(out)
 		if errors.Is(err, errRetour) {
@@ -892,7 +938,13 @@ func tuiDecrypt(path string) error {
 		// saisie reste une string imposée par huh, mais rien n'oblige à en semer
 		// des copies. L'effacement vient après la boucle de retour en arrière, qui
 		// doit encore pouvoir réafficher la saisie.
-		motDePasse := []byte(password)
+		//
+		// La phrase de session est prise le plus tard possible, juste avant
+		// l'opération ; oubliée depuis la question, on redemande.
+		motDePasse, ok := secretPourOperation(depuisSession, password)
+		if !ok {
+			continue
+		}
 		defer func() {
 			zero(motDePasse)
 			password = ""
@@ -909,7 +961,10 @@ func tuiDecrypt(path string) error {
 		if err := restituerNom(out, meta); err != nil {
 			return err
 		}
-		return supprimerChiffre(path)
+		if err := supprimerChiffre(path); err != nil || depuisSession {
+			return err
+		}
+		return proposerDeGarder(motDePasse)
 	}
 }
 
@@ -1106,9 +1161,22 @@ func tuiVerify(path string) error {
 	details += "\nrien ne sera écrit sur le disque"
 
 	password := ""
-	form, ancre := passwordForm(details, &password)
-	if err := lancerEtapeNommee("mot de passe", form, ancre); err != nil {
-		return err
+	saisir := false // la phrase en mémoire, s'il y en a une, par défaut
+	var motDePasse []byte
+	depuisSession := false
+	// La boucle ne resert que si la phrase en mémoire a été oubliée entre la
+	// question et son usage (délai, touche o) : on redemande alors.
+	for {
+		form, ancre, proposee := formulaireMotDePasse(details, &password, &saisir)
+		if err := lancerEtapeNommee("mot de passe", form, ancre); err != nil {
+			return err
+		}
+		depuisSession = proposee && !saisir
+		secret, ok := secretPourOperation(depuisSession, password)
+		if ok {
+			motDePasse = secret
+			break
+		}
 	}
 
 	info := jobInfo{
@@ -1120,14 +1188,17 @@ func tuiVerify(path string) error {
 		Salt:    fmt.Sprintf("format v%d · lu dans l'en-tête", d.Version),
 		Success: verifySucces(d.Archive),
 	}
-	motDePasse := []byte(password)
 	defer func() {
 		zero(motDePasse)
 		password = ""
 	}()
-	return runJob(info, func(p func(int64, int64)) error {
+	err = runJob(info, func(p func(int64, int64)) error {
 		return pkg.Verify(path, motDePasse, pkg.Options{Progress: p})
 	})
+	if err != nil || depuisSession {
+		return err
+	}
+	return proposerDeGarder(motDePasse)
 }
 
 // teaOptions est vide en production. Les tests s'en servent pour faire

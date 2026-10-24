@@ -22,6 +22,7 @@ var raccourcis = []raccourci{
 	{"échap", "abandonner l'opération, retour au menu"},
 	{"", "dans l'explorateur : remonter d'un dossier"},
 	{"q", "quitter, depuis le menu"},
+	{"o", "oublier la phrase en mémoire, hors d'un champ texte"},
 	{"?", "ouvrir ou fermer cette aide"},
 	{"ctrl+c", "quitter tout de suite"},
 }

@@ -462,6 +462,25 @@ interdits et espaces de fin sous Windows) avant tout renommage.
 
 Tests : TestAdapterNomReglesWindows, TestNomUtilisableAdapteSousWindows, TestNomUtilisableIdentiteSousUnix
 
+### R-TUI-12 — Phrase gardée pour la session, sur demande
+En plein écran, après une opération réussie (chiffrer, déchiffrer, vérifier)
+dont la phrase a été tapée ou générée, l'interface demande « garder cette
+phrase pour la session ? », « ne pas la garder » par défaut ; Échap vaut non.
+Rien n'est gardé sans oui. Une phrase gardée est signalée par « ● phrase en
+mémoire » en haut, et proposée à la saisie suivante (« utiliser la phrase en
+mémoire », par défaut, ou « la saisir ») ; l'utiliser au chiffrement saute la
+génération, la saisie et la confirmation. La question de la garder n'est pas
+reposée quand la phrase venait de la session. Changer de mot de passe demande
+toujours une saisie.
+
+La phrase est oubliée, octets mis à zéro et indicateur éteint, après 5 min
+sans touche (sur n'importe quel écran, progression comprise), par la touche
+`o` (hors d'un champ texte), et à la sortie, normale ou par Ctrl+C, avant la
+fin du processus. Seule la phrase est gardée, jamais une clé dérivée. Un seul
+minuteur est en attente quand une phrase est gardée, aucun sinon.
+
+Tests : TestPrendreRendUneCopie, TestPhraseOublieeApresDelai, TestToucheOOublie, TestPhraseOublieeALaSortie, TestUnSeulMinuteur, TestGarderDemandeAccord, TestPhraseProposeeALaSaisie, TestPasswdNeProposePasLaPhrase, TestE2EPhraseGardeePourLaSession
+
 ## PHR — phrase de passe
 
 ### R-PHR-01 — Structure de la phrase générée

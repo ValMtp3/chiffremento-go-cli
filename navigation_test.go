@@ -452,6 +452,8 @@ func hoteSynchrone(t *testing.T, largeur, hauteur int) (*hote, chan tea.Msg) {
 	t.Helper()
 	boite := make(chan tea.Msg, 8)
 	h := nouvelHote(func(msg tea.Msg) { boite <- msg })
+	// Un vrai tea.Tick de cinq minutes bloquerait derouleHote d'autant.
+	h.minuterie = minuterieInerte
 	envoyerHote(t, h, tea.WindowSizeMsg{Width: largeur, Height: hauteur})
 	hoteCourant = h
 	t.Cleanup(func() { hoteCourant = nil })

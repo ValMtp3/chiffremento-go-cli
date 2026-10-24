@@ -478,6 +478,27 @@ func (p *pilote) repondreSuppression(supprimer bool) {
 	p.touches(toucheEntree)
 }
 
+// repondreGarder répond à la question posée après une opération réussie avec
+// une phrase tapée : la garder pour la session ou non. « ne pas la garder »
+// est sous le curseur ; « la garder » est juste au-dessus.
+func (p *pilote) repondreGarder(garder bool) {
+	p.t.Helper()
+	p.attendre(curseur + "ne pas la garder")
+	if garder {
+		p.touches(toucheHaut)
+		p.attendre(curseur + "la garder")
+	}
+	p.touches(toucheEntree)
+}
+
+// accepterPhraseEnMemoire valide « utiliser la phrase en mémoire », proposé
+// par défaut à la place du champ du mot de passe.
+func (p *pilote) accepterPhraseEnMemoire() {
+	p.t.Helper()
+	p.attendre(curseur + "utiliser la phrase en mémoire")
+	p.touches(toucheEntree)
+}
+
 // attendreSuccesVerification attend le message de fin d'une vérification
 // réussie d'un fichier.
 func (p *pilote) attendreSuccesVerification() {
@@ -637,6 +658,7 @@ func TestE2EChiffrerPuisDechiffrer(t *testing.T) {
 	p.validerOptionsParDefaut()
 	p.saisirPhrase("correct horse battery staple", true)
 	p.repondreSuppression(false)
+	p.repondreGarder(false)
 	p.revenirAuMenu()
 	if _, err := os.Stat(filepath.Join(dossier, "secret.txt.chto")); err != nil {
 		t.Fatalf("aucun chiffré produit : %v", err)
@@ -650,6 +672,47 @@ func TestE2EChiffrerPuisDechiffrer(t *testing.T) {
 	p.choisirAction("déchiffrer")
 	p.saisirChemin("secret.txt.chto")
 	p.saisirPhrase("correct horse battery staple", false)
+	p.repondreSuppression(false)
+	p.repondreGarder(false)
+	p.revenirAuMenu()
+	p.quitter()
+	if code := p.codeDeSortie(); code != 0 {
+		t.Fatalf("session : code %d ; fin de l'écran :\n%s", code, p.queue())
+	}
+	p.terminalRestaure()
+	obtenu, err := os.ReadFile(filepath.Join(dossier, "secret.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(obtenu, original) {
+		t.Fatalf("contenu déchiffré différent : %q", obtenu)
+	}
+}
+
+// R-TUI-12 : la phrase gardée après le chiffrement est proposée au
+// déchiffrement suivant ; l'accepter suffit à restituer le contenu, sans
+// rien retaper, et la question de la garder n'est pas reposée.
+func TestE2EPhraseGardeePourLaSession(t *testing.T) {
+	dossier := t.TempDir()
+	original := []byte("données confidentielles\n")
+	ecrireFichier(t, filepath.Join(dossier, "secret.txt"), original)
+
+	p := lancerPilote(t, dossier)
+	p.choisirAction("chiffrer")
+	p.saisirChemin("secret.txt")
+	p.validerOptionsParDefaut()
+	p.saisirPhrase("correct horse battery staple", true)
+	p.repondreSuppression(false)
+	p.repondreGarder(true)
+	p.attendre("● phrase en mémoire")
+	p.revenirAuMenu()
+
+	if err := os.Remove(filepath.Join(dossier, "secret.txt")); err != nil {
+		t.Fatal(err)
+	}
+	p.choisirAction("déchiffrer")
+	p.saisirChemin("secret.txt.chto")
+	p.accepterPhraseEnMemoire()
 	p.repondreSuppression(false)
 	p.revenirAuMenu()
 	p.quitter()
@@ -691,6 +754,7 @@ func TestE2EVerifier(t *testing.T) {
 	p.saisirPhrase("phrase de controle", false)
 	// Le ✓ s'affiche dans la carte résultat, avant le retour au menu.
 	p.attendreSuccesVerification()
+	p.repondreGarder(false)
 	p.revenirAuMenu()
 	p.quitter()
 	if code := p.codeDeSortie(); code != 0 {
@@ -892,6 +956,7 @@ func TestE2EInterruptionGardeLesResumes(t *testing.T) {
 	p.validerOptionsParDefaut()
 	p.saisirPhrase("phrase du premier", true)
 	p.repondreSuppression(false)
+	p.repondreGarder(false)
 	p.revenirAuMenu()
 
 	// choisirAction attend lui-même le retour du menu.
@@ -922,6 +987,7 @@ func TestE2ESuppressionApresCoup(t *testing.T) {
 	p.validerOptionsParDefaut()
 	p.saisirPhrase("phrase de suppression", true)
 	p.repondreSuppression(true)
+	p.repondreGarder(false)
 	p.revenirAuMenu()
 	p.quitter()
 	if code := p.codeDeSortie(); code != 0 {
@@ -997,6 +1063,7 @@ func TestResumesImprimesALaSortie(t *testing.T) {
 	p.validerOptionsParDefaut()
 	p.saisirPhrase("phrase des résumés", true)
 	p.repondreSuppression(false)
+	p.repondreGarder(false)
 	p.revenirAuMenu()
 	p.quitter()
 	if code := p.codeDeSortie(); code != 0 {
