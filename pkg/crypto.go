@@ -144,6 +144,30 @@ func untrackTemp(p string) {
 	pendingMu.Unlock()
 }
 
+// errNettoye : le temporaire a été retiré par CleanupTemporaries (Ctrl+C)
+// avant la bascule. L'opération a été abandonnée, la destination reste
+// intacte.
+var errNettoye = errors.New("opération interrompue : le temporaire a été nettoyé")
+
+// basculer renomme le temporaire sur la destination, seulement s'il est encore
+// suivi, et le sort du registre. Le tout sous le verrou du registre : soit
+// CleanupTemporaries passe avant et le renommage est refusé, soit la bascule
+// passe avant et il n'y a plus rien à nettoyer. Sans ce verrou, une opération
+// qui finit pendant le nettoyage pouvait installer un dossier recréé à moitié
+// par l'extraction (MkdirAll refait les parents supprimés).
+func basculer(temp, dest string) error {
+	pendingMu.Lock()
+	defer pendingMu.Unlock()
+	if _, suivi := pending[temp]; !suivi {
+		return errNettoye
+	}
+	if err := os.Rename(temp, dest); err != nil {
+		return fmt.Errorf("renommage vers %s: %w", dest, err)
+	}
+	delete(pending, temp)
+	return nil
+}
+
 // newAtomicFile prépare l'écriture de dest. Sauf force, une destination qui
 // existe déjà est refusée : le rename final la remplacerait sans retour
 // possible, et c'est exactement le scénario que l'écriture atomique était censée
@@ -186,11 +210,10 @@ func (a *atomicFile) commit() error {
 	if err := a.f.Close(); err != nil {
 		return fmt.Errorf("fermeture du fichier temporaire: %w", err)
 	}
-	if err := os.Rename(a.f.Name(), a.dest); err != nil {
-		return fmt.Errorf("renommage vers %s: %w", a.dest, err)
+	if err := basculer(a.f.Name(), a.dest); err != nil {
+		return err
 	}
 	a.committed = true
-	untrackTemp(a.f.Name())
 
 	// Le rename doit être rendu durable lui aussi : les données sont sur le
 	// disque après le Sync, mais l'entrée de répertoire ne l'est pas forcément.
@@ -264,11 +287,10 @@ func (a *atomicDir) commit() error {
 	if err := rendreDurable(a.path); err != nil {
 		return err
 	}
-	if err := os.Rename(a.path, a.dest); err != nil {
-		return fmt.Errorf("renommage vers %s: %w", a.dest, err)
+	if err := basculer(a.path, a.dest); err != nil {
+		return err
 	}
 	a.committed = true
-	untrackTemp(a.path)
 	syncDir(filepath.Dir(a.dest))
 	return nil
 }

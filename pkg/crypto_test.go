@@ -574,6 +574,58 @@ func TestNettoyageTemporaires(t *testing.T) {
 	a.cleanup()
 }
 
+// TestCommitApresNettoyageRefuse : une opération qui finit après le nettoyage
+// d'un Ctrl+C ne doit pas basculer son temporaire sur la destination. En plein
+// écran, la goroutine de l'opération tourne encore pendant les quelques
+// millisecondes entre le nettoyage et la sortie du processus.
+//
+// Le cas du dossier est le plus sournois : l'extraction recrée les dossiers
+// parents par MkdirAll, donc le répertoire temporaire supprimé peut
+// réapparaître, à moitié rempli, et serait renommé sur la destination.
+func TestCommitApresNettoyageRefuse(t *testing.T) {
+	t.Run("dossier recréé", func(t *testing.T) {
+		dir := t.TempDir()
+		dest := filepath.Join(dir, "extrait")
+		a, err := newAtomicDir(dest)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer a.cleanup()
+
+		CleanupTemporaries()
+		// L'extraction en cours écrit le fichier suivant : MkdirAll recrée
+		// le dossier temporaire que le nettoyage vient de supprimer.
+		if err := os.MkdirAll(filepath.Join(a.path, "sous"), 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := a.commit(); err == nil {
+			t.Fatal("commit a réussi après le nettoyage")
+		}
+		if _, err := os.Lstat(dest); !os.IsNotExist(err) {
+			t.Errorf("la destination existe après un nettoyage (Lstat : %v)", err)
+		}
+		os.RemoveAll(a.path)
+	})
+
+	t.Run("fichier", func(t *testing.T) {
+		dir := t.TempDir()
+		dest := filepath.Join(dir, "cible")
+		a, err := newAtomicFile(dest, false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer a.cleanup()
+
+		CleanupTemporaries()
+		if err := a.commit(); err == nil {
+			t.Fatal("commit a réussi après le nettoyage")
+		}
+		if _, err := os.Lstat(dest); !os.IsNotExist(err) {
+			t.Errorf("la destination existe après un nettoyage (Lstat : %v)", err)
+		}
+	})
+}
+
 // --- Trous révélés par les tests de mutation ------------------------------
 
 // TestNettoyageFermeLeDescripteur : sur Ctrl+C, le temporaire est fermé avant
