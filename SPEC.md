@@ -183,10 +183,13 @@ Tests : TestTuiPasswdRefuseLesAnciensFormats
 
 ### R-TUI-08 — Écran de progression
 L'écran de progression dure au moins la durée d'animation prévue, mais la barre
-ne dépasse jamais l'avancement réel. Sa mise en page garde une largeur
-constante, sans couleur ni emoji. Ctrl+C l'interrompt.
+ne dépasse jamais l'avancement réel. En plein écran, il s'affiche dans le cadre
+de l'écran hôte : toutes ses lignes ont la largeur du cadre, qu'elles suivent
+au redimensionnement, sans couleur ni emoji. Échap n'abandonne pas une écriture
+déjà lancée ; l'aide peut s'ouvrir par-dessus sans arrêter l'opération.
+Ctrl+C l'interrompt.
 
-Tests : TestAnimationVisible, TestAnimationNeDepassePasLeReel, TestDureeEcranReelle, TestRenduLargeurConstante, TestRenduSansCouleur, TestCtrlCInterromptLaProgression
+Tests : TestAnimationVisible, TestAnimationNeDepassePasLeReel, TestDureeEcranReelle, TestRenduLargeurConstante, TestProgressionSuitLeCadre, TestRenduSansCouleur, TestCtrlCInterromptLaProgression, TestEchapPendantEcritureIgnore, TestAidePendantProgression, TestRunJobDansLHote, TestRunJobCtrlCDansLHote
 
 ### R-TUI-09 — Écrasement d'un dossier jamais proposé
 L'interface peut demander confirmation avant d'écraser un fichier, jamais un
@@ -365,9 +368,10 @@ détruite, aucun `.chto-tmp-*` ne reste, et aucun dossier à moitié extrait
 n'apparaît. L'interruption nettoie les temporaires en cours. Un abandon dans
 l'interface avant le lancement de l'opération n'écrit rien ; un abandon pendant
 l'écriture, temporaire `.chto-tmp-*` déjà créé, le supprime et ne laisse aucun
-chiffré.
+chiffré. Une opération qui se termine après ce nettoyage ne peut plus installer
+son temporaire sur la destination.
 
-Tests : TestEchecNeDetruitPasLaCible, TestDecryptFluxMauvaisMotDePasseGardeLaDestination, TestDecryptFluxMauvaisMotDePasseNeLaissePasDeFichier, TestNettoyageTemporaires, TestDossierMauvaisMotDePasse, TestE2EInterruption, TestE2EInterruptionPendantOperation, TestNettoyageFermeLeDescripteur, TestEncryptDossierIllisibleRemonteLErreur
+Tests : TestEchecNeDetruitPasLaCible, TestDecryptFluxMauvaisMotDePasseGardeLaDestination, TestDecryptFluxMauvaisMotDePasseNeLaissePasDeFichier, TestNettoyageTemporaires, TestDossierMauvaisMotDePasse, TestE2EInterruption, TestE2EInterruptionPendantOperation, TestNettoyageFermeLeDescripteur, TestEncryptDossierIllisibleRemonteLErreur, TestCommitApresNettoyageRefuse
 
 ### R-FS-03 — Fichier vide : aller-retour exact
 Un fichier vide se chiffre et se déchiffre en un fichier vide, ainsi qu'un

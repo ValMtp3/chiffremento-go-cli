@@ -3,7 +3,6 @@ package main
 import (
 	"errors"
 	"fmt"
-	"io"
 	"reflect"
 	"sync"
 	"sync/atomic"
@@ -178,69 +177,6 @@ func (h *hote) executer(p *tea.Program) (interrompu bool, err error) {
 	return !h.quitte.Load(), nil
 }
 
-// lacherMsg demande à l'hôte de confier le terminal à fn le temps qu'elle
-// tourne.
-type lacherMsg struct {
-	fn      func() error
-	reponse chan error
-}
-
-// lacher rend le terminal le temps d'exécuter fn — un programme Bubble Tea à
-// elle, comme l'écran de progression — puis reprend l'écran hôte. Appelée
-// depuis la goroutine d'un parcours, comme afficher.
-//
-// Solution d'attente : l'écran de progression rejoindra le cadre de l'hôte
-// (tâche 4). D'ici là, deux programmes ne doivent jamais lire le clavier en
-// même temps : l'un volerait les touches de l'autre, Ctrl+C compris.
-func (h *hote) lacher(fn func() error) error {
-	select {
-	case <-h.termine:
-		return huh.ErrUserAborted
-	default:
-	}
-	d := lacherMsg{fn: fn, reponse: make(chan error, 1)}
-	h.envoyer(d)
-	select {
-	case err := <-d.reponse:
-		return err
-	case <-h.termine:
-		return huh.ErrUserAborted
-	}
-}
-
-// commandeConfiee fait passer fn par tea.Exec, le mécanisme de Bubble Tea
-// pour prêter le terminal : il quitte l'écran alternatif, rend le mode
-// ligne et arrête de lire le clavier avant Run, puis rétablit tout après.
-// Run tourne dans la boucle du programme : l'hôte attend, figé, que fn ait
-// fini.
-type commandeConfiee struct {
-	fn      func() error
-	reponse chan error
-	lancee  bool
-}
-
-func (c *commandeConfiee) Run() error {
-	c.lancee = true
-	c.reponse <- c.fn()
-	return nil
-}
-
-func (c *commandeConfiee) SetStdin(io.Reader)  {}
-func (c *commandeConfiee) SetStdout(io.Writer) {}
-func (c *commandeConfiee) SetStderr(io.Writer) {}
-
-func (h *hote) confier(d lacherMsg) tea.Cmd {
-	c := &commandeConfiee{fn: d.fn, reponse: d.reponse}
-	return tea.Exec(c, func(err error) tea.Msg {
-		// Le terminal n'a pas pu être rendu : fn n'a pas tourné, le parcours
-		// attend encore sa réponse.
-		if !c.lancee {
-			c.reponse <- err
-		}
-		return nil
-	})
-}
-
 // fermer libère les parcours qui attendent encore. À appeler dès que le
 // programme est sorti ; sans risque si c'est fait plusieurs fois.
 func (h *hote) fermer() { h.fermeture.Do(func() { close(h.termine) }) }
@@ -254,8 +190,6 @@ func (h *hote) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return h, h.transmettre(h.tailleEcran())
 	case demandeEcran:
 		return h, h.ouvrir(msg)
-	case lacherMsg:
-		return h, h.confier(msg)
 	case operationMsg:
 		h.operation = string(msg)
 		return h, nil

@@ -1144,35 +1144,75 @@ var teaOptions []tea.ProgramOption
 
 // runJob lance l'opération dans une goroutine et affiche l'écran animé.
 //
-// En plein écran, l'écran de progression a encore son propre programme : il
-// passe donc par lacher, qui lui prête le terminal le temps de l'opération.
-// La tâche 4 l'installera dans le cadre de l'hôte.
+// En plein écran, l'écran de progression est un sous-écran de l'hôte, dans
+// le cadre ; sinon (TERM=dumb, tests sans terminal) il a son propre
+// programme.
 func runJob(info jobInfo, op func(progress func(done, total int64)) error) error {
 	if h := hoteCourant; h != nil {
-		return h.lacher(func() error { return runJobSeul(info, op) })
+		return runJobDansHote(h, info, op)
 	}
 	return runJobSeul(info, op)
 }
 
-// runJobSeul affiche l'écran animé dans un programme à lui.
-func runJobSeul(info jobInfo, op func(progress func(done, total int64)) error) error {
+// lancerOperation démarre op dans sa goroutine et rend l'écran qui la suit :
+// op dépose son avancement dans un compteur atomique et sa fin dans un canal,
+// que l'écran attend (progressModel.Init). Le canal a une place : la
+// goroutine de l'opération n'attend jamais l'écran, même s'il est déjà fermé.
+// finie est fermé quand op a rendu la main, quoi qu'il soit arrivé à l'écran.
+func lancerOperation(info jobInfo, op func(progress func(done, total int64)) error, largeur int) (model *progressModel, finie <-chan struct{}) {
 	if size, err := pkg.InputSize(info.In); err == nil {
 		info.Size = size
 	}
+	done := new(atomic.Int64)
+	fin := make(chan error, 1)
+	fini := make(chan struct{})
+	model = newProgressModel(info, done, largeur)
+	model.fin = fin
+	go func() {
+		defer close(fini)
+		fin <- op(func(d, _ int64) { done.Store(d) })
+	}()
+	return model, fini
+}
 
-	var done atomic.Int64
-	model := newProgressModel(info, &done)
+// runJobDansHote affiche la progression dans le cadre de l'hôte.
+//
+// Ctrl+C : l'hôte ferme l'écran et afficher rend huh.ErrUserAborted alors
+// que l'opération tourne encore. Pas d'os.Exit ici : le programme de l'hôte
+// sort en interruption, et runTUI nettoie les temporaires avant de rendre 130
+// à main. Une opération qui finirait malgré tout après ce nettoyage ne peut
+// plus basculer son temporaire sur la destination (pkg.basculer).
+//
+// En attendant la sortie du processus, runJob ne rend pas la main avant la
+// fin de l'opération : l'appelant effacerait sinon le mot de passe (zero)
+// pendant qu'Argon2 ou le chiffrement le lisent encore.
+func runJobDansHote(h *hote, info jobInfo, op func(progress func(done, total int64)) error) error {
+	// La largeur de départ est provisoire : l'hôte donne celle du cadre dès
+	// l'ouverture de l'écran.
+	ecran, finie := lancerOperation(info, op, contentWidth+2)
+	final, err := h.afficher(ecran)
+	if err != nil {
+		<-finie
+		return err
+	}
+	model, ok := final.(*progressModel)
+	if !ok {
+		return fmt.Errorf("écran de progression : modèle final inattendu %T", final)
+	}
+	if model.err != nil {
+		return model.err
+	}
+	annoncer(os.Stdout, "  %s  %s\n\n", styleAccent.Render("✓"), styleText.Render(info.Success))
+	return nil
+}
+
+// runJobSeul affiche l'écran animé dans un programme à lui, à la largeur
+// historique, avec son titre.
+func runJobSeul(info jobInfo, op func(progress func(done, total int64)) error) error {
+	model, _ := lancerOperation(info, op, contentWidth+2)
+	model.avecTitre = true
 	// Même cadence que les formulaires ; la sortie reste celle par défaut.
 	prog := tea.NewProgram(model, append([]tea.ProgramOption{tea.WithFPS(imagesParSeconde)}, teaOptions...)...)
-
-	// L'erreur passe par un canal plutôt que par une variable partagée : elle
-	// est écrite par la goroutine de chiffrement et lue ici après coup.
-	errCh := make(chan error, 1)
-	go func() {
-		err := op(func(d, _ int64) { done.Store(d) })
-		errCh <- err
-		prog.Send(doneMsg{err: err})
-	}()
 
 	if _, err := prog.Run(); err != nil {
 		// Ctrl+C ferme l'écran mais ne prévient pas l'opération : sans cette
@@ -1182,13 +1222,6 @@ func runJobSeul(info jobInfo, op func(progress func(done, total int64)) error) e
 		// processus est ce qui interrompt réellement le chiffrement.
 		if errors.Is(err, tea.ErrInterrupted) || errors.Is(err, tea.ErrProgramKilled) {
 			pkg.CleanupTemporaries()
-			// En plein écran, les résumés des opérations déjà faites
-			// attendent la sortie : celle-ci en est une, et runTUI ne la
-			// verra pas. Le terminal est déjà rendu (lacher), on peut
-			// écrire. C'est le seul endroit qui les imprime sur ce chemin.
-			if s := sessionCourante; s != nil {
-				s.imprimer(os.Stdout)
-			}
 			fmt.Fprintln(os.Stderr, "\ninterrompu")
 			os.Exit(exitInterrompu)
 		}
@@ -1198,8 +1231,10 @@ func runJobSeul(info jobInfo, op func(progress func(done, total int64)) error) e
 		pkg.CleanupTemporaries()
 		return err
 	}
-	if err := <-errCh; err != nil {
-		return err
+	// Le programme ne sort normalement qu'après doneMsg : l'erreur de
+	// l'opération est alors dans le modèle.
+	if model.err != nil {
+		return model.err
 	}
 
 	annoncer(os.Stdout, "  %s  %s\n\n", styleAccent.Render("✓"), styleText.Render(info.Success))

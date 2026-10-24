@@ -531,36 +531,3 @@ func TestQuitterTermineLeProgramme(t *testing.T) {
 		t.Fatal("quitter n'a pas terminé le programme")
 	}
 }
-
-// TestLacherConfieLeTerminal : lacher exécute la fonction hors de l'écran
-// hôte, dans la boucle du programme, et rend son erreur au parcours.
-func TestLacherConfieLeTerminal(t *testing.T) {
-	h := nouvelHote(nil)
-	p := programmeSansTerminal(t, h)
-	go func() { _, _ = h.executer(p) }()
-	t.Cleanup(func() { p.Kill() })
-
-	attendue := errors.New("échec de l'opération")
-	issue := make(chan error, 1)
-	go func() { issue <- h.lacher(func() error { return attendue }) }()
-	if err := issueRecue(t, issue); !errors.Is(err, attendue) {
-		t.Fatalf("lacher = %v, attendu %v", err, attendue)
-	}
-	go func() { issue <- h.lacher(func() error { return nil }) }()
-	if err := issueRecue(t, issue); err != nil {
-		t.Fatalf("lacher = %v, attendu nil", err)
-	}
-}
-
-// TestLacherApresFermeture : une fois l'hôte fermé, lacher n'attend pas.
-func TestLacherApresFermeture(t *testing.T) {
-	h := nouvelHote(func(tea.Msg) {})
-	h.fermer()
-	appelee := false
-	if err := h.lacher(func() error { appelee = true; return nil }); !errors.Is(err, huh.ErrUserAborted) {
-		t.Fatalf("lacher = %v, attendu huh.ErrUserAborted", err)
-	}
-	if appelee {
-		t.Error("la fonction a tourné alors que l'hôte est fermé")
-	}
-}

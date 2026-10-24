@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"io"
 	"strings"
 	"sync/atomic"
@@ -8,10 +9,11 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/huh"
 	"github.com/charmbracelet/lipgloss"
 )
 
-func demoModel(ratio float64) *progressModel {
+func demoModel(ratio float64, largeur int) *progressModel {
 	var done atomic.Int64
 	total := int64(14_900_000)
 	done.Store(int64(float64(total) * ratio))
@@ -24,36 +26,50 @@ func demoModel(ratio float64) *progressModel {
 		AEAD:   "aes-256-gcm",
 		KDF:    "argon2id  m=256MiB t=3 p=4",
 		Salt:   "16 o aléatoires · en-tête authentifié",
-	}, &done)
+	}, &done, largeur)
 	return m
 }
 
-// TestRenduLargeurConstante garantit la promesse de la DA : la mise en page ne
-// bouge pas d'un terminal à l'autre. Toutes les lignes du cadre doivent avoir
-// exactement la même largeur, quel que soit l'avancement.
-func TestRenduLargeurConstante(t *testing.T) {
-	for _, ratio := range []float64{0, 0.01, 0.5, 0.74, 0.999, 1} {
-		m := demoModel(ratio)
-		lines := strings.Split(strings.Trim(m.View(), "\n"), "\n")
+// hauteurProgression : le nombre de lignes de l'écran, cadre des détails
+// compris (9 lignes de texte et 2 de bordure).
+const hauteurProgression = 11
 
-		var width int
-		for i, line := range lines {
-			w := lipgloss.Width(line)
-			if i == 0 {
-				continue // la ligne de titre est hors cadre
+// largeursTestees : des largeurs que l'hôte peut donner à l'écran, de la plus
+// étroite (48 : l'intérieur du cadre minimal de 52 colonnes) à la plus large.
+var largeursTestees = []int{48, 52, 64, 80}
+
+// TestRenduLargeurConstante garantit la promesse de la DA : la mise en page ne
+// bouge pas pendant l'opération. Toutes les lignes ont exactement la largeur
+// donnée par le cadre, quel que soit l'avancement, et rien n'est replié — un
+// repli ajouterait des lignes et ferait sauter la barre.
+func TestRenduLargeurConstante(t *testing.T) {
+	for _, largeur := range largeursTestees {
+		for _, ratio := range []float64{0, 0.01, 0.5, 0.74, 0.999, 1} {
+			m := demoModel(ratio, largeur)
+			m.info.In = strings.Repeat("nom-de-fichier-tres-long-", 6) + ".pdf"
+			lines := strings.Split(m.View(), "\n")
+			for i, line := range lines {
+				if w := lipgloss.Width(line); w != largeur {
+					t.Errorf("largeur %d, ratio %.2f : la ligne %d fait %d colonnes\n%q",
+						largeur, ratio, i, w, line)
+				}
 			}
-			if width == 0 {
-				width = w
-				continue
-			}
-			if w != width {
-				t.Errorf("ratio %.2f : la ligne %d fait %d colonnes au lieu de %d\n%q",
-					ratio, i, w, width, line)
+			if len(lines) != hauteurProgression {
+				t.Errorf("largeur %d, ratio %.2f : %d lignes au lieu de %d (repli ?)",
+					largeur, ratio, len(lines), hauteurProgression)
 			}
 		}
-		// lipgloss compte le padding dans Width() ; seule la bordure s'ajoute.
-		if width != contentWidth+2 {
-			t.Errorf("ratio %.2f : cadre de %d colonnes, attendu %d", ratio, width, contentWidth+4)
+	}
+}
+
+// TestProgressionSuitLeCadre : l'écran prend la largeur que l'hôte lui donne
+// au redimensionnement, sans attendre une autre image.
+func TestProgressionSuitLeCadre(t *testing.T) {
+	m := demoModel(0.5, 52)
+	m.Update(tea.WindowSizeMsg{Width: 72, Height: 20})
+	for i, line := range strings.Split(m.View(), "\n") {
+		if w := lipgloss.Width(line); w != 72 {
+			t.Errorf("après redimensionnement, la ligne %d fait %d colonnes au lieu de 72", i, w)
 		}
 	}
 }
@@ -63,7 +79,7 @@ func TestRenduLargeurConstante(t *testing.T) {
 // pleins sont autorisés, ils existent dans toutes les polices mono.
 func TestRenduSansCouleur(t *testing.T) {
 	autorises := "─│┌┐└┘█░·…✓"
-	view := demoModel(0.5).View()
+	view := demoModel(0.5, contentWidth).View()
 
 	for _, r := range view {
 		if r < 0x80 || strings.ContainsRune(autorises, r) {
@@ -97,7 +113,7 @@ func TestHumanSize(t *testing.T) {
 func TestAnimationVisible(t *testing.T) {
 	var done atomic.Int64
 	total := int64(1000)
-	m := newProgressModel(jobInfo{Action: "chiffrement", Size: total}, &done)
+	m := newProgressModel(jobInfo{Action: "chiffrement", Size: total}, &done, contentWidth)
 
 	// Opération instantanée : 100 % des octets traités dès le départ.
 	done.Store(total)
@@ -123,7 +139,7 @@ func TestAnimationVisible(t *testing.T) {
 func TestAnimationNeDepassePasLeReel(t *testing.T) {
 	var done atomic.Int64
 	total := int64(1000)
-	m := newProgressModel(jobInfo{Size: total}, &done)
+	m := newProgressModel(jobInfo{Size: total}, &done, contentWidth)
 
 	done.Store(300) // 30 % réellement traités
 	m.start = m.start.Add(-10 * minDuration)
@@ -170,12 +186,176 @@ func TestDureeEcranReelle(t *testing.T) {
 // traiter tea.ErrInterrupted (temporaires nettoyés, code 130).
 func TestCtrlCInterromptLaProgression(t *testing.T) {
 	var done atomic.Int64
-	m := newProgressModel(jobInfo{Action: "chiffrement", Size: 100}, &done)
+	m := newProgressModel(jobInfo{Action: "chiffrement", Size: 100}, &done, contentWidth)
 	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
 	if cmd == nil {
 		t.Fatal("Ctrl+C ignoré : aucune commande renvoyée")
 	}
 	if _, ok := cmd().(tea.InterruptMsg); !ok {
 		t.Errorf("Ctrl+C renvoie %T, attendu tea.InterruptMsg", cmd())
+	}
+}
+
+// progressionDeTest construit un écran de progression branché sur fin, comme
+// le fait runJob.
+func progressionDeTest(fin chan error) *progressModel {
+	var done atomic.Int64
+	m := newProgressModel(jobInfo{Action: "chiffrement", In: "a.txt", Out: "a.txt.chto", Size: 100}, &done, contentWidth)
+	m.fin = fin
+	return m
+}
+
+// TestEchapPendantEcritureIgnore : pendant la progression, l'écriture est
+// lancée ; Échap ne doit pas l'abandonner à moitié (Review Focus 3). L'écran
+// reste affiché et le parcours n'obtient aucune réponse.
+func TestEchapPendantEcritureIgnore(t *testing.T) {
+	h := hoteDeTest(t, 100, 30)
+	// Les commandes d'Init ne sont pas déroulées : elles attendraient la fin
+	// d'une opération qui ne vient pas.
+	demande := nouvelleDemande(progressionDeTest(make(chan error)))
+	h.Update(demande)
+	envoyerHote(t, h, tea.KeyMsg{Type: tea.KeyEsc})
+	if r, recue := reponseRecue(t, demande); recue {
+		t.Fatalf("Échap a terminé l'écran de progression : %+v", r)
+	}
+	if !strings.Contains(h.View(), "aead") {
+		t.Errorf("l'écran de progression n'est plus affiché après Échap :\n%s", h.View())
+	}
+}
+
+// TestAidePendantProgression : ? ouvre l'aide par-dessus la progression, mais
+// l'opération continue : sa fin arrive à l'écran resté dessous, et la
+// progression revient quand l'aide se referme.
+func TestAidePendantProgression(t *testing.T) {
+	h := hoteDeTest(t, 100, 30)
+	fin := make(chan error, 1)
+	m := progressionDeTest(fin)
+	_, init := h.Update(nouvelleDemande(m))
+	// Init attend la fin de l'opération : on ne déroule sa commande qu'après
+	// l'avoir déposée, sinon le test attendrait pour toujours.
+	envoyerHote(t, h, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'?'}})
+	if !strings.Contains(h.View(), "aide") || strings.Contains(h.View(), "aead") {
+		t.Fatalf("? n'a pas ouvert l'aide par-dessus la progression :\n%s", h.View())
+	}
+	fin <- nil
+	derouleSansTick(t, h, init)
+	if !m.opDone {
+		t.Error("la fin de l'opération n'a pas atteint l'écran de progression pendant l'aide")
+	}
+	envoyerHote(t, h, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'?'}})
+	if !strings.Contains(h.View(), "aead") {
+		t.Errorf("la progression n'est pas revenue après l'aide :\n%s", h.View())
+	}
+}
+
+// derouleSansTick déroule une commande de l'hôte en ignorant les ticks
+// d'animation, qui se réarment sans fin.
+func derouleSansTick(t *testing.T, h *hote, cmd tea.Cmd) {
+	t.Helper()
+	if cmd == nil {
+		return
+	}
+	switch msg := cmd().(type) {
+	case nil:
+	case tea.BatchMsg:
+		for _, c := range msg {
+			derouleSansTick(t, h, c)
+		}
+	case messageEcran:
+		if _, tick := msg.msg.(tickMsg); tick {
+			return
+		}
+		h.Update(msg)
+	default:
+		h.Update(msg)
+	}
+}
+
+// lancerHoteDeTest fait tourner un vrai programme d'hôte, sans terminal, et le
+// déclare comme hôte du plein écran le temps du test.
+func lancerHoteDeTest(t *testing.T) (*hote, *tea.Program, chan bool) {
+	t.Helper()
+	h := nouvelHote(nil)
+	p := programmeSansTerminal(t, h)
+	fin := make(chan bool, 1)
+	go func() {
+		interrompu, _ := h.executer(p)
+		fin <- interrompu
+	}()
+	p.Send(tea.WindowSizeMsg{Width: 100, Height: 30})
+	hoteCourant, sessionCourante = h, &session{}
+	t.Cleanup(func() {
+		hoteCourant, sessionCourante = nil, nil
+		p.Kill()
+	})
+	return h, p, fin
+}
+
+// TestRunJobDansLHote : en plein écran, runJob affiche la progression dans le
+// cadre de l'hôte — pas de programme à lui, pas de terminal prêté — et rend
+// l'erreur de l'opération. Le programme de l'hôte continue ensuite.
+func TestRunJobDansLHote(t *testing.T) {
+	h, _, fin := lancerHoteDeTest(t)
+
+	attendue := errors.New("phrase refusée")
+	err := runJob(jobInfo{Action: "test", In: "/etc/hosts"}, func(func(int64, int64)) error { return attendue })
+	if !errors.Is(err, attendue) {
+		t.Fatalf("runJob = %v, attendu %v", err, attendue)
+	}
+
+	debut := time.Now()
+	if err := runJob(jobInfo{Action: "test", In: "/etc/hosts", Success: "ok"}, func(p func(int64, int64)) error {
+		p(1, 2)
+		return nil
+	}); err != nil {
+		t.Fatalf("runJob = %v, attendu nil", err)
+	}
+	if d := time.Since(debut); d < minDuration {
+		t.Errorf("écran fermé en %v : l'animation n'aurait pas été visible", d)
+	}
+	select {
+	case <-fin:
+		t.Fatal("le programme de l'hôte s'est arrêté avec l'opération")
+	case <-h.termine:
+		t.Fatal("l'hôte a été fermé par l'opération")
+	default:
+	}
+}
+
+// TestRunJobCtrlCDansLHote : Ctrl+C pendant la progression termine le
+// programme en interruption — runTUI nettoie alors les temporaires et sort en
+// 130 ; aucun os.Exit dans runJob. runJob, lui, ne rend la main
+// (huh.ErrUserAborted) qu'une fois l'opération finie : l'appelant efface le
+// mot de passe juste après, et l'opération pourrait encore le lire.
+func TestRunJobCtrlCDansLHote(t *testing.T) {
+	_, p, fin := lancerHoteDeTest(t)
+	bloque := make(chan struct{})
+
+	issue := make(chan error, 1)
+	go func() {
+		issue <- runJob(jobInfo{Action: "test", In: "/etc/hosts"}, func(func(int64, int64)) error {
+			<-bloque // une écriture qui n'en finit pas
+			return nil
+		})
+	}()
+	time.Sleep(100 * time.Millisecond) // le temps que l'écran s'ouvre
+	p.Send(tea.KeyMsg{Type: tea.KeyCtrlC})
+
+	select {
+	case interrompu := <-fin:
+		if !interrompu {
+			t.Error("Ctrl+C n'a pas été vu comme une interruption")
+		}
+	case <-time.After(delaiTest):
+		t.Fatal("Ctrl+C n'a pas terminé le programme")
+	}
+	select {
+	case err := <-issue:
+		t.Fatalf("runJob a rendu la main (%v) avant la fin de l'opération", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(bloque)
+	if err := issueRecue(t, issue); !errors.Is(err, huh.ErrUserAborted) {
+		t.Fatalf("runJob = %v, attendu huh.ErrUserAborted", err)
 	}
 }

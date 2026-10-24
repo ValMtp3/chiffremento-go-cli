@@ -565,6 +565,14 @@ func (p *pilote) terminalRestaure() {
 	}
 }
 
+// ecranAlternatifQuitte dit si le programme a déjà quitté l'écran alternatif
+// une fois au moins.
+func (p *pilote) ecranAlternatifQuitte() bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return bytes.Contains(p.sortie, []byte("\x1b[?1049l"))
+}
+
 // contenuDossier liste les noms présents dans dossier, triés.
 func contenuDossier(t *testing.T, dossier string) []string {
 	t.Helper()
@@ -753,6 +761,11 @@ func TestE2EInterruptionPendantOperation(t *testing.T) {
 	p.saisirPhrase("phrase d'abandon", true)
 	p.attendreProgression()
 	p.attendreTemporaire(dossier)
+	// La progression s'affiche dans le cadre de l'hôte : l'écran alternatif
+	// n'a pas été quitté pour la montrer (le terminal n'est pas prêté).
+	if p.ecranAlternatifQuitte() {
+		t.Error("l'écran alternatif a été quitté pour afficher la progression")
+	}
 	p.abandonnerParCtrlC()
 
 	if code := p.codeDeSortie(); code != exitInterrompu {

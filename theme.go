@@ -47,12 +47,12 @@ var (
 	styleError = lipgloss.NewStyle().Foreground(accent).Bold(true)
 )
 
-// Largeurs fixes : c'est ce qui rend l'affichage rigoureusement identique
-// d'un terminal à l'autre. contentWidth inclut le padding (convention
-// lipgloss), innerWidth est la place réellement disponible pour du texte.
+// Largeurs de référence. contentWidth est la largeur historique de
+// l'interface, padding compris (convention lipgloss) : c'est le plus petit
+// cadre du plein écran et la largeur de l'écran de progression hors plein
+// écran.
 const (
 	contentWidth = 52
-	innerWidth   = contentWidth - 4
 	labelWidth   = 10
 
 	infoLabelWidth = 14
