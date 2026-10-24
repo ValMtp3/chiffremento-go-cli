@@ -194,7 +194,7 @@ func etapePhrase() (string, error) {
 			"oui, je l'ai enregistrée", "pas encore", &enregistree)
 		form := huh.NewForm(huh.NewGroup(champ)).
 			WithTheme(formTheme()).WithKeyMap(formKeyMap()).WithShowHelp(true)
-		err := lancerEtape(form, champ)
+		err := lancerEtapeNommee("phrase enregistrée", form, champ)
 		if err != nil && !errors.Is(err, errRetour) {
 			return "", err
 		}

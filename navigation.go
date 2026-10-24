@@ -185,6 +185,8 @@ type etapeModel struct {
 	// dansLeCadre : affiché par l'hôte, dont la barre du bas annonce déjà le
 	// retour ; le rappel sous le formulaire ferait doublon.
 	dansLeCadre bool
+	// titre nomme l'étape dans le fil d'Ariane de l'hôte.
+	titre string
 }
 
 func newEtapeModel(form *huh.Form, ancre huh.Field) *etapeModel {
@@ -211,9 +213,10 @@ func (m *etapeModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
-// Titre est vide : huh ne dit pas le titre d'un champ, et l'opération en
-// cours suffit au fil d'Ariane, qui omet une étape vide.
-func (m *etapeModel) Titre() string { return "" }
+// Titre nomme l'étape dans le fil d'Ariane. huh ne dit pas le titre d'un
+// champ : c'est l'appelant qui le donne (lancerEtapeNommee). Vide, le fil
+// d'Ariane omet l'étape.
+func (m *etapeModel) Titre() string { return m.titre }
 
 // Touches annonce celles du champ qui a le focus. Le retour n'est annoncé que
 // là où il mène quelque part : depuis l'ancre vers l'écran d'avant, ou vers
@@ -309,12 +312,18 @@ var hoteCourant *hote
 // Une ancre nulle vaut « pas d'écran avant celui-ci » : le formulaire tourne
 // alors comme d'habitude, sous le programme de huh.
 func lancerEtape(form *huh.Form, ancre huh.Field) error {
+	return lancerEtapeNommee("", form, ancre)
+}
+
+// lancerEtapeNommee est lancerEtape avec le nom de l'étape, affiché dans le
+// fil d'Ariane du plein écran : « chiffremento vX · chiffrer › options ».
+func lancerEtapeNommee(titre string, form *huh.Form, ancre huh.Field) error {
 	// TERM=dumb : huh bascule tout seul en mode accessible, une suite de
 	// questions en texte brut sans écran à intercepter. On le laisse faire —
 	// mieux vaut pas de retour arrière qu'une interface illisible.
 	dumb := os.Getenv("TERM") == "dumb"
 	if h := hoteCourant; h != nil && !dumb {
-		return lancerEtapeDansLeCadre(h, form, ancre)
+		return lancerEtapeDansLeCadre(h, titre, form, ancre)
 	}
 	if ancre == nil || dumb {
 		return form.WithProgramOptions(optionsProgramme()...).Run()
@@ -361,8 +370,9 @@ func etapeDansLeCadre(form *huh.Form, ancre huh.Field) *etapeModel {
 // lancerEtapeDansLeCadre confie le formulaire à l'hôte au lieu de lancer un
 // programme. Le modèle est lu directement, pas celui que rend afficher : sur
 // Ctrl+C, ce dernier peut être nul.
-func lancerEtapeDansLeCadre(h *hote, form *huh.Form, ancre huh.Field) error {
+func lancerEtapeDansLeCadre(h *hote, titre string, form *huh.Form, ancre huh.Field) error {
 	m := etapeDansLeCadre(form, ancre)
+	m.titre = titre
 	if _, err := h.afficher(m); err != nil {
 		return err
 	}

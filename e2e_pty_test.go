@@ -97,6 +97,7 @@ type pilote struct {
 	err  error         // résultat de cmd.Wait, lisible après fini
 
 	action string // dernière opération choisie, pour reconnaître l'écran suivant
+	menuVu bool   // le menu est à l'écran, et aucune touche n'est partie depuis
 }
 
 // lancerPilote démarre le binaire de test comme un chiffremento sans argument,
@@ -289,6 +290,7 @@ func (p *pilote) attendreFinDeSortie() {
 // a été traitée.
 func (p *pilote) touches(seq string) {
 	p.t.Helper()
+	p.menuVu = false
 	if _, err := p.maitre.WriteString(seq); err != nil {
 		p.t.Fatalf("écriture sur le terminal: %v", err)
 	}
@@ -481,9 +483,11 @@ func (p *pilote) attendreSuccesVerification() {
 	p.attendre(verifySucces(false))
 }
 
-// attendreRefusMotDePasse attend l'annonce d'une mauvaise phrase de passe.
+// attendreRefusMotDePasse attend l'annonce d'une mauvaise phrase de passe,
+// affichée sous le menu revenu.
 func (p *pilote) attendreRefusMotDePasse() {
 	p.t.Helper()
+	p.attendreMenu()
 	p.attendre(pkg.ErrBadPassword.Error())
 }
 
@@ -492,6 +496,23 @@ func (p *pilote) attendreRefusMotDePasse() {
 func (p *pilote) abandonnerParCtrlC() {
 	p.t.Helper()
 	p.touches(toucheCtrlC)
+}
+
+// attendreMenu attend le retour au menu après une opération.
+func (p *pilote) attendreMenu() {
+	p.t.Helper()
+	p.attendre("désigner la cible")
+	p.menuVu = true
+}
+
+// quitter quitte la session depuis le menu, par la touche q, une fois le
+// menu revenu.
+func (p *pilote) quitter() {
+	p.t.Helper()
+	if !p.menuVu {
+		p.attendreMenu()
+	}
+	p.touches("q")
 }
 
 // codeDeSortie attend que le programme se termine de lui-même et rend son code.
@@ -516,8 +537,9 @@ func (p *pilote) codeDeSortie() int {
 }
 
 // terminalRestaure vérifie, une fois le programme sorti, que le terminal a
-// retrouvé ses réglages d'origine (écho, mode ligne) et que le curseur a été
-// rendu visible après avoir été masqué.
+// retrouvé ses réglages d'origine (écho, mode ligne), que le curseur a été
+// rendu visible après avoir été masqué, et que l'écran alternatif, ouvert par
+// le plein écran, a été quitté.
 func (p *pilote) terminalRestaure() {
 	p.t.Helper()
 	etat, err := term.GetState(int(p.esclave.Fd()))
@@ -533,6 +555,13 @@ func (p *pilote) terminalRestaure() {
 	const masque, montre = "\x1b[?25l", "\x1b[?25h"
 	if strings.LastIndex(brut, masque) > strings.LastIndex(brut, montre) {
 		p.t.Error("le curseur est resté masqué à la sortie")
+	}
+	const entreeAlt, sortieAlt = "\x1b[?1049h", "\x1b[?1049l"
+	if strings.LastIndex(brut, entreeAlt) < 0 {
+		p.t.Error("l'interface ne s'est pas ouverte en plein écran (écran alternatif)")
+	}
+	if strings.LastIndex(brut, entreeAlt) > strings.LastIndex(brut, sortieAlt) {
+		p.t.Error("l'écran alternatif n'a pas été quitté à la sortie")
 	}
 }
 
@@ -559,8 +588,9 @@ func ecrireFichier(t *testing.T, chemin string, contenu []byte) {
 	}
 }
 
-// R-TUI-01 et R-TUI-02 : un fichier chiffré par l'interface se déchiffre par
-// l'interface, à l'octet près.
+// R-TUI-01, R-TUI-02 et R-TUI-11 : un fichier chiffré par l'interface se
+// déchiffre par l'interface, à l'octet près, dans la même session : le menu
+// revient après chaque opération, et quitter sort en code 0.
 func TestE2EChiffrerPuisDechiffrer(t *testing.T) {
 	dossier := t.TempDir()
 	original := []byte("données confidentielles\n")
@@ -572,24 +602,24 @@ func TestE2EChiffrerPuisDechiffrer(t *testing.T) {
 	p.validerOptionsParDefaut()
 	p.saisirPhrase("correct horse battery staple", true)
 	p.repondreSuppression(false)
-	if code := p.codeDeSortie(); code != 0 {
-		t.Fatalf("chiffrement : code %d ; fin de l'écran :\n%s", code, p.queue())
-	}
 	if _, err := os.Stat(filepath.Join(dossier, "secret.txt.chto")); err != nil {
 		t.Fatalf("aucun chiffré produit : %v", err)
 	}
 
+	// L'original retiré pendant que la session continue : le déchiffrement
+	// n'a pas à demander s'il faut l'écraser.
 	if err := os.Remove(filepath.Join(dossier, "secret.txt")); err != nil {
 		t.Fatal(err)
 	}
-	p = lancerPilote(t, dossier)
 	p.choisirAction("déchiffrer")
 	p.saisirChemin("secret.txt.chto")
 	p.saisirPhrase("correct horse battery staple", false)
 	p.repondreSuppression(false)
+	p.quitter()
 	if code := p.codeDeSortie(); code != 0 {
-		t.Fatalf("déchiffrement : code %d ; fin de l'écran :\n%s", code, p.queue())
+		t.Fatalf("session : code %d ; fin de l'écran :\n%s", code, p.queue())
 	}
+	p.terminalRestaure()
 	obtenu, err := os.ReadFile(filepath.Join(dossier, "secret.txt"))
 	if err != nil {
 		t.Fatal(err)
@@ -622,6 +652,9 @@ func TestE2EVerifier(t *testing.T) {
 	p.choisirAction("vérifier")
 	p.saisirChemin("notes.txt.chto")
 	p.saisirPhrase("phrase de controle", false)
+	p.quitter()
+	// Le résumé de l'opération s'imprime après la sortie de l'écran
+	// alternatif.
 	p.attendreSuccesVerification()
 	if code := p.codeDeSortie(); code != 0 {
 		t.Fatalf("vérification : code %d ; fin de l'écran :\n%s", code, p.queue())
@@ -631,8 +664,8 @@ func TestE2EVerifier(t *testing.T) {
 	}
 }
 
-// R-TUI-05 : une mauvaise phrase est annoncée clairement, et aucun clair n'est
-// écrit.
+// R-TUI-05 et R-TUI-11 : une mauvaise phrase est annoncée clairement, aucun
+// clair n'est écrit, la session revient au menu, et quitter sort en code 1.
 func TestE2EMauvaisePhrase(t *testing.T) {
 	dossier := t.TempDir()
 	ecrireFichier(t, filepath.Join(dossier, "notes.txt"), []byte("contenu\n"))
@@ -647,9 +680,11 @@ func TestE2EMauvaisePhrase(t *testing.T) {
 	p.saisirChemin("notes.txt.chto")
 	p.saisirPhrase("une autre phrase", false)
 	p.attendreRefusMotDePasse()
+	p.quitter()
 	if code := p.codeDeSortie(); code != 1 {
 		t.Fatalf("mauvaise phrase : code %d, attendu 1", code)
 	}
+	p.terminalRestaure()
 	if apres := contenuDossier(t, dossier); !slices.Equal(avant, apres) {
 		t.Fatalf("un fichier a été écrit malgré la mauvaise phrase : %v puis %v", avant, apres)
 	}
@@ -749,6 +784,7 @@ func TestE2ESuppressionApresCoup(t *testing.T) {
 	p.validerOptionsParDefaut()
 	p.saisirPhrase("phrase de suppression", true)
 	p.repondreSuppression(true)
+	p.quitter()
 	if code := p.codeDeSortie(); code != 0 {
 		t.Fatalf("chiffrement : code %d ; fin de l'écran :\n%s", code, p.queue())
 	}
@@ -786,6 +822,7 @@ func TestE2EChangerMotDePasse(t *testing.T) {
 	p.choisirAction("changer le mot de passe")
 	p.saisirChemin("coffre.txt.chto")
 	p.changerPhrase("ancienne phrase", "nouvelle phrase de passe")
+	p.quitter()
 	if code := p.codeDeSortie(); code != 0 {
 		t.Fatalf("changement : code %d ; fin de l'écran :\n%s", code, p.queue())
 	}

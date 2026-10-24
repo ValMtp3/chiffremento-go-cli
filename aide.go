@@ -20,6 +20,7 @@ var raccourcis = []raccourci{
 	{"←", "revenir à la décision précédente"},
 	{"shift+tab", "revenir, dans un champ texte ou l'explorateur"},
 	{"échap", "abandonner l'opération, retour au menu"},
+	{"", "dans l'explorateur : remonter d'un dossier"},
 	{"q", "quitter, depuis le menu"},
 	{"?", "ouvrir ou fermer cette aide"},
 	{"ctrl+c", "quitter tout de suite"},

@@ -3,8 +3,10 @@ package main
 import (
 	"errors"
 	"fmt"
+	"io"
 	"reflect"
 	"sync"
+	"sync/atomic"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/huh"
@@ -99,6 +101,10 @@ type hote struct {
 	// une réponse qui ne viendra pas.
 	termine   chan struct{}
 	fermeture sync.Once
+	// quitte : le parcours a demandé la fin (menu « quitter »). Une sortie
+	// sans lui vient d'ailleurs — signal, panne — et compte comme une
+	// interruption.
+	quitte atomic.Bool
 
 	// Tout ce qui suit n'est touché que par la goroutine de l'interface.
 	largeur, hauteur int
@@ -145,6 +151,96 @@ func (h *hote) definirOperation(nom string) { h.envoyer(operationMsg(nom)) }
 // signalerPhrase allume ou éteint l'indicateur de phrase en mémoire.
 func (h *hote) signalerPhrase(active bool) { h.envoyer(indicateurPhraseMsg(active)) }
 
+// quitter termine le programme à la demande du parcours. Le QuitMsg est
+// envoyé tel quel, sans passer par Update : Bubble Tea le traite lui-même et
+// sort de Run normalement.
+func (h *hote) quitter() {
+	h.quitte.Store(true)
+	h.envoyer(tea.QuitMsg{})
+}
+
+// executer fait tourner le programme de l'hôte, puis libère toujours les
+// parcours qui attendent encore (fermer) : sans ça, un parcours bloqué dans
+// afficher le resterait pour toujours. C'est la seule façon de lancer
+// l'hôte, pour que l'oubli soit impossible.
+//
+// interrompu vaut true sur Ctrl+C, ou si le programme est sorti sans que le
+// parcours l'ait demandé.
+func (h *hote) executer(p *tea.Program) (interrompu bool, err error) {
+	defer h.fermer()
+	_, err = p.Run()
+	switch {
+	case errors.Is(err, tea.ErrInterrupted), errors.Is(err, tea.ErrProgramKilled):
+		return true, nil
+	case err != nil:
+		return false, err
+	}
+	return !h.quitte.Load(), nil
+}
+
+// lacherMsg demande à l'hôte de confier le terminal à fn le temps qu'elle
+// tourne.
+type lacherMsg struct {
+	fn      func() error
+	reponse chan error
+}
+
+// lacher rend le terminal le temps d'exécuter fn — un programme Bubble Tea à
+// elle, comme l'écran de progression — puis reprend l'écran hôte. Appelée
+// depuis la goroutine d'un parcours, comme afficher.
+//
+// Solution d'attente : l'écran de progression rejoindra le cadre de l'hôte
+// (tâche 4). D'ici là, deux programmes ne doivent jamais lire le clavier en
+// même temps : l'un volerait les touches de l'autre, Ctrl+C compris.
+func (h *hote) lacher(fn func() error) error {
+	select {
+	case <-h.termine:
+		return huh.ErrUserAborted
+	default:
+	}
+	d := lacherMsg{fn: fn, reponse: make(chan error, 1)}
+	h.envoyer(d)
+	select {
+	case err := <-d.reponse:
+		return err
+	case <-h.termine:
+		return huh.ErrUserAborted
+	}
+}
+
+// commandeConfiee fait passer fn par tea.Exec, le mécanisme de Bubble Tea
+// pour prêter le terminal : il quitte l'écran alternatif, rend le mode
+// ligne et arrête de lire le clavier avant Run, puis rétablit tout après.
+// Run tourne dans la boucle du programme : l'hôte attend, figé, que fn ait
+// fini.
+type commandeConfiee struct {
+	fn      func() error
+	reponse chan error
+	lancee  bool
+}
+
+func (c *commandeConfiee) Run() error {
+	c.lancee = true
+	c.reponse <- c.fn()
+	return nil
+}
+
+func (c *commandeConfiee) SetStdin(io.Reader)  {}
+func (c *commandeConfiee) SetStdout(io.Writer) {}
+func (c *commandeConfiee) SetStderr(io.Writer) {}
+
+func (h *hote) confier(d lacherMsg) tea.Cmd {
+	c := &commandeConfiee{fn: d.fn, reponse: d.reponse}
+	return tea.Exec(c, func(err error) tea.Msg {
+		// Le terminal n'a pas pu être rendu : fn n'a pas tourné, le parcours
+		// attend encore sa réponse.
+		if !c.lancee {
+			c.reponse <- err
+		}
+		return nil
+	})
+}
+
 // fermer libère les parcours qui attendent encore. À appeler dès que le
 // programme est sorti ; sans risque si c'est fait plusieurs fois.
 func (h *hote) fermer() { h.fermeture.Do(func() { close(h.termine) }) }
@@ -158,6 +254,8 @@ func (h *hote) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return h, h.transmettre(h.tailleEcran())
 	case demandeEcran:
 		return h, h.ouvrir(msg)
+	case lacherMsg:
+		return h, h.confier(msg)
 	case operationMsg:
 		h.operation = string(msg)
 		return h, nil

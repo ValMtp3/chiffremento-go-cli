@@ -18,6 +18,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/huh"
+	"github.com/charmbracelet/lipgloss"
 	"golang.org/x/term"
 )
 
@@ -27,7 +28,101 @@ func isInteractive() bool {
 	return term.IsTerminal(int(os.Stdin.Fd())) && term.IsTerminal(int(os.Stdout.Fd()))
 }
 
-// runTUI enchaîne les formulaires puis l'écran de progression.
+// runTUI lance l'interface guidée et rend le code de sortie de la session.
+//
+// En plein écran, un seul programme Bubble Tea tient le terminal (l'écran
+// hôte, en écran alternatif) et les parcours tournent dans une goroutine qui
+// lui confie chaque écran. Le menu revient après chaque opération, jusqu'à ce
+// que l'utilisateur quitte : code 0 si tout a réussi, 1 si une opération au
+// moins a échoué, 130 sur Ctrl+C.
+//
+// TERM=dumb garde le comportement d'avant : huh en mode accessible, sans
+// écran alternatif, une seule opération ; l'erreur éventuelle remonte à main.
+func runTUI() (int, error) {
+	if os.Getenv("TERM") == "dumb" {
+		// Pas de mode brut ici : Ctrl+C arrive en signal, et c'est le
+		// gestionnaire global qui nettoie et sort en 130, comme avant.
+		installSignalHandler()
+		err := uneOperation(&choixMenu{action: "enc", mode: "saisie"}, "")
+		if errors.Is(err, errQuitter) {
+			err = nil
+		}
+		return 0, err
+	}
+
+	s := &session{}
+	var programme *tea.Program
+	h := nouvelHote(func(msg tea.Msg) { programme.Send(msg) })
+	programme = tea.NewProgram(h, optionsPleinEcran()...)
+	// Posés avant le lancement du parcours et jamais remis à nil : un
+	// parcours encore en vie après Ctrl+C (une dérivation Argon2 ne
+	// s'interrompt pas) les lit sans verrou.
+	hoteCourant, sessionCourante = h, s
+	go parcoursSession(h, s)
+
+	interrompu, err := h.executer(programme)
+	if interrompu || err != nil {
+		// Une opération menée dans le parcours (le changement de mot de
+		// passe) a pu laisser un temporaire : le processus va sortir sans
+		// attendre qu'elle se termine.
+		pkg.CleanupTemporaries()
+	}
+	// L'écran alternatif est quitté : ce qui y a été annoncé s'imprime
+	// maintenant, sur le terminal ordinaire.
+	s.imprimer(os.Stdout)
+	switch {
+	case err != nil:
+		return 1, err
+	case interrompu:
+		return exitInterrompu, nil
+	}
+	return s.codeSortie(), nil
+}
+
+// optionsPleinEcran : les réglages communs (sortie sur stderr, 30 images/s)
+// et l'écran alternatif, qui rend au terminal son contenu à la sortie.
+func optionsPleinEcran() []tea.ProgramOption {
+	return append(optionsProgramme(), tea.WithAltScreen())
+}
+
+// errQuitter : l'utilisateur a choisi « quitter » au menu.
+var errQuitter = errors.New("quitter")
+
+// actionQuitter est la ligne « quitter » du menu.
+const actionQuitter = "quitter"
+
+// choixMenu porte les deux réponses du menu.
+type choixMenu struct{ action, mode string }
+
+// parcoursSession enchaîne les opérations jusqu'à « quitter » ou Ctrl+C.
+// Tourne dans sa propre goroutine, jamais dans celle de l'interface.
+//
+// Échap ramène au menu sans rien compter : l'opération a été abandonnée
+// avant son lancement. Un échec, lui, est compté et sa cause s'affiche sous
+// le menu.
+func parcoursSession(h *hote, s *session) {
+	erreur := ""
+	for {
+		// Le menu repart toujours de la première ligne : le curseur au même
+		// endroit à chaque retour vaut mieux que la dernière opération faite.
+		err := uneOperation(&choixMenu{action: "enc", mode: "saisie"}, erreur)
+		erreur = ""
+		switch {
+		case errors.Is(err, errQuitter):
+			h.quitter()
+			return
+		case errors.Is(err, huh.ErrUserAborted):
+			// Ctrl+C : l'hôte est déjà fermé, le programme sort en 130.
+			return
+		case err == nil, errors.Is(err, errMenu):
+		default:
+			s.noterEchec()
+			erreur = err.Error()
+		}
+	}
+}
+
+// uneOperation montre le menu puis mène l'opération choisie jusqu'au bout.
 //
 // Deux formulaires successifs et non un seul à groupes masqués : le second est
 // donc construit *après* que l'opération et le mode de saisie sont connus. Ça
@@ -39,9 +134,9 @@ func isInteractive() bool {
 // huh ne recule qu'à l'intérieur d'un formulaire. D'où les deux boucles — un
 // écran qui rend errRetour renvoie à celui d'avant, et les réponses déjà
 // données restent dans les variables, donc à l'écran.
-func runTUI() error {
-	action := "enc"
-	mode := "saisie"
+//
+// erreur est la cause de l'échec précédent, affichée sous le menu.
+func uneOperation(choix *choixMenu, erreur string) error {
 	path := ""
 	// Les options de chiffrement vivent ici, et non dans tuiEncrypt : un « ← » de
 	// trop sur la première question repasse par la boucle ci-dessous, et des
@@ -51,17 +146,21 @@ func runTUI() error {
 	//
 	// Elles sont en revanche remises à neuf quand la cible change : le choix de
 	// compresser suit le fait que ce soit un dossier ou un fichier, et le nom du
-	// fichier a pu peser sur les autres réponses.
+	// fichier a pu peser sur les autres réponses. Et elles ne survivent pas à
+	// l'opération : le menu suivant repart de zéro.
 	var options optionsChiffrement
 	optionsPour := ""
 	for {
-		// Premier écran : rien derrière lui, donc aucune ancre de retour.
-		if err := lancerEtape(choixForm(&action, &mode), nil); err != nil {
+		nommerOperation("")
+		if err := lancerMenu(choix, erreur); err != nil {
 			return err
 		}
+		// La cause d'un échec ne s'affiche qu'au premier retour au menu.
+		erreur = ""
+		nommerOperation(nomOperation(choix.action))
 
 		for {
-			err := etapeCible(action, mode, &path)
+			err := etapeCible(choix.action, choix.mode, &path)
 			if errors.Is(err, errRetour) {
 				break // retour au choix de l'opération
 			}
@@ -69,7 +168,7 @@ func runTUI() error {
 				return err
 			}
 
-			switch action {
+			switch choix.action {
 			case "dec":
 				err = tuiDecrypt(path)
 			case "verify":
@@ -90,6 +189,122 @@ func runTUI() error {
 	}
 }
 
+// nomOperation est le nom de l'opération dans le fil d'Ariane.
+func nomOperation(action string) string {
+	switch action {
+	case "dec":
+		return "déchiffrer"
+	case "verify":
+		return "vérifier"
+	case "passwd":
+		return "changer le mot de passe"
+	default:
+		return "chiffrer"
+	}
+}
+
+// nommerOperation met à jour le fil d'Ariane, s'il y a un hôte.
+func nommerOperation(nom string) {
+	if h := hoteCourant; h != nil {
+		h.definirOperation(nom)
+	}
+}
+
+// lancerMenu montre le menu. Rend errQuitter si l'utilisateur part.
+//
+// En plein écran, le menu est un sous-écran à lui (menuModel) : il connaît q
+// et la ligne « quitter », que le formulaire seul ne sait pas distinguer.
+// Ailleurs (TERM=dumb), « quitter » se choisit comme une opération.
+func lancerMenu(choix *choixMenu, erreur string) error {
+	form := choixForm(&choix.action, &choix.mode)
+	h := hoteCourant
+	if h == nil || os.Getenv("TERM") == "dumb" {
+		if err := lancerEtape(form, nil); err != nil {
+			return err
+		}
+	} else {
+		m := &menuModel{etapeModel: etapeDansLeCadre(form, nil), action: &choix.action, erreur: erreur}
+		m.titre = "menu"
+		if _, err := h.afficher(m); err != nil {
+			return err
+		}
+		if m.quitter {
+			return errQuitter
+		}
+		if form.State == huh.StateAborted {
+			return huh.ErrUserAborted
+		}
+	}
+	if choix.action == actionQuitter {
+		return errQuitter
+	}
+	return nil
+}
+
+// menuModel est le menu affiché par l'hôte : le formulaire du choix, plus
+// la sortie (q, ou « quitter » validé) et la cause du dernier échec.
+type menuModel struct {
+	*etapeModel
+	action  *string
+	erreur  string
+	largeur int
+	quitter bool
+}
+
+func (m *menuModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case tea.WindowSizeMsg:
+		m.largeur = msg.Width
+	case tea.KeyMsg:
+		if m.veutQuitter(msg) {
+			m.quitter = true
+			*m.action = actionQuitter
+			return m, tea.Quit
+		}
+	}
+	_, cmd := m.etapeModel.Update(msg)
+	return m, cmd
+}
+
+// veutQuitter : q partout sur le menu, qui n'a aucun champ texte ; ou une
+// touche de validation sur la ligne « quitter ». Sans cette dernière, huh
+// passerait au champ suivant, « désigner la cible », qui n'a plus de sens.
+// huh écrit la valeur à chaque mouvement du curseur : *m.action est donc
+// la ligne surlignée.
+func (m *menuModel) veutQuitter(k tea.KeyMsg) bool {
+	if k.String() == "q" {
+		return true
+	}
+	premier := m.form.GetFocusedField() == m.premier
+	switch k.String() {
+	case "enter", "right", "tab":
+		return premier && *m.action == actionQuitter
+	}
+	return false
+}
+
+// gardeEchap : sur le menu, Échap ne fait rien — il n'y a rien à abandonner.
+func (m *menuModel) gardeEchap() bool { return true }
+
+// saisitDuTexte : le menu n'a que des listes ; ? y ouvre toujours l'aide.
+func (m *menuModel) saisitDuTexte() bool { return false }
+
+func (m *menuModel) Touches() string { return "↑↓ choisir  → valider  q quitter" }
+
+func (m *menuModel) View() string {
+	vue := m.etapeModel.View()
+	if vue == "" || m.erreur == "" {
+		return vue
+	}
+	// La cause tient sur une ligne quand elle est courte ; plus longue, elle
+	// se replie au mot près plutôt que d'être coupée par le cadre.
+	ligne := styleError.Render("échec :") + " " + m.erreur
+	if m.largeur > 0 {
+		ligne = lipgloss.NewStyle().Width(m.largeur).Render(ligne)
+	}
+	return vue + "\n" + ligne
+}
+
 // etapeCible demande la cible jusqu'à en obtenir une.
 //
 // La boucle est là parce que l'explorateur tolère une sélection vide pour ne
@@ -99,7 +314,7 @@ func runTUI() error {
 func etapeCible(action, mode string, path *string) error {
 	for {
 		form, ancre := cibleForm(action, mode, path)
-		if err := lancerEtape(form, ancre); err != nil {
+		if err := lancerEtapeNommee("cible", form, ancre); err != nil {
 			return err
 		}
 		*path = trimTrailingSeparator(strings.TrimSpace(expandHome(devirerGuillemets(*path))))
@@ -121,6 +336,7 @@ func choixForm(action *string, mode *string) *huh.Form {
 					huh.NewOption("déchiffrer un "+extension+"  (fichier ou dossier)", "dec"),
 					huh.NewOption("vérifier un "+extension+"  (sans rien écrire)", "verify"),
 					huh.NewOption("changer le mot de passe d'un "+extension, "passwd"),
+					huh.NewOption(actionQuitter, actionQuitter),
 				).
 				Value(action),
 
@@ -457,7 +673,7 @@ func tuiEncrypt(path string, o *optionsChiffrement) error {
 	// réaffiche les options, avec les réponses déjà saisies.
 	for {
 		form, ancre := encryptForm(o, estDossier, tailleClair)
-		if err := lancerEtape(form, ancre); err != nil {
+		if err := lancerEtapeNommee("options", form, ancre); err != nil {
 			return err
 		}
 
@@ -573,7 +789,7 @@ func tuiEncrypt(path string, o *optionsChiffrement) error {
 		}
 		var errSuppression error
 		if errReleve != nil {
-			fmt.Printf("  %s\n\n", styleFaint.Render(raisonSansReleve(errReleve)))
+			annoncer(os.Stdout, "  %s\n\n", styleFaint.Render(raisonSansReleve(errReleve)))
 		} else {
 			errSuppression = supprimerOriginal(path, out, motDePasse, estDossier, avant)
 		}
@@ -589,7 +805,7 @@ func tuiEncrypt(path string, o *optionsChiffrement) error {
 			// laisse la vraie date en place, donc il se dit. Le taire ferait
 			// croire à une protection qui n'a pas eu lieu.
 			if err := brouillerDate(out); err != nil {
-				fmt.Fprintf(os.Stderr, "  %s  %s\n\n", styleError.Render("!"), err)
+				annoncer(os.Stderr, "  %s  %s\n\n", styleError.Render("!"), err)
 			}
 		}
 		return errSuppression
@@ -644,7 +860,7 @@ func tuiDecrypt(path string) error {
 	// redemande le mot de passe, déjà saisi et donc déjà rempli.
 	for {
 		form, ancre := passwordForm(details, &password)
-		if err := lancerEtape(form, ancre); err != nil {
+		if err := lancerEtapeNommee("mot de passe", form, ancre); err != nil {
 			return err
 		}
 
@@ -706,11 +922,11 @@ func restituerNom(out string, meta *pkg.FileMetadata) error {
 	if meta == nil || meta.Name == filepath.Base(out) {
 		return nil
 	}
-	fmt.Printf("  %s  %s\n\n", styleDim.Render("nom d'origine"), styleText.Render(meta.Name))
+	annoncer(os.Stdout, "  %s  %s\n\n", styleDim.Render("nom d'origine"), styleText.Render(meta.Name))
 
 	cible, libre := cibleRestitution(out, meta)
 	if !libre {
-		fmt.Printf("  %s\n\n", styleFaint.Render("un fichier de ce nom existe déjà ici : rien n'a été renommé"))
+		annoncer(os.Stdout, "  %s\n\n", styleFaint.Render("un fichier de ce nom existe déjà ici : rien n'a été renommé"))
 		return nil
 	}
 
@@ -731,7 +947,13 @@ func restituerNom(out string, meta *pkg.FileMetadata) error {
 	form := huh.NewForm(huh.NewGroup(champ)).
 		WithTheme(formTheme()).WithKeyMap(formKeyMap()).WithShowHelp(true)
 	// Pas d'ancre : le fichier est déchiffré, il n'y a plus d'écran où revenir.
-	if err := lancerEtape(form, nil); err != nil {
+	err := lancerEtapeNommee("nom d'origine", form, nil)
+	// Échap après l'écriture : le déchiffrement est fait, partir sans
+	// répondre garde le nom actuel, comme « garder ».
+	if errors.Is(err, errMenu) {
+		return nil
+	}
+	if err != nil {
 		return err
 	}
 	if !renommer {
@@ -744,12 +966,12 @@ func restituerNom(out string, meta *pkg.FileMetadata) error {
 	// de périphériques réservés là où l'assainissement du nom d'origine, pensé
 	// pour les séparateurs, les laisse passer.
 	if err := os.Rename(out, cible); err != nil {
-		fmt.Fprintf(os.Stderr, "  %s  %s\n\n", styleError.Render("!"),
+		annoncer(os.Stderr, "  %s  %s\n\n", styleError.Render("!"),
 			fmt.Sprintf("renommage en %s impossible (%v) : le fichier reste sous %s",
 				nomCible, err, filepath.Base(out)))
 		return nil
 	}
-	fmt.Printf("  %s  %s\n\n", styleAccent.Render("✓"), styleText.Render(cible))
+	annoncer(os.Stdout, "  %s  %s\n\n", styleAccent.Render("✓"), styleText.Render(cible))
 	return nil
 }
 
@@ -832,7 +1054,7 @@ func tuiPasswd(path string) error {
 		),
 	).WithTheme(formTheme()).WithKeyMap(formKeyMap()).WithShowHelp(true)
 
-	if err := lancerEtape(form, champ); err != nil {
+	if err := lancerEtapeNommee("mots de passe", form, champ); err != nil {
 		return err
 	}
 
@@ -852,9 +1074,9 @@ func tuiPasswd(path string) error {
 	if err := pkg.ChangePassword(path, ancienOctets, nouveauOctets); err != nil {
 		return err
 	}
-	fmt.Printf("  %s  %s\n", styleAccent.Render("✓"),
+	annoncer(os.Stdout, "  %s  %s\n", styleAccent.Render("✓"),
 		styleText.Render("mot de passe changé, le contenu n'a pas été retouché"))
-	fmt.Printf("  %s\n\n", styleFaint.Render(avertissementRevocation))
+	annoncer(os.Stdout, "  %s\n\n", styleFaint.Render(avertissementRevocation))
 	return nil
 }
 
@@ -875,7 +1097,7 @@ func tuiVerify(path string) error {
 
 	password := ""
 	form, ancre := passwordForm(details, &password)
-	if err := lancerEtape(form, ancre); err != nil {
+	if err := lancerEtapeNommee("mot de passe", form, ancre); err != nil {
 		return err
 	}
 
@@ -903,7 +1125,19 @@ func tuiVerify(path string) error {
 var teaOptions []tea.ProgramOption
 
 // runJob lance l'opération dans une goroutine et affiche l'écran animé.
+//
+// En plein écran, l'écran de progression a encore son propre programme : il
+// passe donc par lacher, qui lui prête le terminal le temps de l'opération.
+// La tâche 4 l'installera dans le cadre de l'hôte.
 func runJob(info jobInfo, op func(progress func(done, total int64)) error) error {
+	if h := hoteCourant; h != nil {
+		return h.lacher(func() error { return runJobSeul(info, op) })
+	}
+	return runJobSeul(info, op)
+}
+
+// runJobSeul affiche l'écran animé dans un programme à lui.
+func runJobSeul(info jobInfo, op func(progress func(done, total int64)) error) error {
 	if size, err := pkg.InputSize(info.In); err == nil {
 		info.Size = size
 	}
@@ -943,7 +1177,7 @@ func runJob(info jobInfo, op func(progress func(done, total int64)) error) error
 		return err
 	}
 
-	fmt.Printf("  %s  %s\n\n", styleAccent.Render("✓"), styleText.Render(info.Success))
+	annoncer(os.Stdout, "  %s  %s\n\n", styleAccent.Render("✓"), styleText.Render(info.Success))
 	return nil
 }
 
@@ -1244,7 +1478,7 @@ func confirmerEcrasement(dest string) (bool, error) {
 	// L'ancre rend errRetour quand l'utilisateur recule : l'appelant réaffiche
 	// alors ses options plutôt que d'abandonner l'opération. Reculer et annuler
 	// ne disent pas la même chose — annuler arrête tout.
-	if err := lancerEtape(form, champ); err != nil {
+	if err := lancerEtapeNommee("écrasement", form, champ); err != nil {
 		return false, err
 	}
 	if !ecraser {

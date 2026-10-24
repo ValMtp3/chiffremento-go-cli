@@ -148,14 +148,20 @@ Tests : TestE2EVerifier
 
 ### R-TUI-04 — Abandon par Ctrl+C : code 130, terminal restauré, rien d'écrit
 Ctrl+C dans l'interface sort avec le code 130, sans message d'erreur, et rend
-le terminal (écho, curseur) dans son état d'origine. Un abandon avant le
+le terminal (écho, curseur, écran alternatif quitté) dans son état d'origine. Un abandon avant le
 lancement de l'opération laisse le dossier tel qu'il était. Pendant le
 chiffrement d'un gros fichier, écran de progression affiché et temporaire
 `.chto-tmp-*` déjà présent sur le disque, il sort aussi en 130, rend le
 terminal, garde l'original intact, supprime le temporaire et ne laisse aucun
-chiffré. Échap ne fait pas quitter l'interface : son rôle sera fixé à la refonte plein écran.
+chiffré.
 
-Tests : TestE2EInterruption, TestE2EInterruptionPendantOperation
+Échap ne fait jamais quitter l'interface. Avant le lancement de l'opération,
+il l'abandonne sans rien écrire et ramène au menu ; sur le menu, il ne fait
+rien ; dans l'explorateur, il remonte d'un dossier. Après l'écriture, sur la
+question de suppression ou de renommage, il vaut « garder » et ne compte pas
+comme un échec.
+
+Tests : TestE2EInterruption, TestE2EInterruptionPendantOperation, TestEchapAvantLancementRevientAuMenu, TestEchapSurLeMenuNeFaitRien, TestEchapApresEcritureGarde, TestEchapRemonteDansLExplorateur
 
 ### R-TUI-05 — Mauvaise phrase de passe dans l'interface
 Une mauvaise phrase de passe donne un message clair, et rien n'est écrit.
@@ -194,6 +200,15 @@ L'interface guidée change le mot de passe d'un `.chto` v4 : ensuite, l'ancien
 mot de passe est refusé, le nouveau ouvre le fichier et le contenu est intact.
 
 Tests : TestE2EChangerMotDePasse
+
+### R-TUI-11 — Menu persistant, quitter et code de sortie
+En plein écran, le menu revient après chaque opération, réussie, abandonnée ou
+ratée ; un échec y laisse sa cause sur une ligne. On quitte par la ligne
+« quitter » du menu ou par la touche `q`, qui n'agit que sur le menu, jamais
+pendant une saisie. Le code de sortie de la session vaut 0 si tout a réussi, 1
+si au moins une opération a échoué, 130 sur Ctrl+C.
+
+Tests : TestQuitterDepuisLeMenu, TestQSansEffetPendantSaisie, TestCodeSortieApresEchec, TestCtrlCTermineLaSession, TestSortieExterneLibereLeParcours, TestE2EChiffrerPuisDechiffrer, TestE2EMauvaisePhrase
 
 ## FMT — compatibilité des formats
 

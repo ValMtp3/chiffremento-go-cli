@@ -459,3 +459,108 @@ func TestAideFermeeQuandLEcranChange(t *testing.T) {
 		t.Errorf("l'aide recouvre le nouvel écran :\n%s", h.View())
 	}
 }
+
+// programmeSansTerminal fait tourner un vrai programme Bubble Tea autour de
+// l'hôte, sans terminal ni rendu : le relais par programme.Send est réel.
+// L'entrée est un tube muet plutôt que rien : tea.Exec relance la lecture du
+// clavier après coup, et une entrée nulle la ferait paniquer.
+func programmeSansTerminal(t *testing.T, h *hote) *tea.Program {
+	t.Helper()
+	lecture, ecriture := io.Pipe()
+	t.Cleanup(func() { ecriture.Close() })
+	p := tea.NewProgram(h, tea.WithInput(lecture), tea.WithOutput(io.Discard), tea.WithoutRenderer(), tea.WithoutSignalHandler())
+	h.envoyer = p.Send
+	return p
+}
+
+// TestSortieExterneLibereLeParcours : si le programme sort sans que le
+// parcours l'ait demandé (signal, panne), le parcours bloqué dans afficher
+// rend la main au lieu d'attendre une réponse qui ne viendra jamais.
+func TestSortieExterneLibereLeParcours(t *testing.T) {
+	h := nouvelHote(nil)
+	p := programmeSansTerminal(t, h)
+	issue := make(chan error, 1)
+	ouvert := make(chan struct{})
+	go func() {
+		close(ouvert)
+		_, err := h.afficher(&ecranDeTest{modele: texteFixe{"en attente"}})
+		issue <- err
+	}()
+	fin := make(chan bool, 1)
+	go func() {
+		interrompu, _ := h.executer(p)
+		fin <- interrompu
+	}()
+	<-ouvert
+	time.Sleep(50 * time.Millisecond) // le temps que la demande parte
+	p.Quit()
+	select {
+	case interrompu := <-fin:
+		if !interrompu {
+			t.Error("une sortie que le parcours n'a pas demandée doit compter comme une interruption")
+		}
+	case <-time.After(delaiTest):
+		t.Fatal("executer n'a pas rendu la main")
+	}
+	if err := issueRecue(t, issue); !errors.Is(err, huh.ErrUserAborted) {
+		t.Fatalf("afficher = %v, attendu huh.ErrUserAborted", err)
+	}
+}
+
+// TestQuitterTermineLeProgramme : quitter, demandé par le parcours, termine
+// le programme normalement — pas une interruption.
+func TestQuitterTermineLeProgramme(t *testing.T) {
+	h := nouvelHote(nil)
+	p := programmeSansTerminal(t, h)
+	fin := make(chan bool, 1)
+	go func() {
+		interrompu, err := h.executer(p)
+		if err != nil {
+			t.Errorf("executer = %v", err)
+		}
+		fin <- interrompu
+	}()
+	time.Sleep(50 * time.Millisecond)
+	h.quitter()
+	select {
+	case interrompu := <-fin:
+		if interrompu {
+			t.Error("quitter a été pris pour une interruption")
+		}
+	case <-time.After(delaiTest):
+		t.Fatal("quitter n'a pas terminé le programme")
+	}
+}
+
+// TestLacherConfieLeTerminal : lacher exécute la fonction hors de l'écran
+// hôte, dans la boucle du programme, et rend son erreur au parcours.
+func TestLacherConfieLeTerminal(t *testing.T) {
+	h := nouvelHote(nil)
+	p := programmeSansTerminal(t, h)
+	go func() { _, _ = h.executer(p) }()
+	t.Cleanup(func() { p.Kill() })
+
+	attendue := errors.New("échec de l'opération")
+	issue := make(chan error, 1)
+	go func() { issue <- h.lacher(func() error { return attendue }) }()
+	if err := issueRecue(t, issue); !errors.Is(err, attendue) {
+		t.Fatalf("lacher = %v, attendu %v", err, attendue)
+	}
+	go func() { issue <- h.lacher(func() error { return nil }) }()
+	if err := issueRecue(t, issue); err != nil {
+		t.Fatalf("lacher = %v, attendu nil", err)
+	}
+}
+
+// TestLacherApresFermeture : une fois l'hôte fermé, lacher n'attend pas.
+func TestLacherApresFermeture(t *testing.T) {
+	h := nouvelHote(func(tea.Msg) {})
+	h.fermer()
+	appelee := false
+	if err := h.lacher(func() error { appelee = true; return nil }); !errors.Is(err, huh.ErrUserAborted) {
+		t.Fatalf("lacher = %v, attendu huh.ErrUserAborted", err)
+	}
+	if appelee {
+		t.Error("la fonction a tourné alors que l'hôte est fermé")
+	}
+}

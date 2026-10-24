@@ -30,17 +30,35 @@ const extension = ".chto"
 const exitInterrompu = 130
 
 func main() {
+	// Sans le moindre argument, dans un vrai terminal : interface guidée, qui
+	// rend son propre code de sortie (0, 1 si une opération a échoué, 130 sur
+	// Ctrl+C). Le gestionnaire de signal global n'y est pas installé : en
+	// plein écran, Ctrl+C passe par l'hôte, qui quitte l'écran alternatif
+	// avant de sortir — un os.Exit depuis le gestionnaire le laisserait
+	// affiché.
+	if len(os.Args) == 1 && isInteractive() {
+		code, err := runTUI()
+		if err != nil {
+			sortirSurErreur(err)
+		}
+		os.Exit(code)
+	}
 	installSignalHandler()
 	if err := run(); err != nil {
-		// Ctrl+C sur un formulaire : l'utilisateur a choisi de partir, pas la
-		// peine d'afficher « erreur : user aborted ». Échap, lui, ne quitte pas
-		// les formulaires (huh ne lie l'abandon qu'à Ctrl+C).
-		if errors.Is(err, huh.ErrUserAborted) {
-			os.Exit(exitInterrompu)
-		}
-		fmt.Fprintln(os.Stderr, styleError.Render("erreur :"), err)
-		os.Exit(1)
+		sortirSurErreur(err)
 	}
+}
+
+// sortirSurErreur traduit une erreur en code de sortie.
+func sortirSurErreur(err error) {
+	// Ctrl+C sur un formulaire : l'utilisateur a choisi de partir, pas la
+	// peine d'afficher « erreur : user aborted ». Échap, lui, ne quitte pas
+	// l'interface (voir R-TUI-04).
+	if errors.Is(err, huh.ErrUserAborted) {
+		os.Exit(exitInterrompu)
+	}
+	fmt.Fprintln(os.Stderr, styleError.Render("erreur :"), err)
+	os.Exit(1)
 }
 
 func run() error {
@@ -62,10 +80,8 @@ func run() error {
 	// Sans le moindre argument, dans un vrai terminal : interface guidée.
 	// Dans un pipe ou en CI on garde l'usage classique, sinon la TUI bloquerait
 	// sur une entrée qui n'arrivera jamais.
+	// Le terminal interactif est pris en charge par main (runTUI).
 	if len(os.Args) == 1 {
-		if isInteractive() {
-			return runTUI()
-		}
 		usage()
 		return errors.New("aucun argument fourni (l'interface guidée nécessite un terminal)")
 	}
