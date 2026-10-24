@@ -21,6 +21,14 @@ type session struct {
 	// d'origine, suppression…). Écrits pendant l'écran alternatif, ils
 	// disparaîtraient avec lui : on les garde pour les imprimer à la sortie.
 	resumes []string
+	// debut est l'indice, dans resumes, du premier résumé de l'opération en
+	// cours : la carte résultat ne montre que les siens.
+	debut int
+	// ecritAvantInterruption annonce une sortie déjà posée sur le disque
+	// alors que son ✓ n'est pas encore noté : l'opération a fini, mais
+	// l'animation continue (au moins 4 s). Ctrl+C à ce moment-là sort sans ✓ ;
+	// cette ligne dit au moins que le fichier existe.
+	ecritAvantInterruption string
 }
 
 // sessionCourante est la session du plein écran, nil en dehors. Posée avant
@@ -39,6 +47,41 @@ func (s *session) noter(resume string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.resumes = append(s.resumes, resume)
+}
+
+// ouvrirOperation marque le début d'une opération : ses résumés seront ceux
+// que montre la carte.
+func (s *session) ouvrirOperation() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.debut = len(s.resumes)
+}
+
+// resumesOperation rend une copie des résumés de l'opération en cours. Sans
+// session (TERM=dumb, tests), il n'y en a aucun.
+func (s *session) resumesOperation() []string {
+	if s == nil {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]string(nil), s.resumes[s.debut:]...)
+}
+
+// noterEcritAvantInterruption est appelée par la goroutine de l'opération
+// dès que la sortie est posée ; confirmerEcrit l'efface quand le ✓ ordinaire
+// prend le relais. Seule cette goroutine-là sait l'instant exact : runTUI
+// n'attend pas le parcours avant d'imprimer.
+func (s *session) noterEcritAvantInterruption(texte string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.ecritAvantInterruption = texte
+}
+
+func (s *session) confirmerEcrit() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.ecritAvantInterruption = ""
 }
 
 // codeSortie : 0 si tout a réussi, 1 si au moins une opération a échoué. Le
@@ -60,6 +103,7 @@ func (s *session) imprimer(w io.Writer) {
 	for _, r := range s.resumes {
 		fmt.Fprint(w, r)
 	}
+	fmt.Fprint(w, s.ecritAvantInterruption)
 }
 
 // annoncer imprime un résumé d'opération sur w, ou le confie à la session en

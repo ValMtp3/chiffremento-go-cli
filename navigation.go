@@ -187,6 +187,11 @@ type etapeModel struct {
 	dansLeCadre bool
 	// titre nomme l'étape dans le fil d'Ariane de l'hôte.
 	titre string
+	// entete s'affiche au-dessus du formulaire, dans le cadre : les résumés
+	// de l'opération (le ✓) au-dessus de la question qui suit l'écriture.
+	entete string
+	// largeur : celle de l'intérieur du cadre, pour replier l'en-tête.
+	largeur int
 }
 
 func newEtapeModel(form *huh.Form, ancre huh.Field) *etapeModel {
@@ -207,6 +212,7 @@ func (m *etapeModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// l'hôte transmet ; hors du cadre, celle du terminal, comme avant.
 	if taille, ok := msg.(tea.WindowSizeMsg); ok {
 		m.form = m.form.WithWidth(taille.Width)
+		m.largeur = taille.Width
 	}
 	modele, cmd := m.form.Update(msg)
 	m.form = modele.(*huh.Form)
@@ -268,6 +274,9 @@ func (m *etapeModel) View() string {
 	// ne rajoute surtout pas une ligne à ce moment-là.
 	if vue == "" {
 		return vue
+	}
+	if m.dansLeCadre && m.entete != "" {
+		vue = replier(m.entete, m.largeur) + "\n\n" + vue
 	}
 	// Le rappel n'apparaît que sur l'ancre, seul endroit où il est vrai :
 	// ailleurs, la touche annoncée remonte d'une question et non d'un écran, et
@@ -373,6 +382,27 @@ func etapeDansLeCadre(form *huh.Form, ancre huh.Field) *etapeModel {
 func lancerEtapeDansLeCadre(h *hote, titre string, form *huh.Form, ancre huh.Field) error {
 	m := etapeDansLeCadre(form, ancre)
 	m.titre = titre
+	return afficherEtape(h, m)
+}
+
+// lancerQuestionApresResultat pose une question qui suit l'écriture
+// (suppression, nom d'origine) sous les résumés de l'opération : le ✓ et le
+// fichier produit restent sous les yeux pendant qu'on décide. Pas d'ancre :
+// l'opération est faite, il n'y a plus d'écran où revenir.
+func lancerQuestionApresResultat(titre string, form *huh.Form) error {
+	h := hoteCourant
+	if h == nil || os.Getenv("TERM") == "dumb" {
+		return lancerEtapeNommee(titre, form, nil)
+	}
+	m := etapeDansLeCadre(form, nil)
+	m.titre = titre
+	m.entete = corpsCarte(sessionCourante.resumesOperation())
+	return afficherEtape(h, m)
+}
+
+// afficherEtape confie un formulaire préparé à l'hôte et traduit sa fin.
+func afficherEtape(h *hote, m *etapeModel) error {
+	form := m.form
 	if _, err := h.afficher(m); err != nil {
 		return err
 	}

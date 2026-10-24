@@ -222,8 +222,8 @@ func TestQSansEffetPendantSaisie(t *testing.T) {
 	}
 }
 
-// TestCodeSortieApresEchec : une opération ratée ramène au menu avec sa
-// cause, puis « quitter » sort en code 1.
+// TestCodeSortieApresEchec : une opération ratée montre sa cause dans le
+// cadre, ⏎ ramène au menu, puis « quitter » sort en code 1.
 func TestCodeSortieApresEchec(t *testing.T) {
 	t.Chdir(t.TempDir()) // chemin court : voir TestEchapAvantLancementRevientAuMenu
 	abime := "a.chto"
@@ -235,11 +235,16 @@ func TestCodeSortieApresEchec(t *testing.T) {
 	st.ecranSuivant()
 	taper(t, st.h, abime)
 	st.toucher(touche("enter"))
-	if !st.ecranSuivant() || !st.surLeMenu() {
-		t.Fatalf("l'échec n'a pas ramené au menu :\n%s", st.h.View())
+	st.ecranSuivant() // lecture de l'en-tête : l'écran se ferme de lui-même
+	if !st.ecranSuivant() {
+		t.Fatal("aucun écran après l'échec")
 	}
-	if !strings.Contains(st.h.View(), "échec") {
-		t.Errorf("la cause de l'échec n'est pas affichée sous le menu :\n%s", st.h.View())
+	if _, ok := st.h.courant.(*ecranResultat); !ok || !strings.Contains(st.h.View(), "échec") {
+		t.Fatalf("la cause de l'échec n'est pas affichée dans le cadre :\n%s", st.h.View())
+	}
+	st.toucher(touche("enter"))
+	if !st.ecranSuivant() || !st.surLeMenu() {
+		t.Fatalf("⏎ sur l'écran d'erreur n'a pas ramené au menu :\n%s", st.h.View())
 	}
 	st.toucher(toucheQ)
 	st.ecranSuivant()

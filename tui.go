@@ -18,7 +18,6 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/huh"
-	"github.com/charmbracelet/lipgloss"
 	"golang.org/x/term"
 )
 
@@ -43,7 +42,7 @@ func runTUI() (int, error) {
 		// Pas de mode brut ici : Ctrl+C arrive en signal, et c'est le
 		// gestionnaire global qui nettoie et sort en 130, comme avant.
 		installSignalHandler()
-		err := uneOperation(&choixMenu{action: "enc", mode: "saisie"}, "")
+		err := uneOperation(&choixMenu{action: "enc", mode: "saisie"})
 		if errors.Is(err, errQuitter) {
 			err = nil
 		}
@@ -98,16 +97,18 @@ type choixMenu struct{ action, mode string }
 // parcoursSession enchaîne les opérations jusqu'à « quitter » ou Ctrl+C.
 // Tourne dans sa propre goroutine, jamais dans celle de l'interface.
 //
-// Échap ramène au menu sans rien compter : l'opération a été abandonnée
-// avant son lancement. Un échec, lui, est compté et sa cause s'affiche sous
-// le menu.
+// Une opération réussie finit sur sa carte résultat ; un échec est compté et
+// finit sur l'écran d'erreur. Dans les deux cas, ⏎ ramène au menu. Échap
+// avant le lancement y ramène directement, sans rien compter : rien n'a été
+// écrit, il n'y a rien à montrer.
 func parcoursSession(h *hote, s *session) {
-	erreur := ""
 	for {
+		s.ouvrirOperation()
 		// Le menu repart toujours de la première ligne : le curseur au même
 		// endroit à chaque retour vaut mieux que la dernière opération faite.
-		err := uneOperation(&choixMenu{action: "enc", mode: "saisie"}, erreur)
-		erreur = ""
+		err := uneOperation(&choixMenu{action: "enc", mode: "saisie"})
+		lignes := s.resumesOperation()
+		var fin sousEcran
 		switch {
 		case errors.Is(err, errQuitter):
 			h.quitter()
@@ -115,10 +116,17 @@ func parcoursSession(h *hote, s *session) {
 		case errors.Is(err, huh.ErrUserAborted):
 			// Ctrl+C : l'hôte est déjà fermé, le programme sort en 130.
 			return
-		case !compteCommeEchec(err):
-		default:
+		case compteCommeEchec(err):
 			s.noterEchec()
-			erreur = err.Error()
+			fin = ecranErreurApres(lignes, err)
+		case len(lignes) > 0:
+			fin = carteResultat(lignes)
+		}
+		if fin == nil {
+			continue
+		}
+		if _, err := h.afficher(fin); errors.Is(err, huh.ErrUserAborted) {
+			return
 		}
 	}
 }
@@ -153,9 +161,7 @@ func (a annulation) Error() string { return "annulé : " + a.dest + " n'a pas é
 // huh ne recule qu'à l'intérieur d'un formulaire. D'où les deux boucles — un
 // écran qui rend errRetour renvoie à celui d'avant, et les réponses déjà
 // données restent dans les variables, donc à l'écran.
-//
-// erreur est la cause de l'échec précédent, affichée sous le menu.
-func uneOperation(choix *choixMenu, erreur string) error {
+func uneOperation(choix *choixMenu) error {
 	path := ""
 	// Les options de chiffrement vivent ici, et non dans tuiEncrypt : un « ← » de
 	// trop sur la première question repasse par la boucle ci-dessous, et des
@@ -171,11 +177,9 @@ func uneOperation(choix *choixMenu, erreur string) error {
 	optionsPour := ""
 	for {
 		nommerOperation("")
-		if err := lancerMenu(choix, erreur); err != nil {
+		if err := lancerMenu(choix); err != nil {
 			return err
 		}
-		// La cause d'un échec ne s'affiche qu'au premier retour au menu.
-		erreur = ""
 		nommerOperation(nomOperation(choix.action))
 
 		for {
@@ -234,7 +238,7 @@ func nommerOperation(nom string) {
 // En plein écran, le menu est un sous-écran à lui (menuModel) : il connaît q
 // et la ligne « quitter », que le formulaire seul ne sait pas distinguer.
 // Ailleurs (TERM=dumb), « quitter » se choisit comme une opération.
-func lancerMenu(choix *choixMenu, erreur string) error {
+func lancerMenu(choix *choixMenu) error {
 	form := choixForm(&choix.action, &choix.mode)
 	h := hoteCourant
 	if h == nil || os.Getenv("TERM") == "dumb" {
@@ -242,7 +246,7 @@ func lancerMenu(choix *choixMenu, erreur string) error {
 			return err
 		}
 	} else {
-		m := &menuModel{etapeModel: etapeDansLeCadre(form, nil), action: &choix.action, erreur: erreur}
+		m := &menuModel{etapeModel: etapeDansLeCadre(form, nil), action: &choix.action}
 		m.titre = "menu"
 		if _, err := h.afficher(m); err != nil {
 			return err
@@ -261,25 +265,18 @@ func lancerMenu(choix *choixMenu, erreur string) error {
 }
 
 // menuModel est le menu affiché par l'hôte : le formulaire du choix, plus
-// la sortie (q, ou « quitter » validé) et la cause du dernier échec.
+// la sortie (q, ou « quitter » validé).
 type menuModel struct {
 	*etapeModel
 	action  *string
-	erreur  string
-	largeur int
 	quitter bool
 }
 
 func (m *menuModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	switch msg := msg.(type) {
-	case tea.WindowSizeMsg:
-		m.largeur = msg.Width
-	case tea.KeyMsg:
-		if m.veutQuitter(msg) {
-			m.quitter = true
-			*m.action = actionQuitter
-			return m, tea.Quit
-		}
+	if k, ok := msg.(tea.KeyMsg); ok && m.veutQuitter(k) {
+		m.quitter = true
+		*m.action = actionQuitter
+		return m, tea.Quit
 	}
 	_, cmd := m.etapeModel.Update(msg)
 	return m, cmd
@@ -309,20 +306,6 @@ func (m *menuModel) gardeEchap() bool { return true }
 func (m *menuModel) saisitDuTexte() bool { return false }
 
 func (m *menuModel) Touches() string { return "↑↓ choisir  → valider  q quitter" }
-
-func (m *menuModel) View() string {
-	vue := m.etapeModel.View()
-	if vue == "" || m.erreur == "" {
-		return vue
-	}
-	// La cause tient sur une ligne quand elle est courte ; plus longue, elle
-	// se replie au mot près plutôt que d'être coupée par le cadre.
-	ligne := styleError.Render("échec :") + " " + m.erreur
-	if m.largeur > 0 {
-		ligne = lipgloss.NewStyle().Width(m.largeur).Render(ligne)
-	}
-	return vue + "\n" + ligne
-}
 
 // etapeCible demande la cible jusqu'à en obtenir une.
 //
@@ -772,6 +755,7 @@ func tuiEncrypt(path string, o *optionsChiffrement) error {
 			KDF:     o.kdf.KDFLabel(),
 			Salt:    salt,
 			Success: out,
+			Ecrit:   true,
 		}
 		// Une seule copie du mot de passe, en []byte, effacée à la sortie.
 		//
@@ -855,7 +839,7 @@ func passwordForm(details string, password *string) (*huh.Form, huh.Field) {
 func tuiDecrypt(path string) error {
 	// L'en-tête est lisible sans mot de passe : on affiche les vrais
 	// paramètres du fichier avant de demander quoi que ce soit.
-	d, err := pkg.Inspect(path)
+	d, err := lireEnTete(path)
 	if err != nil {
 		return err
 	}
@@ -898,6 +882,7 @@ func tuiDecrypt(path string) error {
 			KDF:     d.KDF,
 			Salt:    fmt.Sprintf("format v%d · lu dans l'en-tête", d.Version),
 			Success: out,
+			Ecrit:   true,
 		}
 		// DecryptTo et non Decrypt : le nom d'origine, quand le fichier en
 		// porte un, ne remonte que par le résultat — Decrypt le jette. La
@@ -965,8 +950,9 @@ func restituerNom(out string, meta *pkg.FileMetadata) error {
 		"renommer en "+nomCible, "garder "+filepath.Base(out), &renommer)
 	form := huh.NewForm(huh.NewGroup(champ)).
 		WithTheme(formTheme()).WithKeyMap(formKeyMap()).WithShowHelp(true)
-	// Pas d'ancre : le fichier est déchiffré, il n'y a plus d'écran où revenir.
-	err := lancerEtapeNommee("nom d'origine", form, nil)
+	// Sous le ✓ du déchiffrement, sans ancre : le fichier est déchiffré, il
+	// n'y a plus d'écran où revenir.
+	err := lancerQuestionApresResultat("nom d'origine", form)
 	// Échap après l'écriture : le déchiffrement est fait, partir sans
 	// répondre garde le nom actuel, comme « garder ».
 	if errors.Is(err, errMenu) {
@@ -1024,7 +1010,7 @@ func cibleRestitution(out string, meta *pkg.FileMetadata) (cible string, libre b
 // confirmation. Le contrôle de l'actuel n'a lieu qu'à la validation, dans pkg —
 // le vérifier champ par champ coûterait une dérivation Argon2 à chaque frappe.
 func tuiPasswd(path string) error {
-	d, err := pkg.Inspect(path)
+	d, err := lireEnTete(path)
 	if err != nil {
 		return err
 	}
@@ -1090,7 +1076,12 @@ func tuiPasswd(path string) error {
 		ancien, confirme = "", ""
 	}()
 
-	if err := pkg.ChangePassword(path, ancienOctets, nouveauOctets); err != nil {
+	// Deux dérivations Argon2 sans progression à montrer : le cadre dit ce
+	// qui se passe plutôt que de rester vide.
+	err = enCours("mots de passe", "changement du mot de passe en cours…", func() error {
+		return pkg.ChangePassword(path, ancienOctets, nouveauOctets)
+	})
+	if err != nil {
 		return err
 	}
 	annoncer(os.Stdout, "  %s  %s\n", styleAccent.Render("✓"),
@@ -1100,7 +1091,7 @@ func tuiPasswd(path string) error {
 }
 
 func tuiVerify(path string) error {
-	d, err := pkg.Inspect(path)
+	d, err := lireEnTete(path)
 	if err != nil {
 		return err
 	}
@@ -1171,7 +1162,15 @@ func lancerOperation(info jobInfo, op func(progress func(done, total int64)) err
 	model.fin = fin
 	go func() {
 		defer close(fini)
-		fin <- op(func(d, _ int64) { done.Store(d) })
+		err := op(func(d, _ int64) { done.Store(d) })
+		// La sortie est sur le disque, mais son ✓ attendra la fin de
+		// l'animation : noté ici, à l'instant même, il survit à un Ctrl+C
+		// pendant ces quelques secondes (session.imprimer).
+		if s := sessionCourante; err == nil && info.Ecrit && s != nil {
+			s.noterEcritAvantInterruption(fmt.Sprintf("  %s  %s\n\n", styleAccent.Render("✓"),
+				styleText.Render(info.Out+" écrit avant l'interruption")))
+		}
+		fin <- err
 	}()
 	return model, fini
 }
@@ -1209,6 +1208,10 @@ func runJobDansHote(h *hote, info jobInfo, op func(progress func(done, total int
 	}
 	if model.err != nil {
 		return model.err
+	}
+	// Le ✓ ordinaire prend le relais de la mention d'interruption.
+	if s := sessionCourante; s != nil {
+		s.confirmerEcrit()
 	}
 	annoncer(os.Stdout, "  %s  %s\n\n", styleAccent.Render("✓"), styleText.Render(info.Success))
 	return nil
@@ -1649,4 +1652,16 @@ func metaEncodee(garder bool) pkg.MetadataMode {
 		return pkg.MetadataMinimal
 	}
 	return pkg.MetadataNone
+}
+
+// lireEnTete lit l'en-tête d'un .chto, en le disant dans le cadre plutôt que
+// de le laisser vide le temps de la lecture.
+func lireEnTete(path string) (pkg.Details, error) {
+	var d pkg.Details
+	err := enCours("en-tête", "lecture de l'en-tête…", func() error {
+		var err error
+		d, err = pkg.Inspect(path)
+		return err
+	})
+	return d, err
 }

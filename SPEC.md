@@ -153,7 +153,9 @@ lancement de l'opération laisse le dossier tel qu'il était. Pendant le
 chiffrement d'un gros fichier, écran de progression affiché et temporaire
 `.chto-tmp-*` déjà présent sur le disque, il sort aussi en 130, rend le
 terminal, garde l'original intact, supprime le temporaire et ne laisse aucun
-chiffré.
+chiffré. Si l'opération a déjà écrit sa sortie quand Ctrl+C arrive (fin de
+l'animation), les résumés imprimés à la sortie le disent : « ✓ <sortie> écrit
+avant l'interruption ».
 
 Échap ne fait jamais quitter l'interface. Avant le lancement de l'opération,
 il l'abandonne sans rien écrire et ramène au menu ; sur le menu, il ne fait
@@ -161,12 +163,16 @@ rien ; dans l'explorateur, il remonte d'un dossier. Après l'écriture, sur la
 question de suppression ou de renommage, il vaut « garder » et ne compte pas
 comme un échec.
 
-Tests : TestE2EInterruption, TestE2EInterruptionPendantOperation, TestEchapAvantLancementRevientAuMenu, TestEchapSurLeMenuNeFaitRien, TestEchapApresEcritureGarde, TestEchapRemonteDansLExplorateur
+Tests : TestE2EInterruption, TestE2EInterruptionPendantOperation, TestE2EInterruptionApresEcriture, TestCtrlCApresEcritureLeDit, TestEchapAvantLancementRevientAuMenu, TestEchapSurLeMenuNeFaitRien, TestEchapApresEcritureGarde, TestEchapRemonteDansLExplorateur
 
 ### R-TUI-05 — Mauvaise phrase de passe dans l'interface
-Une mauvaise phrase de passe donne un message clair, et rien n'est écrit.
+Une mauvaise phrase de passe donne un message clair, et rien n'est écrit. En
+plein écran, comme tout échec, elle s'affiche dans le cadre : la cause, puis
+« quoi faire » quand un conseil existe déjà dans le message (aucun n'est
+inventé : pour une mauvaise phrase, la cause seule) ; `entrée` revient au
+menu.
 
-Tests : TestE2EMauvaisePhrase
+Tests : TestE2EMauvaisePhrase, TestEcranErreurMauvaisePhrase, TestEcranErreurQuoiFaire
 
 ### R-TUI-06 — Grammaire de navigation
 `↑↓` parcourent les réponses, `→` ou `entrée` valident, `←` revient à la
@@ -206,15 +212,18 @@ Tests : TestE2EChangerMotDePasse
 
 ### R-TUI-11 — Menu persistant, quitter et code de sortie
 En plein écran, le menu revient après chaque opération, réussie, abandonnée ou
-ratée ; un échec y laisse sa cause sur une ligne. Refuser d'écraser une
+ratée. Une opération réussie finit sur une carte résultat (le ✓, le fichier
+produit, puis la question de suppression ou de renommage, « garder » par
+défaut) ; un échec, sur l'écran d'erreur ; `entrée` revient au menu. Refuser d'écraser une
 destination (« annuler ») est un choix, pas un échec. On quitte par la ligne
 « quitter » du menu ou par la touche `q`, qui n'agit que sur le menu, jamais
 pendant une saisie. Le code de sortie de la session vaut 0 si tout a réussi, 1
 si au moins une opération a échoué, 130 sur Ctrl+C. Les résumés des
-opérations faites s'impriment une fois l'écran alternatif quitté, y compris
-sur Ctrl+C pendant une opération suivante.
+opérations faites, ceux-là mêmes qu'affiche la carte, s'impriment une fois
+l'écran alternatif quitté, y compris sur Ctrl+C pendant une opération
+suivante.
 
-Tests : TestQuitterDepuisLeMenu, TestQSansEffetPendantSaisie, TestCodeSortieApresEchec, TestAnnulerLEcrasementNEstPasUnEchec, TestCtrlCTermineLaSession, TestSortieExterneLibereLeParcours, TestE2EChiffrerPuisDechiffrer, TestE2EMauvaisePhrase, TestE2EInterruptionGardeLesResumes
+Tests : TestQuitterDepuisLeMenu, TestQSansEffetPendantSaisie, TestCodeSortieApresEchec, TestAnnulerLEcrasementNEstPasUnEchec, TestCtrlCTermineLaSession, TestSortieExterneLibereLeParcours, TestE2EChiffrerPuisDechiffrer, TestE2EMauvaisePhrase, TestE2EInterruptionGardeLesResumes, TestCarteResultatRevientAuMenu, TestQuestionSuppressionDansLaCarte, TestResumesImprimesALaSortie
 
 ## FMT — compatibilité des formats
 

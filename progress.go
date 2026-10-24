@@ -73,6 +73,9 @@ type jobInfo struct {
 	Salt   string
 	// Success : la ligne affichée une fois l'opération réussie.
 	Success string
+	// Ecrit : l'opération pose Out sur le disque (chiffrer, déchiffrer).
+	// Une vérification n'écrit rien.
+	Ecrit bool
 }
 
 type progressModel struct {

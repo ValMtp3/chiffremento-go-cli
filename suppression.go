@@ -177,8 +177,8 @@ func demanderSuppression(titre, detail string) (bool, error) {
 	champ := questionFermee(titre, detail, "supprimer", "garder", &supprimer)
 	form := huh.NewForm(huh.NewGroup(champ)).
 		WithTheme(formTheme()).WithKeyMap(formKeyMap()).WithShowHelp(true)
-	// Pas d'ancre : l'opération est faite, il n'y a plus d'écran où revenir.
-	err := lancerEtapeNommee("suppression", form, nil)
+	// Sous le ✓ de l'opération, comme le veut la première règle ci-dessus.
+	err := lancerQuestionApresResultat("suppression", form)
 	// Échap ramène au menu, mais l'écriture est déjà faite : rien ne
 	// s'abandonne plus. Partir sans répondre, c'est garder — jamais un échec.
 	if errors.Is(err, errMenu) {
