@@ -359,3 +359,22 @@ func TestRunJobCtrlCDansLHote(t *testing.T) {
 		t.Fatalf("runJob = %v, attendu huh.ErrUserAborted", err)
 	}
 }
+
+// TestProgressionDansLeCadreDeLHote : composée par l'hôte, la progression
+// tient dans des cadres de 52, 64 et 80 colonnes sans qu'aucune ligne soit
+// coupée (« … ») ni ne déborde du terminal.
+func TestProgressionDansLeCadreDeLHote(t *testing.T) {
+	for _, terminal := range []int{56, 68, 84} {
+		h := hoteDeTest(t, terminal, 30)
+		h.Update(nouvelleDemande(progressionDeTest(nil)))
+		vue := h.View()
+		if strings.Contains(vue, "…") || !strings.Contains(vue, "aead") {
+			t.Errorf("cadre de %d colonnes : progression coupée ou absente\n%s", largeurCadre(terminal), vue)
+		}
+		for i, ligne := range strings.Split(vue, "\n") {
+			if w := lipgloss.Width(ligne); w > terminal {
+				t.Errorf("terminal de %d colonnes : la ligne %d en fait %d", terminal, i, w)
+			}
+		}
+	}
+}

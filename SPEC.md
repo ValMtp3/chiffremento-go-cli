@@ -189,7 +189,7 @@ au redimensionnement, sans couleur ni emoji. Échap n'abandonne pas une écritur
 déjà lancée ; l'aide peut s'ouvrir par-dessus sans arrêter l'opération.
 Ctrl+C l'interrompt.
 
-Tests : TestAnimationVisible, TestAnimationNeDepassePasLeReel, TestDureeEcranReelle, TestRenduLargeurConstante, TestProgressionSuitLeCadre, TestRenduSansCouleur, TestCtrlCInterromptLaProgression, TestEchapPendantEcritureIgnore, TestAidePendantProgression, TestRunJobDansLHote, TestRunJobCtrlCDansLHote
+Tests : TestAnimationVisible, TestAnimationNeDepassePasLeReel, TestDureeEcranReelle, TestRenduLargeurConstante, TestProgressionSuitLeCadre, TestProgressionDansLeCadreDeLHote, TestRenduSansCouleur, TestCtrlCInterromptLaProgression, TestEchapPendantEcritureIgnore, TestAidePendantProgression, TestRunJobDansLHote, TestRunJobCtrlCDansLHote
 
 ### R-TUI-09 — Écrasement d'un dossier jamais proposé
 L'interface peut demander confirmation avant d'écraser un fichier, jamais un
