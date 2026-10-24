@@ -1210,7 +1210,7 @@ func runJobDansHote(h *hote, info jobInfo, op func(progress func(done, total int
 // historique, avec son titre.
 func runJobSeul(info jobInfo, op func(progress func(done, total int64)) error) error {
 	model, _ := lancerOperation(info, op, contentWidth+2)
-	model.avecTitre = true
+	model.autonome = true
 	// Même cadence que les formulaires ; la sortie reste celle par défaut.
 	prog := tea.NewProgram(model, append([]tea.ProgramOption{tea.WithFPS(imagesParSeconde)}, teaOptions...)...)
 

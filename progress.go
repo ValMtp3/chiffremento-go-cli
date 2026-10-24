@@ -96,9 +96,11 @@ type progressModel struct {
 	// fin rend l'erreur de l'opération quand elle se termine. Nil dans les
 	// tests qui pilotent opDone à la main.
 	fin <-chan error
-	// avecTitre : hors plein écran, l'écran affiche lui-même son titre ; dans
-	// l'hôte, c'est la barre du haut qui le porte.
-	avecTitre bool
+	// autonome : hors plein écran (programme à lui, TERM=dumb), l'écran
+	// affiche lui-même son titre et garde sa largeur historique, quelle que
+	// soit la taille du terminal. Dans l'hôte, la barre du haut porte le titre
+	// et la largeur suit le cadre.
+	autonome bool
 }
 
 // displayRatio est l'avancement *affiché*. Il ne dépasse jamais l'avancement
@@ -177,7 +179,11 @@ func tick() tea.Cmd {
 func (m *progressModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
-		m.largeur = msg.Width
+		// Bubble Tea envoie la taille du terminal au démarrage, même hors de
+		// l'hôte : seule celle du cadre compte.
+		if !m.autonome {
+			m.largeur = msg.Width
+		}
 		return m, nil
 	case tickMsg:
 		// On ne ferme l'écran que quand l'opération est finie *et* que la barre
@@ -240,7 +246,7 @@ func (m *progressModel) View() string {
 
 	// Width compte le padding mais pas la bordure (convention lipgloss).
 	box := styleBox.Width(largeur - 2).Render(b.String())
-	if !m.avecTitre {
+	if !m.autonome {
 		return box
 	}
 	title := styleDim.Render("chiffremento ") + styleAccent.Render(m.info.Action)

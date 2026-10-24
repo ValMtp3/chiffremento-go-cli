@@ -378,3 +378,20 @@ func TestProgressionDansLeCadreDeLHote(t *testing.T) {
 		}
 	}
 }
+
+// TestProgressionAutonomeLargeurFixe : hors de l'hôte (TERM=dumb), l'écran
+// garde sa largeur historique. Bubble Tea envoie la taille du terminal au
+// démarrage : elle ne doit pas étirer le cadre à 200 colonnes.
+func TestProgressionAutonomeLargeurFixe(t *testing.T) {
+	m := demoModel(0.5, contentWidth+2)
+	m.autonome = true
+	m.Update(tea.WindowSizeMsg{Width: 200, Height: 50})
+	for i, ligne := range strings.Split(strings.Trim(m.View(), "\n"), "\n") {
+		if i == 0 {
+			continue // la ligne de titre est hors cadre
+		}
+		if w := lipgloss.Width(ligne); w != contentWidth+2 {
+			t.Errorf("ligne %d : %d colonnes au lieu de %d", i, w, contentWidth+2)
+		}
+	}
+}
