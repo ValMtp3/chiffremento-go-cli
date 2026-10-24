@@ -203,12 +203,15 @@ Tests : TestE2EChangerMotDePasse
 
 ### R-TUI-11 — Menu persistant, quitter et code de sortie
 En plein écran, le menu revient après chaque opération, réussie, abandonnée ou
-ratée ; un échec y laisse sa cause sur une ligne. On quitte par la ligne
+ratée ; un échec y laisse sa cause sur une ligne. Refuser d'écraser une
+destination (« annuler ») est un choix, pas un échec. On quitte par la ligne
 « quitter » du menu ou par la touche `q`, qui n'agit que sur le menu, jamais
 pendant une saisie. Le code de sortie de la session vaut 0 si tout a réussi, 1
-si au moins une opération a échoué, 130 sur Ctrl+C.
+si au moins une opération a échoué, 130 sur Ctrl+C. Les résumés des
+opérations faites s'impriment une fois l'écran alternatif quitté, y compris
+sur Ctrl+C pendant une opération suivante.
 
-Tests : TestQuitterDepuisLeMenu, TestQSansEffetPendantSaisie, TestCodeSortieApresEchec, TestCtrlCTermineLaSession, TestSortieExterneLibereLeParcours, TestE2EChiffrerPuisDechiffrer, TestE2EMauvaisePhrase
+Tests : TestQuitterDepuisLeMenu, TestQSansEffetPendantSaisie, TestCodeSortieApresEchec, TestAnnulerLEcrasementNEstPasUnEchec, TestCtrlCTermineLaSession, TestSortieExterneLibereLeParcours, TestE2EChiffrerPuisDechiffrer, TestE2EMauvaisePhrase, TestE2EInterruptionGardeLesResumes
 
 ## FMT — compatibilité des formats
 

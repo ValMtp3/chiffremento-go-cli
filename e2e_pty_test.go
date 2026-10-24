@@ -771,6 +771,36 @@ func TestE2EInterruptionPendantOperation(t *testing.T) {
 	}
 }
 
+// R-TUI-04 et R-TUI-11 : Ctrl+C pendant une deuxième opération n'efface pas
+// les résumés de la première, mis de côté pendant l'écran alternatif : ils
+// s'impriment avant la sortie en 130.
+func TestE2EInterruptionGardeLesResumes(t *testing.T) {
+	dossier := t.TempDir()
+	ecrireFichier(t, filepath.Join(dossier, "premier.txt"), []byte("premier\n"))
+	ecrireFichier(t, filepath.Join(dossier, "gros.bin"), bytes.Repeat([]byte("contenu à protéger 0123456789\n"), 2<<20))
+
+	p := lancerPilote(t, dossier)
+	p.choisirAction("chiffrer")
+	p.saisirChemin("premier.txt")
+	p.validerOptionsParDefaut()
+	p.saisirPhrase("phrase du premier", true)
+	p.repondreSuppression(false)
+
+	// choisirAction attend lui-même le retour du menu.
+	p.choisirAction("chiffrer")
+	p.saisirChemin("gros.bin")
+	p.validerOptionsParDefaut()
+	p.saisirPhrase("phrase du second", true)
+	p.attendreProgression()
+	p.attendreTemporaire(dossier)
+	p.abandonnerParCtrlC()
+	if code := p.codeDeSortie(); code != exitInterrompu {
+		t.Fatalf("code %d, attendu %d ; fin de l'écran :\n%s", code, exitInterrompu, p.queue())
+	}
+	p.attendre("✓  premier.txt.chto")
+	p.terminalRestaure()
+}
+
 // La suppression proposée après le chiffrement efface l'original, et le
 // chiffré gardé se déchiffre.
 func TestE2ESuppressionApresCoup(t *testing.T) {

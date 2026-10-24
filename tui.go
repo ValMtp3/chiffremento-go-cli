@@ -114,13 +114,31 @@ func parcoursSession(h *hote, s *session) {
 		case errors.Is(err, huh.ErrUserAborted):
 			// Ctrl+C : l'hôte est déjà fermé, le programme sort en 130.
 			return
-		case err == nil, errors.Is(err, errMenu):
+		case !compteCommeEchec(err):
 		default:
 			s.noterEchec()
 			erreur = err.Error()
 		}
 	}
 }
+
+// compteCommeEchec dit si une opération terminée par err a échoué. Un
+// abandon voulu (Échap, Ctrl+C, quitter) n'est pas un échec.
+func compteCommeEchec(err error) bool {
+	switch {
+	case err == nil, errors.Is(err, errMenu), errors.Is(err, errQuitter), errors.Is(err, huh.ErrUserAborted):
+		return false
+	}
+	var a annulation
+	return !errors.As(err, &a)
+}
+
+// annulation : l'utilisateur a refusé d'écraser la destination. Un choix, pas
+// une panne : en plein écran, retour au menu sans échec. Hors plein écran
+// (TERM=dumb), le message reste celui d'une erreur, comme avant.
+type annulation struct{ dest string }
+
+func (a annulation) Error() string { return "annulé : " + a.dest + " n'a pas été touché" }
 
 // uneOperation montre le menu puis mène l'opération choisie jusqu'au bout.
 //
@@ -1164,6 +1182,13 @@ func runJobSeul(info jobInfo, op func(progress func(done, total int64)) error) e
 		// processus est ce qui interrompt réellement le chiffrement.
 		if errors.Is(err, tea.ErrInterrupted) || errors.Is(err, tea.ErrProgramKilled) {
 			pkg.CleanupTemporaries()
+			// En plein écran, les résumés des opérations déjà faites
+			// attendent la sortie : celle-ci en est une, et runTUI ne la
+			// verra pas. Le terminal est déjà rendu (lacher), on peut
+			// écrire. C'est le seul endroit qui les imprime sur ce chemin.
+			if s := sessionCourante; s != nil {
+				s.imprimer(os.Stdout)
+			}
 			fmt.Fprintln(os.Stderr, "\ninterrompu")
 			os.Exit(exitInterrompu)
 		}
@@ -1482,7 +1507,7 @@ func confirmerEcrasement(dest string) (bool, error) {
 		return false, err
 	}
 	if !ecraser {
-		return false, fmt.Errorf("annulé : %s n'a pas été touché", dest)
+		return false, annulation{dest: dest}
 	}
 	return true, nil
 }

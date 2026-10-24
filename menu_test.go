@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
@@ -9,6 +10,7 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/huh"
 
 	"chiffremento-cli/pkg"
 )
@@ -332,4 +334,41 @@ func listerDossier(t *testing.T, dossier string) []string {
 	}
 	slices.Sort(noms)
 	return noms
+}
+
+// TestAnnulerLEcrasementNEstPasUnEchec : « annuler » sur la question
+// d'écrasement est un choix, pas une panne : retour au menu sans compter
+// d'échec, comme Échap.
+func TestAnnulerLEcrasementNEstPasUnEchec(t *testing.T) {
+	dest := filepath.Join(t.TempDir(), "occupe.chto")
+	poserFichier(t, dest, []byte("déjà là"))
+	h, boite := hoteSynchrone(t, 100, 30)
+	issue := make(chan error, 1)
+	go func() {
+		_, err := confirmerEcrasement(dest)
+		issue <- err
+	}()
+	demandeRecue(t, h, boite)
+	if !strings.Contains(h.View(), "> annuler") {
+		t.Fatalf("le curseur n'est pas sur « annuler » :\n%s", h.View())
+	}
+	envoyerHote(t, h, touche("enter"))
+	err := issueRecue(t, issue)
+	if err == nil {
+		t.Fatal("annuler doit arrêter l'opération")
+	}
+	if compteCommeEchec(err) {
+		t.Errorf("annuler l'écrasement compte comme un échec : %v", err)
+	}
+	if !strings.Contains(err.Error(), "n'a pas été touché") {
+		t.Errorf("le message d'annulation a changé : %v", err)
+	}
+	for _, e := range []error{errMenu, errQuitter, huh.ErrUserAborted} {
+		if compteCommeEchec(e) {
+			t.Errorf("%v compte comme un échec", e)
+		}
+	}
+	if !compteCommeEchec(errors.New("mot de passe incorrect")) {
+		t.Error("une vraie erreur ne compte pas comme un échec")
+	}
 }
