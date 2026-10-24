@@ -11,8 +11,8 @@ nouvelle demande.
 
 | # | Étape | Branche | Plan détaillé | État |
 |---|---|---|---|---|
-| 0 | Filet de sécurité : SPEC.md + tests | `test/filet-securite` | `2026-10-21-filet-de-securite.md` | à faire |
-| 1 | zxcvbn allégé | `perf/zxcvbn-interne` | à écrire | à faire |
+| 0 | Filet de sécurité : SPEC.md + tests | `test/filet-securite` | `2026-10-21-filet-de-securite.md` | fait (PR #21) |
+| 1 | zxcvbn allégé | `perf/zxcvbn-interne` | `2026-10-23-zxcvbn-interne.md` | en cours (branche prête, PR à ouvrir) |
 | 2 | Releases signées | `ci/releases-signees` | à écrire | à faire |
 | 3 | Interface plein écran | `feat/plein-ecran` | à écrire | à faire |
 | 4 | Format v5 | `feat/format-v5` | à écrire | à faire |

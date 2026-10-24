@@ -9,6 +9,7 @@ import (
 	"io"
 	"math"
 	"math/big"
+	"slices"
 	"strings"
 	"sync"
 )
@@ -52,6 +53,17 @@ const (
 
 	tailleListeMots = 7776
 )
+
+// MotsPhrase renvoie une copie des 7 776 mots de la liste du générateur, pour
+// que l'indicateur de force les connaisse sans embarquer une deuxième copie du
+// fichier. C'est une copie : la modifier ne touche pas la liste qui sert au tirage.
+func MotsPhrase() ([]string, error) {
+	mots, err := listeMots()
+	if err != nil {
+		return nil, err
+	}
+	return slices.Clone(mots), nil
+}
 
 // Phrase est une phrase de passe générée et son entropie en bits.
 type Phrase struct {
