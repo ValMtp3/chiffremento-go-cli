@@ -1,13 +1,19 @@
 package main
 
 import (
+	"errors"
+	"io"
+	"os"
+	"path/filepath"
 	"reflect"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/huh"
+	"github.com/charmbracelet/lipgloss"
 
 	"chiffremento-cli/pkg"
 )
@@ -433,5 +439,229 @@ func TestFlecheDroiteNeSoumetPasTropTot(t *testing.T) {
 	}
 	if mode != "parcourir" {
 		t.Errorf("mode retenu = %q, attendu « parcourir »", mode)
+	}
+}
+
+// --- Formulaires dans le cadre de l'écran hôte ---------------------------
+
+// hoteSynchrone construit un hôte dont les messages venus du parcours
+// arrivent dans une boîte : le test joue la boucle de Bubble Tea, une demande
+// après l'autre, sans programme ni minuterie. Il devient l'hôte courant le
+// temps du test.
+func hoteSynchrone(t *testing.T, largeur, hauteur int) (*hote, chan tea.Msg) {
+	t.Helper()
+	boite := make(chan tea.Msg, 8)
+	h := nouvelHote(func(msg tea.Msg) { boite <- msg })
+	envoyerHote(t, h, tea.WindowSizeMsg{Width: largeur, Height: hauteur})
+	hoteCourant = h
+	t.Cleanup(func() { hoteCourant = nil })
+	return h, boite
+}
+
+// delaiTest borne chaque attente : un relais bloqué fait échouer le test au
+// lieu de le faire pendre jusqu'au délai global de go test.
+const delaiTest = 10 * time.Second
+
+// demandeRecue attend la prochaine demande d'écran du parcours et l'ouvre.
+func demandeRecue(t *testing.T, h *hote, boite chan tea.Msg) {
+	t.Helper()
+	select {
+	case msg := <-boite:
+		d, ok := msg.(demandeEcran)
+		if !ok {
+			t.Fatalf("message reçu %T, attendu une demande d'écran", msg)
+		}
+		envoyerHote(t, h, d)
+	case <-time.After(delaiTest):
+		t.Fatal("le parcours n'a demandé aucun écran à l'hôte")
+	}
+}
+
+// issueRecue attend la fin d'un parcours lancé dans une goroutine.
+func issueRecue(t *testing.T, issue chan error) error {
+	t.Helper()
+	select {
+	case err := <-issue:
+		return err
+	case <-time.After(delaiTest):
+		t.Fatal("le parcours n'a pas rendu la main")
+		return nil
+	}
+}
+
+// TestLancerEtapeParLHote : avec un hôte, lancerEtape affiche le formulaire
+// dans le cadre, sans programme à lui, et garde ses trois issues — retour,
+// validation, abandon — plus Échap, qui revient au menu.
+func TestLancerEtapeParLHote(t *testing.T) {
+	cas := []struct {
+		nom     string
+		touche  tea.KeyMsg
+		attendu error
+	}{
+		{"← depuis l'ancre", touche("left"), errRetour},
+		{"→ valide", touche("right"), nil},
+		{"échap", tea.KeyMsg{Type: tea.KeyEsc}, errMenu},
+		{"ctrl+c", tea.KeyMsg{Type: tea.KeyCtrlC}, huh.ErrUserAborted},
+	}
+	for _, c := range cas {
+		t.Run(c.nom, func(t *testing.T) {
+			h, boite := hoteSynchrone(t, 100, 30)
+			valeur := "b"
+			champ := huh.NewSelect[string]().Title("choix").
+				Options(huh.NewOption("a", "a"), huh.NewOption("b", "b")).Value(&valeur)
+			form := huh.NewForm(huh.NewGroup(champ)).WithKeyMap(formKeyMap())
+
+			issue := make(chan error, 1)
+			go func() { issue <- lancerEtape(form, champ) }()
+			demandeRecue(t, h, boite)
+			if !strings.Contains(h.View(), "choix") {
+				t.Fatalf("le formulaire n'est pas dans le cadre :\n%s", h.View())
+			}
+			envoyerHote(t, h, c.touche)
+			if err := issueRecue(t, issue); !errors.Is(err, c.attendu) || (c.attendu == nil && err != nil) {
+				t.Fatalf("lancerEtape = %v, attendu %v", err, c.attendu)
+			}
+			if c.attendu == nil && valeur != "b" {
+				t.Errorf("valeur retenue = %q, attendu « b »", valeur)
+			}
+		})
+	}
+}
+
+// TestLancerEtapeSansHote : sans hôte, le chemin d'avant est inchangé. Le
+// seul observable sans terminal est TERM=dumb (huh en mode accessible) : il
+// passe avant l'hôte, même s'il y en a un, et ne lui envoie rien.
+func TestLancerEtapeSansHote(t *testing.T) {
+	t.Setenv("TERM", "dumb")
+	h := nouvelHote(func(msg tea.Msg) { t.Errorf("l'hôte a reçu %T en TERM=dumb", msg) })
+	hoteCourant = h
+	t.Cleanup(func() { hoteCourant = nil })
+
+	valeur := ""
+	champ := huh.NewSelect[string]().Title("choix").
+		Options(huh.NewOption("a", "a"), huh.NewOption("b", "b")).Value(&valeur)
+	// NewForm lit TERM à la construction : le formulaire naît accessible.
+	form := huh.NewForm(huh.NewGroup(champ)).
+		WithInput(strings.NewReader("2\n")).WithOutput(io.Discard)
+	if err := lancerEtape(form, champ); err != nil {
+		t.Fatalf("lancerEtape en TERM=dumb = %v", err)
+	}
+	if valeur != "b" {
+		t.Errorf("valeur = %q, attendu « b »", valeur)
+	}
+}
+
+// TestPointDInterrogationDansLeMotDePasse : ? tapé dans le champ du mot de
+// passe y atterrit, au lieu d'ouvrir l'aide de l'hôte.
+func TestPointDInterrogationDansLeMotDePasse(t *testing.T) {
+	password := ""
+	form, ancre := passwordForm("détails", &password)
+	h := hoteDeTest(t, 100, 30)
+	demande := montrer(t, h, etapeDansLeCadre(form, ancre))
+
+	taper(t, h, "a?b")
+	if got := ancre.GetValue(); got != "a?b" {
+		t.Fatalf("saisie = %q, attendu « a?b » : ? a été pris par l'hôte", got)
+	}
+	if strings.Contains(h.View(), "raccourcis") {
+		t.Error("l'aide s'est ouverte pendant la saisie du mot de passe")
+	}
+	if r, recue := reponseRecue(t, demande); recue {
+		t.Errorf("l'écran s'est terminé pendant la saisie : %+v", r)
+	}
+}
+
+// TestEchapRemonteDansLExplorateur : dans l'explorateur, Échap remonte d'un
+// dossier, comme ←, au lieu de ramener au menu.
+func TestEchapRemonteDansLExplorateur(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(dir, "sous_dossier"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "sous_dossier", "dedans.txt"), []byte("x"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "a_la_racine.txt"), []byte("x"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(dir)
+
+	path := ""
+	form, ancre := cibleForm("enc", "parcourir", &path)
+	h := hoteDeTest(t, 100, 40)
+	demande := montrer(t, h, etapeDansLeCadre(form, ancre))
+	envoyerHote(t, h, touche("right"))
+	if !strings.Contains(h.View(), "dedans.txt") {
+		t.Fatalf("→ n'entre pas dans le dossier :\n%s", h.View())
+	}
+
+	envoyerHote(t, h, tea.KeyMsg{Type: tea.KeyEsc})
+	if r, recue := reponseRecue(t, demande); recue {
+		t.Fatalf("Échap a quitté l'explorateur : %+v", r)
+	}
+	if !strings.Contains(h.View(), "a_la_racine.txt") {
+		t.Errorf("Échap ne remonte pas d'un dossier :\n%s", h.View())
+	}
+}
+
+// TestRedimensionnementDUnFormulaire : un formulaire de l'interface suit la
+// largeur du cadre quand la fenêtre change, sans perdre saisie ni focus.
+// huh ignore les tailles suivantes dès qu'une largeur lui a été imposée :
+// etapeModel doit la lui redonner à chaque changement.
+func TestRedimensionnementDUnFormulaire(t *testing.T) {
+	path := ""
+	form, ancre := cibleForm("enc", "saisie", &path)
+	m := etapeDansLeCadre(form, ancre)
+	h := hoteDeTest(t, 100, 30)
+	montrer(t, h, m)
+	taper(t, h, "abc")
+
+	for _, largeur := range []int{60, 100, 56} {
+		envoyerHote(t, h, tea.WindowSizeMsg{Width: largeur, Height: 24})
+		interieur, _ := tailleInterieure(largeur, 24)
+		for _, ligne := range strings.Split(m.View(), "\n") {
+			if w := lipgloss.Width(ligne); w > interieur {
+				t.Errorf("largeur %d : ligne du formulaire de %d colonnes > %d : %q", largeur, w, interieur, ligne)
+			}
+		}
+		for _, ligne := range strings.Split(h.View(), "\n") {
+			if w := lipgloss.Width(ligne); w > largeur {
+				t.Errorf("largeur %d : ligne de l'écran de %d colonnes : %q", largeur, w, ligne)
+			}
+		}
+	}
+	if form.GetFocusedField() != ancre {
+		t.Fatal("le focus a quitté le champ après les redimensionnements")
+	}
+	taper(t, h, "d")
+	if got := ancre.GetValue(); got != "abcd" {
+		t.Fatalf("saisie = %q, attendu « abcd »", got)
+	}
+}
+
+// TestTouchesDeLEtape : la barre du bas annonce les touches du champ qui a le
+// focus, et le retour seulement là où il existe.
+func TestTouchesDeLEtape(t *testing.T) {
+	password := ""
+	form, ancre := passwordForm("détails", &password)
+	m := ouvrirEtape(t, form, ancre)
+	if got := m.Touches(); !strings.Contains(got, "⏎ valider") || !strings.Contains(got, "shift+tab revenir") {
+		t.Errorf("touches d'une saisie = %q", got)
+	}
+	if !m.saisitDuTexte() || m.gardeEchap() {
+		t.Errorf("saisie : saisitDuTexte %v, gardeEchap %v", m.saisitDuTexte(), m.gardeEchap())
+	}
+
+	action, mode := "enc", "saisie"
+	m = ouvrirEtape(t, choixForm(&action, &mode), nil)
+	if got := m.Touches(); !strings.Contains(got, "↑↓ choisir") || strings.Contains(got, "revenir") {
+		t.Errorf("touches du premier écran = %q : rien derrière lui, pas de retour", got)
+	}
+	if m.saisitDuTexte() || m.gardeEchap() {
+		t.Errorf("liste : saisitDuTexte %v, gardeEchap %v", m.saisitDuTexte(), m.gardeEchap())
+	}
+	envoyerEtape(t, m, touche("right"))
+	if got := m.Touches(); !strings.Contains(got, "← revenir") {
+		t.Errorf("touches de la deuxième question = %q : ← y revient à la première", got)
 	}
 }
