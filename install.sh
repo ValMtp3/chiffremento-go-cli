@@ -107,7 +107,7 @@ verify_signature() {
     fi
 
     if ! cosign_assez_recent; then
-        echo "❌ cosign trop ancien pour lire cette signature : version ≥ $COSIGN_VERSION_MINIMALE requise, installation refusée."
+        echo "❌ cosign trop ancien (faille connue GHSA-whqx-f9j3-ch6m) : installe au moins $COSIGN_VERSION_MINIMALE, installation refusée."
         echo "   Mets cosign à jour (https://docs.sigstore.dev/cosign/system_config/installation/), puis relance."
         exit 1
     fi
@@ -117,7 +117,7 @@ verify_signature() {
         --certificate-oidc-issuer "$SIGNATURE_EMETTEUR" \
         "$CHECKSUMS"; then
         echo "❌ Signature de checksums.txt non vérifiée : installation refusée."
-        echo "   Soit la signature est fausse, soit cosign n'a pas pu la vérifier (réseau absent ? cosign trop ancien : version ≥ $COSIGN_VERSION_MINIMALE requise ?)."
+        echo "   Soit la signature est fausse, soit cosign n'a pas pu la vérifier (réseau absent ?)."
         echo "   Rien n'est installé. Vérifie la connexion, retélécharge les fichiers, puis relance."
         exit 1
     fi

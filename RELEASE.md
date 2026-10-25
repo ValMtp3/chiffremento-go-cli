@@ -129,7 +129,7 @@ C'est ce qui prouve qu'une signature vient de ce dépôt et de ce workflow, pas 
 | Identité (expression régulière) | `^https://github.com/ValMtp3/chiffremento-go-cli/.github/workflows/release.yml@refs/tags/v` |
 | Émetteur | `https://token.actions.githubusercontent.com` |
 
-**Règle d'`install.sh`** : avec cosign présent, `install.sh` vérifie cette signature et **refuse toute installation si `checksums.txt.sigstore.json` est absent**, quelle que soit la version (y compris une pré-version comme `2.4.0-rc1`) : sans signature, `checksums.txt` ne prouve rien, et le nom d'une archive ne dit rien de fiable sur son âge. Pour une release antérieure à la 2.4.0 (non signée), on utilise l'`install.sh` livré avec elle. Sans cosign, le script avertit et ne vérifie que l'empreinte SHA-256. Avec un cosign trop ancien (< 2.6.2, ou < 3.0.4 en v3 ; seuils tirés de l'avis GHSA-whqx-f9j3-ch6m et du CHANGELOG de cosign, la 2.4.0 étant la première à lire le format de bundle), le script refuse (« cosign trop ancien »).
+**Règle d'`install.sh`** : avec cosign présent, `install.sh` vérifie cette signature et **refuse toute installation si `checksums.txt.sigstore.json` est absent**, quelle que soit la version (y compris une pré-version comme `2.4.0-rc1`) : sans signature, `checksums.txt` ne prouve rien, et le nom d'une archive ne dit rien de fiable sur son âge. Pour une release antérieure à la 2.4.0 (non signée), on utilise l'`install.sh` livré avec elle. Sans cosign, le script avertit et ne vérifie que l'empreinte SHA-256. Avec un cosign trop ancien (< 2.6.2, ou < 3.0.4 en v3 ; seuils tirés de l'avis GHSA-whqx-f9j3-ch6m, par prudence, et du CHANGELOG de cosign, la 2.4.0 étant la première à lire le format de bundle), le script refuse (« cosign trop ancien »).
 
 ### Fenêtre du cask Homebrew
 
@@ -263,7 +263,7 @@ Une release n'est terminée qu'une fois installée comme le ferait un utilisateu
 4. **Une archive Linux** : l'empreinte correspond à `checksums.txt`.
 
    ```bash
-   gh release download vX.Y.Z -p 'chiffremento_*_linux_amd64.tar.gz' -p checksums.txt -p checksums.txt.sigstore.json
+   gh release download vX.Y.Z -p 'chiffremento_*_linux_amd64.tar.gz' -p checksums.txt -p checksums.txt.sigstore.json -p install.sh
    sha256sum --ignore-missing -c checksums.txt
    ```
 
@@ -282,7 +282,7 @@ Une release n'est terminée qu'une fois installée comme le ferait un utilisateu
 
    À faire AVANT `bash install.sh` : le script est lui-même le vérificateur, on le contrôle d'abord.
 
-   Les deux doivent finir sur « Verified OK » (ou un message équivalent). Sinon, voir « La vérification échoue » à l'étape 5.
+   Les trois commandes (cosign, sha256sum, gh) doivent réussir : cosign et gh finissent sur « Verified OK » (ou un message équivalent), sha256sum liste chaque fichier « OK » dont `install.sh`. Sinon, voir « La vérification échoue » dans la section « Si le workflow échoue ».
 
 6. **Un aller-retour réel** avec le binaire installé : chiffrer puis déchiffrer un fichier, et ouvrir un `.chto` créé par la version précédente.
 

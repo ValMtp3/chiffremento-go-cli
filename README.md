@@ -138,7 +138,7 @@ Faites ces vérifications **avant** `bash install.sh` : le script est lui-même 
 
 `install.sh` fait la première vérification lui-même, avant de lire les empreintes :
 
-- cosign présent et `checksums.txt.sigstore.json` dans le dossier : la signature est vérifiée avec l'identité ci-dessus. Si elle échoue, ou si cosign ne peut pas la vérifier (réseau absent), l'installation est **refusée**. Il faut une version récente de cosign : **≥ 2.6.2 (ou ≥ 3.0.4 en v3)**. En dessous, le script refuse avec « cosign trop ancien » (les versions plus anciennes acceptent n'importe quelle entrée du journal public, faille GHSA-whqx-f9j3-ch6m ; la CI signe avec cosign v3).
+- cosign présent et `checksums.txt.sigstore.json` dans le dossier : la signature est vérifiée avec l'identité ci-dessus. Si elle échoue, ou si cosign ne peut pas la vérifier (réseau absent), l'installation est **refusée**. Il faut une version récente de cosign : **≥ 2.6.2 (ou ≥ 3.0.4 en v3)**. En dessous, le script refuse avec « cosign trop ancien », par prudence : l'avis GHSA-whqx-f9j3-ch6m décrit un défaut qui, dans certaines conditions (identité ou clé déjà compromise), empêche de retrouver la trace de la signature dans le journal public (Rekor). Il ne fait pas accepter une fausse signature, et les réglages par défaut de cosign v3 ne sont pas touchés ; nous gardons le seuil quand même.
 - cosign absent : le script affiche « signature non vérifiée : installe cosign pour plus de sûreté » et continue. L'empreinte SHA-256 est toujours vérifiée.
 - cosign installé, mais fichier `.sigstore.json` absent : l'installation est **refusée**, quelle que soit la version (sans signature, `checksums.txt` ne prouve rien). Télécharge le fichier depuis la même page de release. Pour une release antérieure à la 2.4.0, qui n'est pas signée, utilise l'`install.sh` fourni avec cette release.
 
@@ -611,7 +611,7 @@ Run these checks **before** `bash install.sh`: the script is itself the verifier
 
 `install.sh` runs the first check itself, before reading the checksums:
 
-- cosign installed and `checksums.txt.sigstore.json` in the folder: the signature is verified against the identity above. If it fails, or if cosign cannot verify it (no network), installation is **refused**. A recent cosign is required: **≥ 2.6.2 (or ≥ 3.0.4 on v3)**. Below that the script refuses with "cosign trop ancien" (older versions accept any valid public-log entry, advisory GHSA-whqx-f9j3-ch6m; the CI signs with cosign v3).
+- cosign installed and `checksums.txt.sigstore.json` in the folder: the signature is verified against the identity above. If it fails, or if cosign cannot verify it (no network), installation is **refused**. A recent cosign is required: **≥ 2.6.2 (or ≥ 3.0.4 on v3)**. Below that the script refuses with "cosign trop ancien", out of caution: advisory GHSA-whqx-f9j3-ch6m describes a flaw that, under certain conditions (identity or key already compromised), prevents finding the signature's trace in the public log (Rekor). It does not make a forged signature accepted, and cosign v3 defaults are not affected; we keep the threshold anyway.
 - cosign missing: the script prints "signature non vérifiée : installe cosign pour plus de sûreté" and carries on. The SHA-256 checksum is still verified.
 - cosign installed but `.sigstore.json` file missing: installation is **refused**, whatever the version (without a signature, `checksums.txt` proves nothing). Download the file from the same release page. For a release older than 2.4.0, which is not signed, use the `install.sh` shipped with that release.
 

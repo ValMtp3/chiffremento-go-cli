@@ -351,7 +351,7 @@ func TestInstallCosignVersionMinimale(t *testing.T) {
 			if err == nil || b.installe() {
 				t.Fatalf("refus attendu\n%s", sortie)
 			}
-			for _, voulu := range []string{"cosign trop ancien", "2.6.2", "3.0.4", "installation refusée"} {
+			for _, voulu := range []string{"cosign trop ancien", "GHSA-whqx-f9j3-ch6m", "2.6.2", "3.0.4", "installation refusée"} {
 				if !strings.Contains(sortie, voulu) {
 					t.Errorf("%q absent du message :\n%s", voulu, sortie)
 				}
