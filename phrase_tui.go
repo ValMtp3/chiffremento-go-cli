@@ -209,7 +209,7 @@ func etapePhrase() (string, error) {
 // y en a un, sinon dans un programme aux réglages communs (30 images/s,
 // sortie sur stderr).
 func afficherPhrase(m *modelePhrase) error {
-	if h := hoteCourant; h != nil {
+	if h := hoteDuCadre(); h != nil {
 		m.dansLeCadre = true
 		_, err := h.afficher(m)
 		// Échap et Ctrl+C sont pris par l'hôte avant l'écran, qui n'a donc

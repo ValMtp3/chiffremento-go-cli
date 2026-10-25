@@ -345,8 +345,8 @@ func nommerOperation(nom string) {
 // et la ligne « quitter », que le formulaire seul ne sait pas distinguer.
 // Ailleurs (TERM=dumb), « quitter » se choisit comme une opération.
 func lancerMenu(choix *choixMenu) error {
-	h := hoteCourant
-	pleinEcran := menuEnPleinEcran(h)
+	h := hoteDuCadre()
+	pleinEcran := h != nil
 	form := choixForm(&choix.action, &choix.mode, pleinEcran)
 	if !pleinEcran {
 		if err := lancerEtape(form, nil); err != nil {
@@ -431,12 +431,6 @@ func etapeCible(action, mode string, path *string) error {
 			return nil
 		}
 	}
-}
-
-// menuEnPleinEcran dit si le menu s'affiche dans l'hôte h : il y en a un, et
-// TERM n'est pas dumb.
-func menuEnPleinEcran(h *hote) bool {
-	return h != nil && os.Getenv("TERM") != "dumb"
 }
 
 // choixForm demande l'opération et la façon de désigner la cible.
@@ -1334,7 +1328,7 @@ var teaOptions []tea.ProgramOption
 // le cadre ; sinon (TERM=dumb, tests sans terminal) il a son propre
 // programme.
 func runJob(info jobInfo, op func(progress func(done, total int64)) error) error {
-	if h := hoteCourant; h != nil {
+	if h := hoteDuCadre(); h != nil {
 		return runJobDansHote(h, info, op)
 	}
 	return runJobSeul(info, op)

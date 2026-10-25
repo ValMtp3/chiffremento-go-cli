@@ -667,3 +667,59 @@ func TestTouchesDeLEtape(t *testing.T) {
 		t.Errorf("touches de la deuxième question = %q : ← y revient à la première", got)
 	}
 }
+
+// TestTouchesExplorateurFerme : l'explorateur replié (Picking(false)) ne
+// réagit ni à ← ni à Échap ; la barre n'annonce donc pas « ← remonter », et
+// Échap revient à l'hôte (retour au menu). Déplié, c'est l'inverse.
+func TestTouchesExplorateurFerme(t *testing.T) {
+	for _, deplie := range []bool{false, true} {
+		chemin := ""
+		form := huh.NewForm(huh.NewGroup(
+			huh.NewFilePicker().Picking(deplie).CurrentDirectory(".").Value(&chemin),
+		)).WithKeyMap(formKeyMap())
+		m := ouvrirEtape(t, form, nil)
+		touches := m.Touches()
+		if strings.Contains(touches, "remonter") != deplie {
+			t.Errorf("déplié %v : touches = %q", deplie, touches)
+		}
+		if !deplie && !strings.Contains(touches, "⏎ ouvrir") {
+			t.Errorf("explorateur replié : touches = %q, attendu « ⏎ ouvrir »", touches)
+		}
+		if m.gardeEchap() != deplie {
+			t.Errorf("déplié %v : gardeEchap = %v", deplie, m.gardeEchap())
+		}
+	}
+}
+
+// TestPremierChampLuApresInit : le premier champ est celui qui a le focus
+// une fois le formulaire initialisé — une note en tête est sautée par huh.
+// Lu avant Init, c'était la note, et la première vraie question annonçait un
+// retour qui ne mène nulle part.
+func TestPremierChampLuApresInit(t *testing.T) {
+	choix := "a"
+	form := huh.NewForm(huh.NewGroup(
+		huh.NewNote().Title("fichier").Description("détails"),
+		huh.NewSelect[string]().Title("question").Options(huh.NewOption("a", "a"), huh.NewOption("b", "b")).Value(&choix),
+	)).WithKeyMap(formKeyMap())
+	m := ouvrirEtape(t, form, nil)
+	if got := m.Touches(); strings.Contains(got, "revenir") {
+		t.Errorf("touches de la première question = %q : rien derrière elle", got)
+	}
+}
+
+// TestHoteDuCadreEnTermDumb : en TERM=dumb, aucun écran ne passe par l'hôte,
+// même s'il en existe un — progression, phrase générée, formulaires suivent
+// tous la même règle.
+func TestHoteDuCadreEnTermDumb(t *testing.T) {
+	h := hoteDeTest(t, 84, 30)
+	ancien := hoteCourant
+	hoteCourant = h
+	t.Cleanup(func() { hoteCourant = ancien })
+	if hoteDuCadre() != h {
+		t.Fatal("hoteDuCadre ne rend pas l'hôte en plein écran")
+	}
+	t.Setenv("TERM", "dumb")
+	if hoteDuCadre() != nil {
+		t.Error("hoteDuCadre rend l'hôte en TERM=dumb")
+	}
+}

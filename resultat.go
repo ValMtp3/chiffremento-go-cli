@@ -3,7 +3,6 @@ package main
 import (
 	"errors"
 	"io/fs"
-	"os"
 	"strings"
 
 	"chiffremento-cli/pkg"
@@ -181,8 +180,8 @@ func (e *ecranEnCours) gardeEchap() bool { return true }
 // même après Ctrl+C : l'appelant efface ensuite les mots de passe, que le
 // travail lit peut-être encore.
 func enCours(titre, texte string, travail func() error) error {
-	h := hoteCourant
-	if h == nil || os.Getenv("TERM") == "dumb" {
+	h := hoteDuCadre()
+	if h == nil {
 		return travail()
 	}
 	// Ctrl+C a pu fermer l'hôte juste avant : rien ne doit commencer pendant

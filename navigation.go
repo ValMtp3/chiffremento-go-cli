@@ -196,10 +196,16 @@ type etapeModel struct {
 
 func newEtapeModel(form *huh.Form, ancre huh.Field) *etapeModel {
 	touches, rappel := retourDepuis(ancre)
-	return &etapeModel{form: form, ancre: ancre, premier: form.GetFocusedField(), touches: touches, rappel: rappel}
+	return &etapeModel{form: form, ancre: ancre, touches: touches, rappel: rappel}
 }
 
-func (m *etapeModel) Init() tea.Cmd { return m.form.Init() }
+// Init lit le premier champ après l'initialisation de huh : un champ sauté
+// en tête (une note) n'a alors plus le focus.
+func (m *etapeModel) Init() tea.Cmd {
+	cmd := m.form.Init()
+	m.premier = m.form.GetFocusedField()
+	return cmd
+}
 
 func (m *etapeModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if k, ok := msg.(tea.KeyMsg); ok && m.form.GetFocusedField() == m.ancre && slices.Contains(m.touches, k.String()) {
@@ -238,7 +244,12 @@ func (m *etapeModel) Touches() string {
 			touches += "  shift+tab revenir"
 		}
 	case *huh.FilePicker:
-		touches = "↑↓ choisir  → ouvrir  ← remonter  ⏎ choisir"
+		// Replié, l'explorateur n'a qu'une touche : l'ouvrir. ← et Échap n'y
+		// font rien (huh désactive Back hors dépliage).
+		touches = "⏎ ouvrir"
+		if explorateurDeplie(champ) {
+			touches = "↑↓ choisir  → ouvrir  ← remonter  ⏎ choisir"
+		}
 		if retourPossible {
 			touches += "  shift+tab revenir"
 		}
@@ -261,11 +272,18 @@ func (m *etapeModel) saisitDuTexte() bool {
 	return false
 }
 
-// gardeEchap : dans l'explorateur, Échap remonte d'un dossier (formKeyMap).
-// L'hôte ne la transforme donc pas en retour au menu.
+// gardeEchap : dans l'explorateur déplié, Échap remonte d'un dossier
+// (formKeyMap). L'hôte ne la transforme donc pas en retour au menu. Replié,
+// l'explorateur ignore Échap : elle revient à l'hôte.
 func (m *etapeModel) gardeEchap() bool {
-	_, explorateur := m.form.GetFocusedField().(*huh.FilePicker)
-	return explorateur
+	return explorateurDeplie(m.form.GetFocusedField())
+}
+
+// explorateurDeplie : champ est un explorateur qui montre sa liste. huh ne
+// l'expose que par Zoom, qui vaut exactement cet état.
+func explorateurDeplie(champ huh.Field) bool {
+	f, ok := champ.(*huh.FilePicker)
+	return ok && f.Zoom()
 }
 
 func (m *etapeModel) View() string {
@@ -314,6 +332,17 @@ func lancerChamp(champ huh.Field) error {
 // le lit sans verrou.
 var hoteCourant *hote
 
+// hoteDuCadre rend l'hôte si les écrans doivent passer par lui : il y en a
+// un, et TERM n'est pas dumb — huh y bascule en mode accessible, sans écran à
+// intercepter. nil sinon. Seule règle pour tous les écrans (formulaires,
+// progression, phrase générée, menu).
+func hoteDuCadre() *hote {
+	if os.Getenv("TERM") == "dumb" {
+		return nil
+	}
+	return hoteCourant
+}
+
 // lancerEtape affiche un formulaire et distingue trois issues : terminé,
 // abandonné (Ctrl+C), ou retour à l'écran précédent — errRetour. Dans le
 // cadre de l'hôte, Échap ajoute une quatrième issue : errMenu.
@@ -330,11 +359,10 @@ func lancerEtapeNommee(titre string, form *huh.Form, ancre huh.Field) error {
 	// TERM=dumb : huh bascule tout seul en mode accessible, une suite de
 	// questions en texte brut sans écran à intercepter. On le laisse faire —
 	// mieux vaut pas de retour arrière qu'une interface illisible.
-	dumb := os.Getenv("TERM") == "dumb"
-	if h := hoteCourant; h != nil && !dumb {
+	if h := hoteDuCadre(); h != nil {
 		return lancerEtapeDansLeCadre(h, titre, form, ancre)
 	}
-	if ancre == nil || dumb {
+	if ancre == nil || os.Getenv("TERM") == "dumb" {
 		return form.WithProgramOptions(optionsProgramme()...).Run()
 	}
 
@@ -390,8 +418,8 @@ func lancerEtapeDansLeCadre(h *hote, titre string, form *huh.Form, ancre huh.Fie
 // fichier produit restent sous les yeux pendant qu'on décide. Pas d'ancre :
 // l'opération est faite, il n'y a plus d'écran où revenir.
 func lancerQuestionApresResultat(titre string, form *huh.Form) error {
-	h := hoteCourant
-	if h == nil || os.Getenv("TERM") == "dumb" {
+	h := hoteDuCadre()
+	if h == nil {
 		return lancerEtapeNommee(titre, form, nil)
 	}
 	m := etapeDansLeCadre(form, nil)

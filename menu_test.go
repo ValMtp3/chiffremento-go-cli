@@ -383,11 +383,11 @@ func TestAnnulerLEcrasementNEstPasUnEchec(t *testing.T) {
 // seule opération y est menée, et Ctrl+C suffit pour partir.
 func TestMenuSansQuitterEnTermDumb(t *testing.T) {
 	t.Setenv("TERM", "dumb")
-	if menuEnPleinEcran(hoteDeTest(t, 84, 30)) || menuEnPleinEcran(nil) {
-		t.Fatal("menuEnPleinEcran = true en TERM=dumb")
+	if hoteDuCadre() != nil {
+		t.Fatal("hoteDuCadre rend un hôte en TERM=dumb")
 	}
 	action, mode := "enc", "saisie"
-	f := ouvrir(t, choixForm(&action, &mode, menuEnPleinEcran(nil)))
+	f := ouvrir(t, choixForm(&action, &mode, hoteDuCadre() != nil))
 	vue := f.form.View()
 	for _, attendu := range []string{"chiffrer un fichier", "déchiffrer un", "vérifier un", "changer le mot de passe"} {
 		if !strings.Contains(vue, attendu) {
