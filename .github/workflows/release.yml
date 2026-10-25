@@ -27,10 +27,13 @@ jobs:
     # `contents: write` crée la release ; `id-token: write` laisse le job
     # demander à GitHub un jeton d'identité, que cosign échange contre un
     # certificat Sigstore de courte durée (signature sans clé). Ces droits ne
-    # sont donnés qu'à ce job.
+    # sont donnés qu'à ce job. `attestations: write` laisse
+    # actions/attest-build-provenance enregistrer l'attestation de provenance
+    # (qui a construit ces fichiers, depuis quel commit).
     permissions:
       contents: write
       id-token: write
+      attestations: write
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -61,3 +64,97 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAP_GITHUB_TOKEN: ${{ secrets.TAP_GITHUB_TOKEN }}
+
+      # Provenance (SLSA) : GitHub atteste, par signature, que ces fichiers
+      # sortent de CE workflow sur CE tag. Vérifiable avec `gh attestation
+      # verify`. Les SBOM ne sont pas attestés : checksums.txt les couvre.
+      - name: Attester la provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: |
+            dist/*.tar.gz
+            dist/*.zip
+            dist/checksums.txt
+
+      # À partir d'ici la release est encore un brouillon (`draft: true`) : on
+      # télécharge ce qui est VRAIMENT en ligne, pas les fichiers locaux, pour
+      # vérifier ce que les utilisateurs recevraient. Le brouillon est cherché
+      # dans la liste des releases : l'API « par tag » ne renvoie pas les
+      # brouillons.
+      #
+      # Relance sur un tag déjà publié : goreleaser garde l'état de la release
+      # (`data.Draft = release.Draft`, internal/client/github.go) ; elle reste
+      # publiée et seuls ses fichiers sont remplacés.
+      - name: Télécharger la release
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          release_id="$(gh api --paginate "repos/${REPO}/releases" \
+            --jq '.[] | select(.tag_name == env.TAG) | .id' | sed -n 1p)"
+          if [ -z "${release_id}" ]; then
+            echo "::error::Aucune release trouvée pour le tag ${TAG}."
+            exit 1
+          fi
+          echo "id=${release_id}" >> "${GITHUB_OUTPUT}"
+
+          mkdir -p "${RUNNER_TEMP}/verif"
+          gh api "repos/${REPO}/releases/${release_id}/assets" --paginate \
+            --jq '.[] | "\(.id) \(.name)"' |
+          while read -r asset_id asset_name; do
+            gh api -H "Accept: application/octet-stream" \
+              "repos/${REPO}/releases/assets/${asset_id}" \
+              > "${RUNNER_TEMP}/verif/${asset_name}"
+          done
+          ls -l "${RUNNER_TEMP}/verif"
+
+      # Trois preuves, toutes obligatoires : (1) la signature de checksums.txt
+      # vient bien de CE workflow sur un tag `v*` ; (2) chaque fichier a
+      # l'empreinte écrite dans checksums.txt ; (3) chaque archive a une
+      # attestation de provenance. Le moindre échec arrête le job ICI, avant
+      # la publication : le brouillon reste brouillon.
+      #
+      # Cette identité est la référence unique : RELEASE.md et install.sh
+      # doivent utiliser exactement la même.
+      - name: Vérifier signature, empreintes et provenance
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          IDENTITE: '^https://github.com/ValMtp3/chiffremento-go-cli/.github/workflows/release.yml@refs/tags/v'
+          EMETTEUR: https://token.actions.githubusercontent.com
+        run: |
+          set -euo pipefail
+          cd "${RUNNER_TEMP}/verif"
+          cosign verify-blob \
+            --bundle checksums.txt.sigstore.json \
+            --certificate-identity-regexp "${IDENTITE}" \
+            --certificate-oidc-issuer "${EMETTEUR}" \
+            checksums.txt
+          sha256sum -c checksums.txt
+          for archive in *.tar.gz *.zip; do
+            gh attestation verify "${archive}" --repo "${REPO}" \
+              --signer-workflow "${REPO}/.github/workflows/release.yml"
+          done
+
+      # Seulement si tout est vérifié. Sur une release déjà publiée (relance),
+      # il n'y a rien à publier : on ne touche à rien. À l'inverse, un échec
+      # plus haut ne dépublie jamais une release déjà publique : voir RELEASE.md.
+      # `make_latest=legacy` : GitHub choisit « dernière release » selon la
+      # version, sans jamais élire une pré-version.
+      - name: Publier la release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RELEASE_ID: ${{ steps.release.outputs.id }}
+        run: |
+          set -euo pipefail
+          is_draft="$(gh api "repos/${REPO}/releases/${RELEASE_ID}" --jq .draft)"
+          if [ "${is_draft}" != "true" ]; then
+            echo "Release déjà publiée : rien à publier."
+            exit 0
+          fi
+          gh api --method PATCH "repos/${REPO}/releases/${RELEASE_ID}" \
+            -F draft=false -f make_latest=legacy --jq '.html_url'
