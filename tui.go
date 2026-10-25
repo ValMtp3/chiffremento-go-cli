@@ -516,6 +516,9 @@ type optionsChiffrement struct {
 	// zéro vaut « l'utiliser », le défaut voulu, sans toucher à
 	// appliquerDefauts.
 	saisirMalgreMemoire bool
+	// forceMemoire : le verdict de force de la phrase en mémoire, montré sous
+	// la question qui la propose (forcePhrase). Vide sans phrase.
+	forceMemoire string
 }
 
 // secretChoisi rend le secret qui chiffrera le fichier : la phrase générée si
@@ -611,7 +614,7 @@ func encryptForm(o *optionsChiffrement, estDossier bool, tailleClair int64) (*hu
 		// Une phrase gardée pour la session est proposée d'abord. L'utiliser
 		// saute la génération, la saisie et la confirmation : elle a déjà
 		// servi à une opération réussie.
-		huh.NewGroup(questionMemoire(&o.saisirMalgreMemoire)).
+		huh.NewGroup(questionMemoire(&o.saisirMalgreMemoire, o.forceMemoire)).
 			WithHideFunc(func() bool { return !o.memoire }),
 
 		huh.NewGroup(
@@ -694,6 +697,10 @@ func tuiEncrypt(path string, o *optionsChiffrement) error {
 	// réaffiche les options, avec les réponses déjà saisies.
 	for {
 		o.memoire = phraseCourante().active()
+		o.forceMemoire = ""
+		if o.memoire {
+			o.forceMemoire = forcePhrase(phraseCourante())
+		}
 		form, ancre := encryptForm(o, estDossier, tailleClair)
 		if err := lancerEtapeNommee("options", form, ancre); err != nil {
 			return err

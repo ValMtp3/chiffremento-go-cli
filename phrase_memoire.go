@@ -66,10 +66,18 @@ func proposerDeGarder(secret []byte) error {
 // false par défaut, donc le curseur part sur « utiliser » : la phrase a été
 // gardée pour servir. L'accesseur ne dépend pas de l'ordre des options, ce
 // qui permet de montrer « utiliser » en premier.
-func questionMemoire(saisir *bool) huh.Field {
+//
+// force, s'il n'est pas vide, s'ajoute sous la description : au chiffrement,
+// c'est le verdict habituel de l'indicateur (forcePhrase). Déchiffrer ou
+// vérifier passe "" : la force n'y changerait rien.
+func questionMemoire(saisir *bool, force string) huh.Field {
+	description := "gardée pour cette session ; entrée pour l'utiliser"
+	if force != "" {
+		description += "\n" + force
+	}
 	return huh.NewSelect[string]().
 		Title(titreUtiliser).
-		Description("gardée pour cette session ; entrée pour l'utiliser").
+		Description(description).
 		Options(huh.NewOption(reponseUtiliser, reponseUtiliser), huh.NewOption(reponseLaSaisir, reponseLaSaisir)).
 		Accessor(reponseAccessor{valeur: saisir, siOui: reponseLaSaisir, siNon: reponseUtiliser})
 }
@@ -78,7 +86,7 @@ func questionMemoire(saisir *bool) huh.Field {
 // mémoire. Le champ n'apparaît que sur « la saisir ». La question est l'ancre
 // du retour vers le choix de la cible.
 func passwordFormMemoire(details string, password *string, saisir *bool) (*huh.Form, huh.Field) {
-	question := questionMemoire(saisir)
+	question := questionMemoire(saisir, "")
 	form := huh.NewForm(
 		huh.NewGroup(
 			huh.NewNote().Title("fichier").Description(details),
@@ -102,6 +110,23 @@ func formulaireMotDePasse(details string, password *string, saisir *bool) (*huh.
 	}
 	form, ancre := passwordForm(details, password)
 	return form, ancre, false
+}
+
+// forcePhrase rend le verdict de strengthHint pour la phrase gardée, "" s'il
+// n'y en a pas (ou plus).
+//
+// Le calcul se fait sur une copie prise, mise à zéro aussitôt. zxcvbn ne lit
+// que des chaînes : une conversion en string reste inévitable — une seule
+// ici, plus les découpes que zxcvbn fait lui-même. Comme toute string Go,
+// elles ne s'effacent pas et vivent jusqu'au passage du ramasse-miettes,
+// exactement comme le mot de passe saisi (o.password).
+func forcePhrase(p *phraseSession) string {
+	copie, ok := p.prendre()
+	if !ok {
+		return ""
+	}
+	defer zero(copie)
+	return strengthHint(string(copie))
 }
 
 // secretPourOperation rend la copie effaçable du secret de l'opération, que

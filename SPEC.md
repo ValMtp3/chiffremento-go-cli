@@ -474,7 +474,10 @@ phrase pour la session ? », « ne pas la garder » par défaut ; Échap vaut no
 Rien n'est gardé sans oui. Une phrase gardée est signalée par « ● phrase en
 mémoire » en haut, et proposée à la saisie suivante (« utiliser la phrase en
 mémoire », par défaut, ou « la saisir ») ; l'utiliser au chiffrement saute la
-génération, la saisie et la confirmation. La question de la garder n'est pas
+génération, la saisie et la confirmation ; au chiffrement, la question
+montre sous elle le même verdict de force que l'indicateur habituel, calculé
+sur une copie mise à zéro ensuite (pas au déchiffrement ni à la
+vérification). La question de la garder n'est pas
 reposée quand la phrase venait de la session. Changer de mot de passe demande
 toujours une saisie.
 
@@ -491,7 +494,7 @@ Limite acceptée : la mémoire n'est pas verrouillée (pas de `mlock`) ; comme
 toute phrase tapée, la phrase gardée peut être écrite dans le fichier
 d'échange du système.
 
-Tests : TestPrendreRendUneCopie, TestPhraseOublieeApresDelai, TestPhraseOublieeMemeSiLHorlogeBouge, TestToucheOOublie, TestPhraseOublieeALaSortie, TestUnSeulMinuteur, TestGarderDemandeAccord, TestPhraseProposeeALaSaisie, TestPasswdNeProposePasLaPhrase, TestE2EPhraseGardeePourLaSession
+Tests : TestPrendreRendUneCopie, TestPhraseOublieeApresDelai, TestPhraseOublieeMemeSiLHorlogeBouge, TestToucheOOublie, TestPhraseOublieeALaSortie, TestUnSeulMinuteur, TestGarderDemandeAccord, TestPhraseProposeeALaSaisie, TestForcePhraseSession, TestPasswdNeProposePasLaPhrase, TestE2EPhraseGardeePourLaSession
 
 ## PHR — phrase de passe
 

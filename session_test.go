@@ -388,6 +388,10 @@ func TestPhraseProposeeALaSaisie(t *testing.T) {
 		if !strings.Contains(m.View(), curseurHuh+"utiliser la phrase en mémoire") {
 			t.Fatalf("« utiliser » n'est pas proposé par défaut :\n%s", m.View())
 		}
+		// Déchiffrer ou vérifier : la force ne servirait à rien.
+		if strings.Contains(m.View(), "bits") {
+			t.Errorf("la force est affichée hors chiffrement :\n%s", m.View())
+		}
 		envoyerEtape(t, m, touche("enter"))
 		if form.State != huh.StateCompleted || saisir {
 			t.Errorf("entrée n'a pas retenu la phrase en mémoire : état %v, saisir %v", form.State, saisir)
@@ -407,6 +411,7 @@ func TestPhraseProposeeALaSaisie(t *testing.T) {
 		o := optionsChiffrement{}
 		appliquerDefauts(&o, false)
 		o.memoire = true
+		o.forceMemoire = "~42 bits — correct · cassé en quelques jours hors ligne"
 		form, ancre := encryptForm(&o, false, -1)
 		m := ouvrirEtape(t, form, ancre)
 		// algorithme, coût, compression, masquage, nom d'origine, puis la
@@ -418,6 +423,9 @@ func TestPhraseProposeeALaSaisie(t *testing.T) {
 		if !strings.Contains(m.View(), "utiliser la phrase en mémoire ?") {
 			t.Fatalf("question de la phrase en mémoire absente :\n%s", m.View())
 		}
+		if !strings.Contains(m.View(), o.forceMemoire) {
+			t.Errorf("la force de la phrase en mémoire n'est pas affichée :\n%s", m.View())
+		}
 		envoyerEtape(t, m, touche("enter"))
 		if form.State != huh.StateCompleted {
 			t.Fatalf("le formulaire demande encore quelque chose après la phrase en mémoire :\n%s", m.View())
@@ -426,6 +434,26 @@ func TestPhraseProposeeALaSaisie(t *testing.T) {
 			t.Error("la phrase en mémoire n'est pas retenue pour chiffrer")
 		}
 	})
+}
+
+// TestForcePhraseSession : la force affichée pour la phrase en mémoire est
+// le verdict habituel, calculé sur une copie prise ; sans phrase, rien.
+func TestForcePhraseSession(t *testing.T) {
+	var p phraseSession
+	p.garder([]byte("correct horse battery staple"))
+	if got, attendu := forcePhrase(&p), strengthHint("correct horse battery staple"); got != attendu {
+		t.Errorf("forcePhrase = %q, attendu %q", got, attendu)
+	}
+	if prise, ok := p.prendre(); !ok || string(prise) != "correct horse battery staple" {
+		t.Errorf("le calcul a abîmé la phrase gardée : %q", prise)
+	}
+	var vide phraseSession
+	if got := forcePhrase(&vide); got != "" {
+		t.Errorf("forcePhrase sans phrase = %q, attendu vide", got)
+	}
+	if got := forcePhrase(nil); got != "" {
+		t.Errorf("forcePhrase(nil) = %q, attendu vide", got)
+	}
 }
 
 // TestPasswdNeProposePasLaPhrase : changer de mot de passe demande toujours
