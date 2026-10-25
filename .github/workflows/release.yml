@@ -39,11 +39,18 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
+          # GoReleaser reçoit son jeton par l'environnement, la vérification
+          # `gh` utilise GH_TOKEN : rien n'a besoin des identifiants git
+          # laissés par le checkout.
+          persist-credentials: false
 
       - name: Set up Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: stable
+          go-version-file: go.mod
+          # Pas de cache : le job détient des jetons d'écriture, un cache
+          # empoisonné par un autre workflow n'a pas à y entrer.
+          cache: false
 
       # cosign signe checksums.txt ; syft produit les SBOM (voir
       # .goreleaser.yaml). Installés ici seulement, jamais dans go.mod.
@@ -57,9 +64,10 @@ jobs:
         uses: goreleaser/goreleaser-action@a4f02ab5355a589de60d917a659ce617ed19b3de # v7.3.0
         with:
           distribution: goreleaser
-          # Figé sur la v2 majeure : une v3 pourrait changer le format de
-          # .goreleaser.yaml sans prévenir au milieu d'une release.
-          version: '~> v2'
+          # Version exacte : une release publie sur le tap Homebrew, un outil qui
+          # change sans prévenir n'a rien à y faire. Dependabot ne la monte
+          # pas ; montée à la main, en relisant le code comme pour v2.18.3.
+          version: 'v2.18.3'
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -67,7 +75,8 @@ jobs:
 
       # Provenance (SLSA) : GitHub atteste, par signature, que ces fichiers
       # sortent de CE workflow sur CE tag. Vérifiable avec `gh attestation
-      # verify`. Les SBOM ne sont pas attestés : checksums.txt les couvre.
+      # verify`. install.sh est attesté avec les archives. Les SBOM ne le sont
+      # pas : checksums.txt les couvre.
       - name: Attester la provenance
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:

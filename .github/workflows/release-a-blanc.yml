@@ -47,7 +47,8 @@ jobs:
         uses: goreleaser/goreleaser-action@a4f02ab5355a589de60d917a659ce617ed19b3de # v7.3.0
         with:
           distribution: goreleaser
-          version: '~> v2'
+          # Exact, montée à la main (voir release.yml) : Dependabot ne la monte pas.
+          version: 'v2.18.3'
           args: check
 
       # `sign` est sauté : la signature sans clé exige le jeton d'identité du
@@ -57,5 +58,6 @@ jobs:
         uses: goreleaser/goreleaser-action@a4f02ab5355a589de60d917a659ce617ed19b3de # v7.3.0
         with:
           distribution: goreleaser
-          version: '~> v2'
+          # Exact, montée à la main (voir release.yml) : Dependabot ne la monte pas.
+          version: 'v2.18.3'
           args: release --snapshot --clean --skip=publish,sign
