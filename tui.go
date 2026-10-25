@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"math"
 	"os"
@@ -121,7 +122,7 @@ func menerSession(h *hote, s *session, programme *tea.Program, parcours func()) 
 		// on la laisse finir, le temps borné qu'il faut.
 		fermerTemporaires()
 	}
-	attendreBorne(parcoursFini, delaiFinParcours)
+	attendreFinParcours(parcoursFini, delaiFinParcours, os.Stderr)
 	// L'écran alternatif est quitté : ce qui y a été annoncé s'imprime
 	// maintenant, sur le terminal ordinaire.
 	s.imprimer(os.Stdout)
@@ -142,14 +143,33 @@ func menerSession(h *hote, s *session, programme *tea.Program, parcours func()) 
 	return s.codeSortie(), nil
 }
 
-// attendreBorne attend que fini soit fermé, au plus delai. Le minuteur n'existe
-// que pendant la sortie.
-func attendreBorne(fini <-chan struct{}, delai time.Duration) {
-	minuteur := time.NewTimer(delai)
-	defer minuteur.Stop()
+// delaiAnnonceFin : passé ce délai après la remise du terminal, un parcours
+// encore en vie est annoncé — sinon l'invite du shell tarderait sans
+// explication pendant la fin d'une dérivation.
+const delaiAnnonceFin = 200 * time.Millisecond
+
+// messageFinOperation est écrit une fois sur stderr pendant cette attente.
+const messageFinOperation = "fin de l'opération en cours…\n"
+
+// attendreFinParcours attend que fini soit fermé, au plus delai en tout. Si
+// l'attente dépasse delaiAnnonceFin, messageFinOperation est écrit une fois
+// sur sortie. Les minuteurs n'existent que pendant la sortie.
+func attendreFinParcours(fini <-chan struct{}, delai time.Duration, sortie io.Writer) {
+	limite := time.NewTimer(delai)
+	defer limite.Stop()
+	annonce := time.NewTimer(min(delaiAnnonceFin, delai))
+	defer annonce.Stop()
 	select {
 	case <-fini:
-	case <-minuteur.C:
+		return
+	case <-limite.C:
+		return
+	case <-annonce.C:
+		fmt.Fprint(sortie, messageFinOperation)
+	}
+	select {
+	case <-fini:
+	case <-limite.C:
 	}
 }
 

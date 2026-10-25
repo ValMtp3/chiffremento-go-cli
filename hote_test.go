@@ -719,3 +719,46 @@ func TestAfficherPrefereLaReponseDeposee(t *testing.T) {
 		}
 	}
 }
+
+// TestAnnonceFinDOperationLente : si le parcours n'a pas fini peu après la
+// remise du terminal, la sortie le dit une fois, puis attend la fin.
+func TestAnnonceFinDOperationLente(t *testing.T) {
+	fini := make(chan struct{})
+	go func() {
+		time.Sleep(delaiAnnonceFin + 200*time.Millisecond)
+		close(fini)
+	}()
+	var sortie strings.Builder
+	attendreFinParcours(fini, time.Second, &sortie)
+	if sortie.String() != messageFinOperation {
+		t.Errorf("sortie = %q, attendu %q une seule fois", sortie.String(), messageFinOperation)
+	}
+	select {
+	case <-fini:
+	default:
+		t.Error("attendreFinParcours a rendu la main avant la fin du parcours")
+	}
+}
+
+// TestPasDAnnoncePourUnParcoursRapide : un parcours qui finit vite ne
+// provoque aucun message ; un parcours bloqué, le message puis la sortie au
+// délai.
+func TestPasDAnnoncePourUnParcoursRapide(t *testing.T) {
+	fini := make(chan struct{})
+	close(fini)
+	var sortie strings.Builder
+	attendreFinParcours(fini, time.Second, &sortie)
+	if sortie.Len() != 0 {
+		t.Errorf("message pour un parcours déjà fini : %q", sortie.String())
+	}
+
+	var bloque strings.Builder
+	debut := time.Now()
+	attendreFinParcours(make(chan struct{}), delaiAnnonceFin+100*time.Millisecond, &bloque)
+	if bloque.String() != messageFinOperation {
+		t.Errorf("parcours bloqué : sortie = %q", bloque.String())
+	}
+	if d := time.Since(debut); d > 2*time.Second {
+		t.Errorf("le délai total n'est pas respecté : %v", d)
+	}
+}
