@@ -129,6 +129,8 @@ C'est ce qui prouve qu'une signature vient de ce dépôt et de ce workflow, pas 
 | Identité (expression régulière) | `^https://github.com/ValMtp3/chiffremento-go-cli/.github/workflows/release.yml@refs/tags/v` |
 | Émetteur | `https://token.actions.githubusercontent.com` |
 
+**Règle d'`install.sh`** : avec cosign présent, `install.sh` vérifie cette signature et **refuse toute installation si `checksums.txt.sigstore.json` est absent**, quelle que soit la version (y compris une pré-version comme `2.4.0-rc1`) : sans signature, `checksums.txt` ne prouve rien, et le nom d'une archive ne dit rien de fiable sur son âge. Pour une release antérieure à la 2.4.0 (non signée), on utilise l'`install.sh` livré avec elle. Sans cosign, le script avertit et ne vérifie que l'empreinte SHA-256.
+
 ### Fenêtre du cask Homebrew
 
 GoReleaser écrit le cask dans le tap **pendant que la release est encore un brouillon**. Les fichiers qu'il désigne répondent 404 au public tant que la release n'est pas publiée : un `brew upgrade --cask chiffremento` lancé dans cette fenêtre échoue (rien n'est cassé, on relance plus tard).

@@ -136,7 +136,7 @@ gh attestation verify chiffremento_X.Y.Z_linux_amd64.tar.gz --repo ValMtp3/chiff
 
 - cosign présent et `checksums.txt.sigstore.json` dans le dossier : la signature est vérifiée avec l'identité ci-dessus. Si elle échoue, ou si cosign ne peut pas la vérifier (réseau absent), l'installation est **refusée**.
 - cosign absent : le script affiche « signature non vérifiée : installe cosign pour plus de sûreté » et continue. L'empreinte SHA-256 est toujours vérifiée.
-- fichier `.sigstore.json` absent : l'installation est **refusée** pour les versions 2.4.0 et suivantes (y compris `2.4.0-rc1`) ou si la version n'est pas lisible ; télécharge le fichier depuis la même page de release. Pour une release plus ancienne, même avertissement que ci-dessus et l'installation continue.
+- fichier `.sigstore.json` absent : l'installation est **refusée**, quelle que soit la version (sans signature, `checksums.txt` ne prouve rien). Télécharge le fichier depuis la même page de release. Pour une release antérieure à la 2.4.0, qui n'est pas signée, utilise l'`install.sh` fourni avec cette release.
 
 > Sans cosign, seule l'empreinte est vérifiée : rien ne protège contre un remplacement complet des fichiers (archive et `checksums.txt`).
 
@@ -516,7 +516,7 @@ gh attestation verify chiffremento_X.Y.Z_linux_amd64.tar.gz --repo ValMtp3/chiff
 
 - cosign installed and `checksums.txt.sigstore.json` in the folder: the signature is verified against the identity above. If it fails, or if cosign cannot verify it (no network), installation is **refused**.
 - cosign missing: the script prints "signature non vérifiée : installe cosign pour plus de sûreté" and carries on. The SHA-256 checksum is still verified.
-- `.sigstore.json` file missing: installation is **refused** for versions 2.4.0 and later (including `2.4.0-rc1`), or when the version cannot be read; download the file from the same release page. For an older release, same warning as above and installation carries on.
+- `.sigstore.json` file missing: installation is **refused**, whatever the version (without a signature, `checksums.txt` proves nothing). Download the file from the same release page. For a release older than 2.4.0, which is not signed, use the `install.sh` shipped with that release.
 
 > Without cosign, only the checksum is verified: nothing protects against a full replacement of the files (archive and `checksums.txt`).
 

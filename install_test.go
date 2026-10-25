@@ -213,64 +213,50 @@ func TestInstallSansCosignAvertitEtInstalle(t *testing.T) {
 	}
 }
 
-// Release ancienne (avant la première release signée) : pas de bundle, on
-// avertit et on installe.
-func TestInstallBundleAbsentAvertitEtInstalle(t *testing.T) {
-	b := preparerInstall(t, false)
-	ecrireFauxCosign(t, b.bin, b.appels, 0, "")
-	sortie, err := b.lancer(t)
-	if err != nil {
-		t.Fatalf("installation attendue : %v\n%s", err, sortie)
-	}
-	if !strings.Contains(sortie, "signature non vérifiée") {
-		t.Errorf("avertissement absent :\n%s", sortie)
-	}
-	if !b.installe() {
-		t.Error("binaire absent du dossier d'installation")
-	}
-	if _, err := os.Stat(b.appels); err == nil {
-		t.Error("cosign ne doit pas être appelé sans bundle")
+// Cosign présent et bundle absent : refus, quelle que soit la version. Le nom
+// de l'archive est modifiable par un attaquant, et sans signature
+// checksums.txt ne prouve rien : on ne s'y fie donc pas pour deviner l'âge.
+func TestInstallBundleAbsentRefuse(t *testing.T) {
+	for _, version := range []string{"2.4.0", "2.4.0-rc1", "1.0.0", "abc", ""} {
+		t.Run("archive "+version, func(t *testing.T) {
+			b := preparerInstallVersion(t, false, version)
+			ecrireFauxCosign(t, b.bin, b.appels, 0, "")
+			sortie, err := b.lancer(t)
+			if err == nil || b.installe() {
+				t.Fatalf("refus attendu\n%s", sortie)
+			}
+			verifierMessageBundleAbsent(t, sortie)
+			if _, err := os.Stat(b.appels); err == nil {
+				t.Error("cosign ne doit pas être appelé sans bundle")
+			}
+		})
 	}
 }
 
-// Dès la première release signée (2.4.0), un bundle absent est refusé : sinon
-// retirer le bundle suffirait à contourner la signature. Les versions avec
-// suffixe (2.4.0-rc1) comptent comme 2.4.0. Version illisible : refus aussi.
-func TestInstallBundleAbsentRefuseSelonVersion(t *testing.T) {
-	cas := []struct {
-		version string
-		refuse  bool
-	}{
-		{"2.4.0", true},
-		{"2.4.0-rc1", true},
-		{"2.10.0", true}, // comparaison numérique, pas alphabétique
-		{"10.0.0", true},
-		{"3.0.0", true},
-		{"2.3.9", false},
-		{"2.3.10", false},
-		{"1.0.0", false},
-		{"abc", true},
-		{"2.4", true},
-		{"", true},
+// Même règle pour le binaire nu (make build-all) dès que checksums.txt sert.
+func TestInstallBinaireNuBundleAbsentRefuse(t *testing.T) {
+	b := preparerInstall(t, false)
+	ecrireFauxCosign(t, b.bin, b.appels, 0, "")
+	if err := os.Remove(filepath.Join(b.dossier, fmt.Sprintf("chiffremento_1.0.0_%s_%s.tar.gz", runtime.GOOS, runtime.GOARCH))); err != nil {
+		t.Fatal(err)
 	}
-	for _, c := range cas {
-		t.Run("version "+c.version, func(t *testing.T) {
-			b := preparerInstallVersion(t, false, c.version)
-			ecrireFauxCosign(t, b.bin, b.appels, 0, "")
-			sortie, err := b.lancer(t)
-			if c.refuse {
-				if err == nil || b.installe() {
-					t.Fatalf("refus attendu\n%s", sortie)
-				}
-				if !strings.Contains(sortie, "installation refusée") || !strings.Contains(sortie, "checksums.txt.sigstore.json") {
-					t.Errorf("message de refus incomplet :\n%s", sortie)
-				}
-				return
-			}
-			if err != nil || !b.installe() {
-				t.Fatalf("installation attendue : %v\n%s", err, sortie)
-			}
-		})
+	nu := []byte("#!/bin/sh\necho nu\n")
+	ecrire(t, filepath.Join(b.dossier, fmt.Sprintf("chiffremento-%s-%s", runtime.GOOS, runtime.GOARCH)), nu)
+	ecrire(t, filepath.Join(b.dossier, "checksums.txt"),
+		[]byte(fmt.Sprintf("%x  chiffremento-%s-%s\n", sha256.Sum256(nu), runtime.GOOS, runtime.GOARCH)))
+	sortie, err := b.lancer(t)
+	if err == nil || b.installe() {
+		t.Fatalf("refus attendu\n%s", sortie)
+	}
+	verifierMessageBundleAbsent(t, sortie)
+}
+
+func verifierMessageBundleAbsent(t *testing.T, sortie string) {
+	t.Helper()
+	for _, voulu := range []string{"installation refusée", "checksums.txt.sigstore.json", "même page de release", "install.sh fourni avec cette release"} {
+		if !strings.Contains(sortie, voulu) {
+			t.Errorf("%q absent du message :\n%s", voulu, sortie)
+		}
 	}
 }
 
