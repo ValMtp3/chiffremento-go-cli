@@ -614,3 +614,47 @@ func TestVerdictOublieAvecLaPhrase(t *testing.T) {
 		t.Errorf("forcePhrase sans phrase = %q", got)
 	}
 }
+
+// R-TUI-04 sans pty : la mention « écrit avant l'interruption » est notée par
+// la goroutine de l'opération dès qu'elle rend la main sans erreur, avant que
+// finie soit fermé — c'est ce qu'attend runJobDansHote après un Ctrl+C. Le ✓
+// ordinaire l'efface ; une opération en échec, une vérification (rien
+// d'écrit) ne la posent jamais.
+func TestMentionEcritAvantInterruption(t *testing.T) {
+	const mention = "petit.txt.chto écrit avant l'interruption"
+	cas := []struct {
+		nom         string
+		ecrit       bool
+		errOp       error
+		confirmer   bool
+		avecMention bool
+	}{
+		{nom: "sortie posée, Ctrl+C pendant l'animation", ecrit: true, avecMention: true},
+		{nom: "✓ ordinaire déjà noté", ecrit: true, confirmer: true},
+		{nom: "opération en échec", ecrit: true, errOp: errors.New("disque plein")},
+		{nom: "vérification, rien d'écrit", ecrit: false},
+	}
+	for _, c := range cas {
+		t.Run(c.nom, func(t *testing.T) {
+			s := &session{}
+			sessionCourante = s
+			t.Cleanup(func() { sessionCourante = nil })
+
+			info := jobInfo{In: filepath.Join(t.TempDir(), "petit.txt"), Out: "petit.txt.chto", Ecrit: c.ecrit}
+			_, finie := lancerOperation(info, func(func(done, total int64)) error { return c.errOp }, contentWidth+2)
+			select {
+			case <-finie:
+			case <-time.After(5 * time.Second):
+				t.Fatal("l'opération n'a pas rendu la main")
+			}
+			if c.confirmer {
+				s.confirmerEcrit()
+			}
+			var sortie bytes.Buffer
+			s.imprimer(&sortie)
+			if got := strings.Contains(sortie.String(), mention); got != c.avecMention {
+				t.Fatalf("mention présente = %v, attendu %v ; sortie : %q", got, c.avecMention, sortie.String())
+			}
+		})
+	}
+}

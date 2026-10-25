@@ -546,6 +546,19 @@ func (p *pilote) abandonnerParCtrlC() {
 	p.touches(toucheCtrlC)
 }
 
+// chiffreAnnonceUneFois vérifie, une fois le processus sorti, que le
+// terminal ordinaire annonce nom par un ✓, exactement une fois : soit le ✓
+// ordinaire, soit la mention « écrit avant l'interruption », jamais les deux
+// ni aucun.
+func (p *pilote) chiffreAnnonceUneFois(nom string) {
+	p.t.Helper()
+	p.attendreFinDeSortie()
+	apres := p.apresEcranAlternatif()
+	if n := strings.Count(apres, "✓  "+nom); n != 1 {
+		p.t.Fatalf("%q annoncé %d fois après l'écran alternatif, attendu 1 : %q", nom, n, apres)
+	}
+}
+
 // raccrocher envoie SIGHUP au programme, comme la fermeture de la fenêtre du
 // terminal. L'enfant est dans sa propre session (Setsid) : fermer le pty ne
 // le lui enverrait pas.
@@ -1208,9 +1221,15 @@ func TestResumesImprimesALaSortie(t *testing.T) {
 	}
 }
 
-// R-TUI-04 : Ctrl+C pendant la fin de l'animation, alors que le chiffré est
-// déjà écrit, sort en 130 sans ✓ ni question ; les résumés imprimés à la
-// sortie disent que le fichier existe.
+// R-TUI-04 : Ctrl+C alors que le chiffré est déjà écrit sort en 130 ; les
+// résumés imprimés à la sortie disent que le fichier existe.
+//
+// Sur une machine rapide, Ctrl+C tombe pendant la fin de l'animation et c'est
+// la mention « écrit avant l'interruption » qui le dit. Sur une machine lente
+// (Argon2 plus long que les 4 s de l'animation, runner macOS sous -race),
+// l'écran s'est déjà fermé et c'est le ✓ ordinaire : les deux sont justes,
+// et on ne peut pas choisir lequel sans une pause à l'aveugle. La mention
+// elle-même est vérifiée sans pty par TestMentionEcritAvantInterruption.
 func TestE2EInterruptionApresEcriture(t *testing.T) {
 	dossier := t.TempDir()
 	ecrireFichier(t, filepath.Join(dossier, "petit.txt"), []byte("vite chiffré\n"))
@@ -1232,14 +1251,38 @@ func TestE2EInterruptionApresEcriture(t *testing.T) {
 		}
 		time.Sleep(pasDeSondage)
 	}
-	// L'opération rend la main juste après avoir posé le fichier ;
-	// l'animation, elle, dure au moins 4 s.
-	time.Sleep(300 * time.Millisecond)
 	p.abandonnerParCtrlC()
 	if code := p.codeDeSortie(); code != exitInterrompu {
 		t.Fatalf("code %d, attendu %d ; fin de l'écran :\n%s", code, exitInterrompu, p.queue())
 	}
-	p.attendre("petit.txt.chto écrit avant l'interruption")
+	p.chiffreAnnonceUneFois("petit.txt.chto")
+	p.terminalRestaure()
+	if _, err := os.Stat(chiffre); err != nil {
+		t.Fatalf("le chiffré annoncé n'existe pas : %v", err)
+	}
+}
+
+// R-TUI-04, machine lente : quand Argon2 dure plus que les 4 s de l'animation
+// (runner macOS sous -race), l'écran se ferme dès que l'opération rend la
+// main, et Ctrl+C tombe sur la question de suppression. C'est l'état où le CI
+// a échoué ; on l'atteint ici sans pause, en attendant la question. Le ✓
+// ordinaire, déjà noté, suffit à dire que le fichier existe.
+func TestE2EInterruptionSurQuestionSuppression(t *testing.T) {
+	dossier := t.TempDir()
+	ecrireFichier(t, filepath.Join(dossier, "petit.txt"), []byte("vite chiffré\n"))
+	chiffre := filepath.Join(dossier, "petit.txt.chto")
+
+	p := lancerPilote(t, dossier)
+	p.choisirAction("chiffrer")
+	p.saisirChemin("petit.txt")
+	p.validerOptionsParDefaut()
+	p.saisirPhrase("phrase interrompue", true)
+	p.attendre(curseur + "garder")
+	p.abandonnerParCtrlC()
+	if code := p.codeDeSortie(); code != exitInterrompu {
+		t.Fatalf("code %d, attendu %d ; fin de l'écran :\n%s", code, exitInterrompu, p.queue())
+	}
+	p.chiffreAnnonceUneFois("petit.txt.chto")
 	p.terminalRestaure()
 	if _, err := os.Stat(chiffre); err != nil {
 		t.Fatalf("le chiffré annoncé n'existe pas : %v", err)
