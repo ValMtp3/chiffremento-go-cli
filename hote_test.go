@@ -4,8 +4,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"reflect"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -601,4 +603,25 @@ func TestParcoursSansPaniqueNeRendRien(t *testing.T) {
 	if appele || garde.panique.Load() != nil {
 		t.Errorf("rendre appelé = %v, panique = %v", appele, garde.panique.Load())
 	}
+}
+
+// TestCodeDuSignal : 129 pour SIGHUP (128 + 1), 130 pour Ctrl+C et SIGTERM.
+func TestCodeDuSignal(t *testing.T) {
+	cas := map[os.Signal]int{syscall.SIGHUP: exitRaccroche, os.Interrupt: exitInterrompu, syscall.SIGTERM: exitInterrompu}
+	for signal, attendu := range cas {
+		if got := codeDuSignal(signal); got != attendu {
+			t.Errorf("codeDuSignal(%v) = %d, attendu %d", signal, got, attendu)
+		}
+	}
+	if exitRaccroche != 129 {
+		t.Errorf("exitRaccroche = %d, attendu 129", exitRaccroche)
+	}
+}
+
+// TestSurRaccrochageSArrete : sans signal, arreter termine l'écoute sans
+// appeler agir, et peut être appelée deux fois.
+func TestSurRaccrochageSArrete(t *testing.T) {
+	arreter := surRaccrochage(func() { t.Error("agir appelé sans SIGHUP") })
+	arreter()
+	arreter()
 }

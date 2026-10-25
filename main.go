@@ -29,6 +29,10 @@ const extension = ".chto"
 // d'une vraie erreur, qui sort en 1.
 const exitInterrompu = 130
 
+// exitRaccroche : 128 + SIGHUP (1), la même convention pour un terminal
+// fermé sous le programme (fenêtre fermée, session SSH coupée).
+const exitRaccroche = 129
+
 func main() {
 	// Sans le moindre argument, dans un vrai terminal : interface guidée, qui
 	// rend son propre code de sortie (0, 1 si une opération a échoué, 130 sur
@@ -176,14 +180,51 @@ func drapeauFourni(nom string) bool {
 // les defer ne s'exécutent pas quand le processus est interrompu.
 func installSignalHandler() {
 	c := make(chan os.Signal, 1)
-	signal.Notify(c, os.Interrupt, syscall.SIGTERM)
+	signal.Notify(c, os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
 	go func() {
-		<-c
+		recu := <-c
 		restaurerTerminal()
 		pkg.FermerTemporaires()
 		fmt.Fprintln(os.Stderr, "\ninterrompu")
-		os.Exit(exitInterrompu)
+		os.Exit(codeDuSignal(recu))
 	}()
+}
+
+// codeDuSignal : 129 pour SIGHUP, 130 pour le reste (Ctrl+C, SIGTERM),
+// comme avant.
+func codeDuSignal(recu os.Signal) int {
+	if recu == syscall.SIGHUP {
+		return exitRaccroche
+	}
+	return exitInterrompu
+}
+
+// surRaccrochage appelle agir si SIGHUP arrive (fenêtre du terminal fermée)
+// tant que arreter n'a pas été appelée. Bubble Tea n'écoute que SIGINT et
+// SIGTERM : sans ça, SIGHUP tuait le processus sur-le-champ, temporaires
+// d'extraction compris. arreter rend le signal à son comportement par défaut
+// et termine la goroutine d'écoute : rien ne reste après la session.
+//
+// Sous Windows, syscall.SIGHUP existe mais n'arrive jamais : l'écoute est
+// inerte.
+func surRaccrochage(agir func()) (arreter func()) {
+	c := make(chan os.Signal, 1)
+	signal.Notify(c, syscall.SIGHUP)
+	fini := make(chan struct{})
+	go func() {
+		select {
+		case <-c:
+			agir()
+		case <-fini:
+		}
+	}()
+	var une sync.Once
+	return func() {
+		une.Do(func() {
+			signal.Stop(c)
+			close(fini)
+		})
+	}
 }
 
 // Restauration du terminal sur interruption.

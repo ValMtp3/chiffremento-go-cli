@@ -546,6 +546,16 @@ func (p *pilote) abandonnerParCtrlC() {
 	p.touches(toucheCtrlC)
 }
 
+// raccrocher envoie SIGHUP au programme, comme la fermeture de la fenêtre du
+// terminal. L'enfant est dans sa propre session (Setsid) : fermer le pty ne
+// le lui enverrait pas.
+func (p *pilote) raccrocher() {
+	p.t.Helper()
+	if err := p.cmd.Process.Signal(syscall.SIGHUP); err != nil {
+		p.t.Fatal(err)
+	}
+}
+
 // attendreMenu attend le retour au menu après une opération.
 func (p *pilote) attendreMenu() {
 	p.t.Helper()
@@ -880,15 +890,117 @@ func TestE2EInterruptionPendantOperation(t *testing.T) {
 // R-FS-02 : Ctrl+C pendant l'extraction d'un dossier (beaucoup de petits
 // fichiers) sort en 130 sans laisser de .chto-tmp-* nulle part — l'extraction
 // recréait le dossier temporaire supprimé et y écrivait du clair — ni de
-// destination, et sans toucher au .chto.
+// destination, et sans toucher au .chto. SIGHUP (fenêtre du terminal fermée)
+// fait de même, et sort en 129 : avant, le processus mourait sur-le-champ en
+// laissant le clair déjà extrait.
 func TestE2EInterruptionPendantExtraction(t *testing.T) {
+	cas := []struct {
+		nom      string
+		abandon  func(p *pilote)
+		code     int
+		terminal bool // le terminal est encore là pour être vérifié
+	}{
+		{"ctrl+c", (*pilote).abandonnerParCtrlC, exitInterrompu, true},
+		{"sighup", (*pilote).raccrocher, exitRaccroche, false},
+	}
+	for _, c := range cas {
+		t.Run(c.nom, func(t *testing.T) {
+			interrompreUneExtraction(t, c.abandon, c.code, c.terminal)
+		})
+	}
+}
+
+// interrompreUneExtraction lance l'extraction d'un dossier de 20 000
+// fichiers dans l'interface, l'abandonne par abandon une fois le temporaire
+// créé, puis vérifie le code de sortie et qu'il ne reste rien.
+func interrompreUneExtraction(t *testing.T, abandon func(p *pilote), code int, verifierTerminal bool) {
+	ext := preparerExtractionLongue(t)
+	p := lancerPilote(t, ext.dossier)
+	p.choisirAction("déchiffrer")
+	p.saisirChemin("archive.chto")
+	p.saisirPhrase(ext.phrase, false)
+	p.attendreProgression()
+	p.attendreTemporaire(ext.dossier)
+	abandon(p)
+
+	if obtenu := p.codeDeSortie(); obtenu != code {
+		t.Fatalf("code %d, attendu %d ; fin de l'écran :\n%s", obtenu, code, p.queue())
+	}
+	if verifierTerminal {
+		p.terminalRestaure()
+	}
+	ext.rienNeReste(t)
+}
+
+// R-FS-02 : en mode -mode, SIGHUP pendant l'extraction d'un dossier sort en
+// 129 sans laisser de temporaire ni de destination, comme Ctrl+C (130).
+func TestCLIRaccrochePendantExtraction(t *testing.T) {
+	ext := preparerExtractionLongue(t)
+	cmd := exec.Command(os.Args[0], "-mode", "dec", "-in", "archive.chto")
+	cmd.Env = append(os.Environ(), "CHIFFREMENTO_E2E_MAIN=1")
+	cmd.Dir = ext.dossier
+	cmd.Stdin = strings.NewReader(ext.phrase + "\n")
+	var sortie bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &sortie, &sortie
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	fini := make(chan error, 1)
+	go func() { fini <- cmd.Wait() }()
+
+	limite := time.Now().Add(delaiEcran)
+	for {
+		temporaires, err := filepath.Glob(filepath.Join(ext.dossier, ".chto-tmp-*"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(temporaires) > 0 {
+			break
+		}
+		if time.Now().After(limite) {
+			_ = cmd.Process.Kill()
+			t.Fatalf("aucun temporaire en %v ; sortie :\n%s", delaiEcran, sortie.String())
+		}
+		time.Sleep(pasDeSondage)
+	}
+	if err := cmd.Process.Signal(syscall.SIGHUP); err != nil {
+		t.Fatal(err)
+	}
+	var err error
+	select {
+	case err = <-fini:
+	case <-time.After(delaiSortie):
+		_ = cmd.Process.Kill()
+		t.Fatal("le programme ne s'est pas terminé après SIGHUP")
+	}
+	var fin *exec.ExitError
+	if !errors.As(err, &fin) || fin.ExitCode() != exitRaccroche {
+		t.Fatalf("fin = %v, attendu le code %d", err, exitRaccroche)
+	}
+	ext.rienNeReste(t)
+}
+
+// extractionLongue : un dossier de 20 000 petits fichiers chiffré, la source
+// supprimée — assez long à extraire pour qu'un abandon tombe au milieu.
+type extractionLongue struct {
+	dossier, source, chiffre, phrase string
+	avant                            []byte
+}
+
+func preparerExtractionLongue(t *testing.T) extractionLongue {
+	t.Helper()
 	dossier := t.TempDir()
-	source := filepath.Join(dossier, "archive")
+	ext := extractionLongue{
+		dossier: dossier,
+		source:  filepath.Join(dossier, "archive"),
+		chiffre: filepath.Join(dossier, "archive.chto"),
+		phrase:  "phrase du dossier",
+	}
 	// Assez d'entrées pour que l'extraction soit en cours à l'arrivée de
-	// Ctrl+C (~0,4 s pour 5 000 fichiers).
+	// l'abandon (~0,4 s pour 5 000 fichiers).
 	const fichiers = 20000
 	for i := range fichiers {
-		sous := filepath.Join(source, fmt.Sprintf("d%02d", i%20))
+		sous := filepath.Join(ext.source, fmt.Sprintf("d%02d", i%20))
 		if i < 20 {
 			if err := os.MkdirAll(sous, 0700); err != nil {
 				t.Fatal(err)
@@ -896,29 +1008,23 @@ func TestE2EInterruptionPendantExtraction(t *testing.T) {
 		}
 		ecrireFichier(t, filepath.Join(sous, fmt.Sprintf("f%05d.txt", i)), []byte("clair à ne pas laisser\n"))
 	}
-	chiffre := filepath.Join(dossier, "archive.chto")
-	chiffrerPourTest(t, source, chiffre, "phrase du dossier")
-	if err := os.RemoveAll(source); err != nil {
+	chiffrerPourTest(t, ext.source, ext.chiffre, ext.phrase)
+	if err := os.RemoveAll(ext.source); err != nil {
 		t.Fatal(err)
 	}
-	avant, err := os.ReadFile(chiffre)
+	avant, err := os.ReadFile(ext.chiffre)
 	if err != nil {
 		t.Fatal(err)
 	}
+	ext.avant = avant
+	return ext
+}
 
-	p := lancerPilote(t, dossier)
-	p.choisirAction("déchiffrer")
-	p.saisirChemin("archive.chto")
-	p.saisirPhrase("phrase du dossier", false)
-	p.attendreProgression()
-	p.attendreTemporaire(dossier)
-	p.abandonnerParCtrlC()
-
-	if code := p.codeDeSortie(); code != exitInterrompu {
-		t.Fatalf("code %d, attendu %d ; fin de l'écran :\n%s", code, exitInterrompu, p.queue())
-	}
-	p.terminalRestaure()
-	err = filepath.WalkDir(dossier, func(chemin string, _ fs.DirEntry, err error) error {
+// rienNeReste vérifie qu'un abandon n'a laissé ni .chto-tmp-*, ni
+// destination, et n'a pas touché au .chto.
+func (ext extractionLongue) rienNeReste(t *testing.T) {
+	t.Helper()
+	err := filepath.WalkDir(ext.dossier, func(chemin string, _ fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
@@ -930,14 +1036,14 @@ func TestE2EInterruptionPendantExtraction(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Lstat(source); !os.IsNotExist(err) {
+	if _, err := os.Lstat(ext.source); !os.IsNotExist(err) {
 		t.Errorf("la destination existe après l'interruption (Lstat : %v)", err)
 	}
-	apres, err := os.ReadFile(chiffre)
+	apres, err := os.ReadFile(ext.chiffre)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !bytes.Equal(avant, apres) {
+	if !bytes.Equal(ext.avant, apres) {
 		t.Error("le .chto a été modifié par l'interruption")
 	}
 }

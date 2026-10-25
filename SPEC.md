@@ -57,7 +57,8 @@ Tests : TestScripts
 
 ### R-CLI-08 — Erreurs et abandon
 Une erreur s'écrit `erreur : <cause>` sur stderr avec le code 1. Un abandon
-volontaire par Ctrl+C sort avec le code 130, sans message d'erreur. Échap ne
+volontaire par Ctrl+C sort avec le code 130, sans message d'erreur ; la
+fermeture du terminal (SIGHUP), avec le code 129. Échap ne
 fait pas quitter l'interface guidée (voir R-TUI-04).
 
 Tests : TestScripts, TestE2EInterruption
@@ -223,7 +224,8 @@ défaut) ; un échec, sur l'écran d'erreur ; `entrée` revient au menu. Refuser
 destination (« annuler ») est un choix, pas un échec. On quitte par la ligne
 « quitter » du menu ou par la touche `q`, qui n'agit que sur le menu, jamais
 pendant une saisie. Le code de sortie de la session vaut 0 si tout a réussi, 1
-si au moins une opération a échoué, 130 sur Ctrl+C. Les résumés des
+si au moins une opération a échoué, 130 sur Ctrl+C, 129 si le terminal est
+fermé (SIGHUP). Les résumés des
 opérations faites, ceux-là mêmes qu'affiche la carte, s'impriment une fois
 l'écran alternatif quitté, y compris sur Ctrl+C pendant une opération
 suivante. Hors plein écran (TERM=dumb), une seule opération est menée et le
@@ -388,9 +390,11 @@ l'interface avant le lancement de l'opération n'écrit rien ; un abandon pendan
 l'écriture, temporaire `.chto-tmp-*` déjà créé, le supprime et ne laisse aucun
 chiffré. Après le nettoyage d'une interruption, l'opération qui tourne encore
 jusqu'à la sortie du processus ne peut plus rien créer ni installer : aucune
-sortie, aucun temporaire, aucun dossier d'extraction recréé.
+sortie, aucun temporaire, aucun dossier d'extraction recréé. La fermeture du
+terminal (SIGHUP) est une interruption comme les autres, en plein écran comme
+en `-mode` : mêmes nettoyages, sortie en 129 (128 + SIGHUP).
 
-Tests : TestEchecNeDetruitPasLaCible, TestDecryptFluxMauvaisMotDePasseGardeLaDestination, TestDecryptFluxMauvaisMotDePasseNeLaissePasDeFichier, TestNettoyageTemporaires, TestDossierMauvaisMotDePasse, TestE2EInterruption, TestE2EInterruptionPendantOperation, TestNettoyageFermeLeDescripteur, TestEncryptDossierIllisibleRemonteLErreur, TestCommitApresNettoyageRefuse, TestFermerTemporairesRefuseLesNouveaux, TestFermerTemporairesSupprimeCeQuiArrive, TestExtractionInterrompueNeLaisseRien, TestDechiffrementApresFermetureNeLaisseRien, TestExtractionFermeLeFichierOuvert, TestChangePasswordSauvegardeNettoyeeNeTouchePasLEntete, TestE2EInterruptionPendantExtraction, TestRunJobApresFermetureNeLancePasLOperation
+Tests : TestEchecNeDetruitPasLaCible, TestDecryptFluxMauvaisMotDePasseGardeLaDestination, TestDecryptFluxMauvaisMotDePasseNeLaissePasDeFichier, TestNettoyageTemporaires, TestDossierMauvaisMotDePasse, TestE2EInterruption, TestE2EInterruptionPendantOperation, TestNettoyageFermeLeDescripteur, TestEncryptDossierIllisibleRemonteLErreur, TestCommitApresNettoyageRefuse, TestFermerTemporairesRefuseLesNouveaux, TestFermerTemporairesSupprimeCeQuiArrive, TestExtractionInterrompueNeLaisseRien, TestDechiffrementApresFermetureNeLaisseRien, TestExtractionFermeLeFichierOuvert, TestChangePasswordSauvegardeNettoyeeNeTouchePasLEntete, TestE2EInterruptionPendantExtraction, TestCLIRaccrochePendantExtraction, TestCodeDuSignal, TestSurRaccrochageSArrete, TestRunJobApresFermetureNeLancePasLOperation
 
 ### R-FS-03 — Fichier vide : aller-retour exact
 Un fichier vide se chiffre et se déchiffre en un fichier vide, ainsi qu'un

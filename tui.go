@@ -34,8 +34,9 @@ func isInteractive() bool {
 // hôte, en écran alternatif) et les parcours tournent dans une goroutine qui
 // lui confie chaque écran. Le menu revient après chaque opération, jusqu'à ce
 // que l'utilisateur quitte : code 0 si tout a réussi, 1 si une opération au
-// moins a échoué, 130 sur Ctrl+C, 2 si le parcours a paniqué (terminal rendu,
-// temporaires supprimés, phrase oubliée, puis la panique imprimée).
+// moins a échoué, 130 sur Ctrl+C, 129 si le terminal est fermé (SIGHUP), 2 si
+// le parcours a paniqué (terminal rendu, temporaires supprimés, phrase
+// oubliée, puis la panique imprimée).
 //
 // TERM=dumb garde le comportement d'avant : huh en mode accessible, sans
 // écran alternatif, une seule opération ; l'erreur éventuelle remonte à main.
@@ -63,6 +64,14 @@ func runTUI() (int, error) {
 	// l'efface à la sortie (fermer, appelé par executer et par Ctrl+C), donc
 	// avant que main n'appelle os.Exit.
 	h.phrase = &s.phrase
+	// Fenêtre du terminal fermée : même nettoyage que Ctrl+C, sortie en 129.
+	var raccroche atomic.Bool
+	arreterRaccrochage := surRaccrochage(func() {
+		raccroche.Store(true)
+		pkg.FermerTemporaires()
+		programme.Kill()
+	})
+	defer arreterRaccrochage()
 	var garde gardeParcours
 	go garde.mener(func() { parcoursSession(h, s) }, func() {
 		// Une panique dans le parcours tuerait le processus sur-le-champ :
@@ -88,6 +97,9 @@ func runTUI() (int, error) {
 	if note := garde.panique.Load(); note != nil {
 		fmt.Fprintf(os.Stderr, "\nerreur interne : %v\n\n%s", note.valeur, note.pile)
 		return exitErreurInterne, nil
+	}
+	if raccroche.Load() {
+		return exitRaccroche, nil
 	}
 	switch {
 	case err != nil:

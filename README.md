@@ -154,7 +154,7 @@ Elle occupe tout le terminal, dans un écran à part que la sortie rend tel qu'i
 | `?` | ouvrir ou fermer cette aide |
 | `ctrl+c` | quitter tout de suite |
 
-Code de sortie de la session : `0` si tout a réussi, `1` si au moins une opération a échoué, `130` sur Ctrl+C. Avant son lancement, une opération s'abandonne sans rien écrire ; une écriture déjà lancée n'est pas coupée par `échap`.
+Code de sortie de la session : `0` si tout a réussi, `1` si au moins une opération a échoué, `130` sur Ctrl+C, `129` si la fenêtre du terminal est fermée. Avant son lancement, une opération s'abandonne sans rien écrire ; une écriture déjà lancée n'est pas coupée par `échap`.
 
 Après une opération réussie avec une phrase saisie ou générée, elle demande s'il faut **garder la phrase pour la session** (« ne pas la garder » par défaut). Si oui, elle est proposée à la saisie suivante : `⏎` l'utilise, ou on la retape. Elle est oubliée, octets mis à zéro, après 5 min sans touche (sur l'heure murale comme sur l'horloge monotone, donc aussi après une mise en veille), par `o`, et à la sortie. Seule la phrase est gardée, jamais une clé dérivée : Argon2 tourne à chaque opération. La mémoire n'est pas verrouillée : comme toute phrase tapée, elle peut être écrite dans le fichier d'échange du système.
 
@@ -513,7 +513,7 @@ It takes over the whole terminal, in a separate screen that the exit restores as
 | `?` | open or close this help |
 | `ctrl+c` | quit right away |
 
-Exit code of the session: `0` if everything succeeded, `1` if at least one operation failed, `130` on Ctrl+C. Before it starts, an operation is abandoned without writing anything; `esc` does not cut a write that is already running.
+Exit code of the session: `0` if everything succeeded, `1` if at least one operation failed, `130` on Ctrl+C, `129` if the terminal window is closed. Before it starts, an operation is abandoned without writing anything; `esc` does not cut a write that is already running.
 
 After a successful operation with a typed or generated passphrase, it asks whether to **keep the passphrase for the session** ("ne pas la garder" by default). If yes, it is offered at the next prompt: `⏎` uses it, or you retype it. It is forgotten, bytes zeroed, after 5 minutes without a key (on the wall clock and on the monotonic clock, so also after a sleep), by `o`, and on exit. Only the passphrase is kept, never a derived key: Argon2 runs on every operation. Memory is not locked: like any typed passphrase, it can be written to the system's swap file.
 
