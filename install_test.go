@@ -46,6 +46,11 @@ func ecrireFauxCosign(t *testing.T, bin, appels string, code int, message string
 
 func preparerInstall(t *testing.T, avecBundle bool) bacInstall {
 	t.Helper()
+	return preparerInstallVersion(t, avecBundle, "1.0.0")
+}
+
+func preparerInstallVersion(t *testing.T, avecBundle bool, version string) bacInstall {
+	t.Helper()
 	if runtime.GOOS == "windows" {
 		t.Skip("install.sh ne vise pas Windows")
 	}
@@ -69,7 +74,7 @@ func preparerInstall(t *testing.T, avecBundle bool) bacInstall {
 
 	// Une vraie archive, listée dans un vrai checksums.txt.
 	osNom, arch := runtime.GOOS, runtime.GOARCH
-	nom := fmt.Sprintf("chiffremento_1.0.0_%s_%s.tar.gz", osNom, arch)
+	nom := fmt.Sprintf("chiffremento_%s_%s_%s.tar.gz", version, osNom, arch)
 	contenu := filepath.Join(racine, "contenu")
 	if err := os.MkdirAll(contenu, 0o755); err != nil {
 		t.Fatal(err)
@@ -208,6 +213,8 @@ func TestInstallSansCosignAvertitEtInstalle(t *testing.T) {
 	}
 }
 
+// Release ancienne (avant la première release signée) : pas de bundle, on
+// avertit et on installe.
 func TestInstallBundleAbsentAvertitEtInstalle(t *testing.T) {
 	b := preparerInstall(t, false)
 	ecrireFauxCosign(t, b.bin, b.appels, 0, "")
@@ -223,6 +230,65 @@ func TestInstallBundleAbsentAvertitEtInstalle(t *testing.T) {
 	}
 	if _, err := os.Stat(b.appels); err == nil {
 		t.Error("cosign ne doit pas être appelé sans bundle")
+	}
+}
+
+// Dès la première release signée (2.4.0), un bundle absent est refusé : sinon
+// retirer le bundle suffirait à contourner la signature. Les versions avec
+// suffixe (2.4.0-rc1) comptent comme 2.4.0. Version illisible : refus aussi.
+func TestInstallBundleAbsentRefuseSelonVersion(t *testing.T) {
+	cas := []struct {
+		version string
+		refuse  bool
+	}{
+		{"2.4.0", true},
+		{"2.4.0-rc1", true},
+		{"2.10.0", true}, // comparaison numérique, pas alphabétique
+		{"10.0.0", true},
+		{"3.0.0", true},
+		{"2.3.9", false},
+		{"2.3.10", false},
+		{"1.0.0", false},
+		{"abc", true},
+		{"2.4", true},
+		{"", true},
+	}
+	for _, c := range cas {
+		t.Run("version "+c.version, func(t *testing.T) {
+			b := preparerInstallVersion(t, false, c.version)
+			ecrireFauxCosign(t, b.bin, b.appels, 0, "")
+			sortie, err := b.lancer(t)
+			if c.refuse {
+				if err == nil || b.installe() {
+					t.Fatalf("refus attendu\n%s", sortie)
+				}
+				if !strings.Contains(sortie, "installation refusée") || !strings.Contains(sortie, "checksums.txt.sigstore.json") {
+					t.Errorf("message de refus incomplet :\n%s", sortie)
+				}
+				return
+			}
+			if err != nil || !b.installe() {
+				t.Fatalf("installation attendue : %v\n%s", err, sortie)
+			}
+		})
+	}
+}
+
+// Cosign KO + empreinte fausse : c'est la signature qui est signalée d'abord.
+func TestInstallSignatureAvantEmpreinte(t *testing.T) {
+	b := preparerInstall(t, true)
+	ecrireFauxCosign(t, b.bin, b.appels, 1, "Error: signature invalide")
+	ecrire(t, filepath.Join(b.dossier, "checksums.txt"),
+		[]byte(strings.Repeat("0", 64)+"  chiffremento_1.0.0_"+runtime.GOOS+"_"+runtime.GOARCH+".tar.gz\n"))
+	sortie, err := b.lancer(t)
+	if err == nil || b.installe() {
+		t.Fatalf("refus attendu\n%s", sortie)
+	}
+	if !strings.Contains(sortie, "Signature de checksums.txt non vérifiée") {
+		t.Errorf("message de signature absent :\n%s", sortie)
+	}
+	if strings.Contains(sortie, "Empreinte invalide") {
+		t.Errorf("l'empreinte ne doit pas être examinée avant la signature :\n%s", sortie)
 	}
 }
 

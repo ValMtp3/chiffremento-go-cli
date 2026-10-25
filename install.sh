@@ -55,6 +55,34 @@ for candidate in "./checksums.txt" "./build/checksums.txt"; do
     [ -f "$candidate" ] && CHECKSUMS="$candidate" && break
 done
 
+# Première version publiée avec une signature. À partir d'elle, un bundle
+# absent est refusé (sinon le retirer suffirait à contourner la signature).
+# Un suffixe de pré-version (2.4.0-rc1) compte comme 2.4.0.
+PREMIERE_VERSION_SIGNEE="2.4.0"
+
+# version_signee_requise <archive> — 0 si la version lue dans le nom de
+# l'archive (chiffremento_<version>_<os>_<arch>.tar.gz) est >= 2.4.0, 1 si elle
+# est plus ancienne. Version illisible : 0 (on refuse plutôt que de laisser passer).
+version_signee_requise() {
+    local nom version coeur v_maj v_min v_pat r_maj r_min r_pat
+    nom="$(basename "$1")"
+    version="${nom#${BINARY_NAME}_}"
+    version="${version%%_*}"
+    coeur="$(printf '%s\n' "$version" | sed -n 's/^\([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\)\([-+].*\)\{0,1\}$/\1/p')"
+    [ -z "$coeur" ] && return 0
+
+    v_maj="${coeur%%.*}"; v_pat="${coeur#*.}"
+    v_min="${v_pat%%.*}"; v_pat="${v_pat#*.}"
+    r_maj="${PREMIERE_VERSION_SIGNEE%%.*}"; r_pat="${PREMIERE_VERSION_SIGNEE#*.}"
+    r_min="${r_pat%%.*}"; r_pat="${r_pat#*.}"
+
+    [ "$v_maj" -gt "$r_maj" ] && return 0
+    [ "$v_maj" -lt "$r_maj" ] && return 1
+    [ "$v_min" -gt "$r_min" ] && return 0
+    [ "$v_min" -lt "$r_min" ] && return 1
+    [ "$v_pat" -ge "$r_pat" ]
+}
+
 # Signature de checksums.txt (cosign, sans clé). Elle passe AVANT toute
 # lecture des empreintes : un checksums.txt falsifié rendrait la vérification
 # SHA-256 inutile. Une vérification qui échoue (signature fausse ou réseau
@@ -70,6 +98,12 @@ verify_signature() {
 
     bundle="$(dirname "$CHECKSUMS")/checksums.txt.sigstore.json"
     if [ ! -f "$bundle" ]; then
+        if [ -n "$ARCHIVE" ] && version_signee_requise "$ARCHIVE"; then
+            echo "❌ checksums.txt.sigstore.json est absent : installation refusée."
+            echo "   Les releases depuis la $PREMIERE_VERSION_SIGNEE sont signées ; sans ce fichier, rien ne prouve que checksums.txt est authentique."
+            echo "   Télécharge checksums.txt.sigstore.json depuis la même page de release, dans ce dossier, puis relance."
+            exit 1
+        fi
         echo "⚠️  Pas de checksums.txt.sigstore.json : signature non vérifiée (release ancienne ?)."
         return 0
     fi
@@ -86,7 +120,6 @@ verify_signature() {
     echo "🔏 Signature vérifiée : checksums.txt"
 }
 
-verify_signature
 
 # verify_checksum <fichier> — échoue si l'empreinte ne correspond pas.
 # Renvoie 2 si le fichier n'est pas listé dans checksums.txt.
@@ -123,6 +156,9 @@ ARCHIVE=""
 for candidate in ./${BINARY_NAME}_*_${OS}_${ARCH}.tar.gz ./build/${BINARY_NAME}_*_${OS}_${ARCH}.tar.gz; do
     [ -f "$candidate" ] && ARCHIVE="$candidate" && break
 done
+
+# La signature passe avant toute lecture des empreintes (verify_checksum).
+verify_signature
 
 if [ -n "$ARCHIVE" ]; then
     echo "📦 Archive trouvée : $ARCHIVE"
@@ -161,7 +197,7 @@ else
     }
 fi
 
-# 4. Installation dans /usr/local/bin
+# 4. Installation dans $INSTALL_DIR (/usr/local/bin, ou CHIFFREMENTO_INSTALL_DIR)
 echo "🚀 Installation de $BINARY_NAME dans $INSTALL_DIR..."
 echo "🔑 Un mot de passe peut être demandé pour les permissions (sudo)..."
 
