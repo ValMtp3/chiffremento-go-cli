@@ -57,7 +57,12 @@ pas terminée.
 - Indicateur de force, coût par frappe (`BenchmarkFrappe`) : 12 caractères
   ~76 µs (~106 µs accentués), 64 caractères ~2,1 ms (~3,5 ms accentués).
 - Binaire : ~6,2 Mo (`-s -w`), 6 160 898 o (avant zxcvbn interne : 8 348 898 o) ;
-  6 312 914 o avec le plein écran et ses correctifs (+148 Kio).
+  6 312 914 o avec le plein écran (mesuré en octobre 2026, Go 1.27) ; les
+  releases signées n'y ajoutent rien.
+- Tests de `pkg` : sous `-race`, les nouveaux fichiers sont écrits avec un
+  Argon2 de test (8 Mio, 1 passe ; branche éliminée à la compilation hors
+  `-race`) : ~46 s au lieu de ~290 s. Les vrais profils tournent sans `-race`
+  (job CI `profils-lourds`) : ~38 s.
 - L'écran de progression dure au moins 4 s : c'est un choix esthétique, pas un
   coût de calcul.
 - La concurrence de l'encodeur zstd est voulue : la brider à 1 coûte ~22 % de
