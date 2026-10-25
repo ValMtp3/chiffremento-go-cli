@@ -405,10 +405,20 @@ func (h *hote) View() string {
 	return disposer(h.largeur, h.hauteur, haut, corps, bas)
 }
 
+// versionAffichee ajoute le « v » quand la version commence par un chiffre :
+// goreleaser injecte « 2.4.0 », le Makefile « v2.4.0 » (git describe), et un
+// build local garde « dev ». L'option -version, elle, rend la valeur brute.
+func versionAffichee(v string) string {
+	if v != "" && v[0] >= '0' && v[0] <= '9' {
+		return "v" + v
+	}
+	return v
+}
+
 // filDAriane : « chiffremento vX.Y.Z · <opération> › <étape> », les parties
 // absentes omises.
 func filDAriane(operation, etape string) string {
-	fil := "chiffremento " + version
+	fil := "chiffremento " + versionAffichee(version)
 	separateur := " · "
 	for _, partie := range []string{operation, etape} {
 		if partie == "" {
