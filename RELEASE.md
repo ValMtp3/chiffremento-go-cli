@@ -107,7 +107,7 @@ gh run watch <id>
 GoReleaser fait alors, dans l'ordre :
 
 1. `go mod tidy`, puis compilation pour **6 cibles** : Linux, macOS et Windows, chacun en `amd64` et `arm64`. Les binaires sont compilés avec `-trimpath` (reproductibles) et la version injectée par `-X main.version`.
-2. Archives `chiffremento_X.Y.Z_<os>_<arch>.tar.gz` (`.zip` pour Windows), `checksums.txt`, et `install.sh` joint tel quel (`release.extra_files`).
+2. Archives `chiffremento_X.Y.Z_<os>_<arch>.tar.gz` (`.zip` pour Windows), `checksums.txt` (qui contient aussi l'empreinte d'`install.sh`, `checksum.extra_files`), et `install.sh` joint tel quel (`release.extra_files`).
 3. Release GitHub **en brouillon** (`draft: true`), avec un changelog généré à partir des commits. Les commits `docs:` et `test:` en sont exclus.
 4. Un SBOM par archive (syft : la liste des bibliothèques embarquées), puis la signature de `checksums.txt` par cosign, sans clé (`checksums.txt.sigstore.json`).
 5. **Homebrew** : écriture de `Casks/chiffremento.rb` dans le dépôt [`ValMtp3/homebrew-tap`](https://github.com/ValMtp3/homebrew-tap). Le cask retire l'attribut de quarantaine de macOS après l'installation, car les binaires ne sont pas signés.
@@ -115,7 +115,7 @@ GoReleaser fait alors, dans l'ordre :
 Ensuite, le workflow fait ce que GoReleaser ne fait pas :
 
 1. **Provenance** : `actions/attest-build-provenance` atteste que les archives et `checksums.txt` sortent de ce workflow, sur ce tag.
-2. **Vérification du brouillon** : il retélécharge les fichiers du brouillon, puis vérifie la signature de `checksums.txt` (identité de référence ci-dessous), les empreintes (`sha256sum -c`) et l'attestation de chaque archive (`gh attestation verify`).
+2. **Vérification du brouillon** : il retélécharge les fichiers du brouillon, puis vérifie la signature de `checksums.txt` (identité de référence ci-dessous), les empreintes des archives, des SBOM et d'`install.sh` (`sha256sum -c`, tous dans `checksums.txt` donc couverts par la signature) et l'attestation de chaque archive (`gh attestation verify`).
 3. **Publication** : seulement si tout est bon, la release passe de brouillon à publiée. Au moindre échec, le job devient rouge et la release reste un brouillon, invisible du public.
 
 Pourquoi un brouillon : une release publiée d'emblée peut être téléchargée avant qu'on ait vérifié quoi que ce soit, et on ne la retire plus proprement. Image : on ne met pas le colis en rayon avant d'avoir contrôlé le scellé.
@@ -142,8 +142,8 @@ Choix : on documente au lieu de déplacer l'écriture du cask après la publicat
 - **Étape Homebrew en erreur d'authentification** : le secret `TAP_GITHUB_TOKEN` a sans doute expiré. C'est un jeton personnel GitHub avec un droit d'écriture sur `homebrew-tap`. Le régénérer, le mettre à jour (`gh secret set TAP_GITHUB_TOKEN`), puis relancer.
 - **Relancer sans toucher au tag** : depuis l'onglet Actions, « Run workflow » sur le tag concerné (`workflow_dispatch`). `replace_existing_artifacts: true` permet de republier des fichiers déjà envoyés ; la signature (même nom de fichier) est remplacée, pas dupliquée.
 - **La vérification échoue (signature, empreinte ou attestation)** : la release reste en brouillon et le cask du tap pointe déjà vers elle (fenêtre ci-dessus). Les deux correctifs :
-  1. Lire l'étape en erreur dans le journal. Cause fréquente : réseau ou service Sigstore indisponible. On relance alors le workflow (« Run workflow »), rien d'autre.
-  2. Si les fichiers eux-mêmes sont en cause (empreinte fausse, identité inattendue) : ne **pas** publier à la main. Supprimer le brouillon (`gh release delete vX.Y.Z --yes`, sans `--cleanup-tag`), corriger, relancer. Le tag n'a jamais été public, mais la règle de l'étape 4 reste la même : sans accord, on ne le déplace pas.
+  1. Lire l'étape en erreur dans le journal. Cause fréquente : réseau ou service Sigstore indisponible. On relance alors le workflow (« Run workflow ») : GoReleaser supprime l'ancien brouillon (`replace_existing_draft`) et en recrée un, il n'en reste donc qu'un. Si le journal dit « Plusieurs releases pour le tag », supprimer à la main le brouillon en trop (`gh release list`, puis `gh release delete vX.Y.Z --yes`) avant de relancer.
+  2. Si les fichiers eux-mêmes sont en cause (empreinte fausse, identité inattendue) : ne **pas** publier à la main. Supprimer le brouillon (`gh release delete vX.Y.Z --yes`, sans `--cleanup-tag`), corriger, relancer. La release n'a jamais été publique, mais la règle de l'étape 4 reste la même : sans accord, on ne le déplace pas.
 - **Relance sur une release déjà publiée** : GoReleaser garde l'état de la release (vérifié dans son code, v2.18.3). Elle reste publiée, ses fichiers sont remplacés. L'étape « Publier » ne fait alors rien. ⚠️ Si la vérification échoue pendant cette relance, la release **reste publique** (le workflow ne dépublie jamais, ce serait pire pour ceux qui l'ont déjà téléchargée) mais ses fichiers viennent d'être remplacés par des fichiers non vérifiés. Rejouer vite le workflow ; à défaut, repasser la release en brouillon à la main (`gh release edit vX.Y.Z --draft=true`) le temps d'enquêter.
 - **Release à blanc** : le workflow `.github/workflows/release-a-blanc.yml` rejoue compilation, archives, checksums et SBOM (`--snapshot`, sans signature ni publication) sur toute PR qui touche `.goreleaser.yaml`, `release.yml`, lui-même ou `install.sh`. Une faute de config se voit donc sur la PR, pas pendant la release. On peut aussi le lancer à la main (« Run workflow »).
 - Pour tester la configuration en local (GoReleaser n'est pas une dépendance du projet, à installer à part) :
@@ -272,7 +272,8 @@ Une release n'est terminée qu'une fois installée comme le ferait un utilisateu
      --certificate-identity-regexp '^https://github.com/ValMtp3/chiffremento-go-cli/.github/workflows/release.yml@refs/tags/v' \
      --certificate-oidc-issuer https://token.actions.githubusercontent.com \
      checksums.txt
-   gh attestation verify chiffremento_X.Y.Z_linux_amd64.tar.gz --repo ValMtp3/chiffremento-go-cli
+   gh attestation verify chiffremento_X.Y.Z_linux_amd64.tar.gz --repo ValMtp3/chiffremento-go-cli \
+     --signer-workflow ValMtp3/chiffremento-go-cli/.github/workflows/release.yml
    ```
 
    Les deux doivent finir sur « Verified OK » (ou un message équivalent). Sinon, voir « La vérification échoue » à l'étape 5.

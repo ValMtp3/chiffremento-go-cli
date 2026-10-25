@@ -20,6 +20,11 @@ release:
   # Rend une relance possible sur un tag déjà publié : sans ça, goreleaser
   # échoue sur « asset already_exists » et s'arrête avant l'étape Homebrew.
   replace_existing_artifacts: true
+  # Relance après une vérification échouée : le brouillon d'avant est supprimé
+  # et recréé. Sans ça, goreleaser cherche la release « par tag », ce que
+  # GitHub ne fait jamais pour un brouillon : il en créerait un second, et on
+  # ne saurait plus lequel est vérifié. Ne touche jamais une release publiée.
+  replace_existing_draft: true
   # Le README invite à télécharger install.sh depuis la page de la release,
   # à côté de l'archive et de checksums.txt. Sans cette ligne, il n'y était
   # jamais joint.
@@ -61,6 +66,10 @@ archives:
 
 checksum:
   name_template: "checksums.txt"
+  # install.sh est exécuté par les utilisateurs : son empreinte doit être dans
+  # checksums.txt pour être couverte par la signature, comme les archives.
+  extra_files:
+    - glob: ./install.sh
 
 # Un SBOM (inventaire des composants embarqués, format SPDX) par archive, généré
 # par syft. Il permet à un utilisateur ou à un scanner de vulnérabilités de

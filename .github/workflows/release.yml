@@ -75,6 +75,7 @@ jobs:
             dist/*.tar.gz
             dist/*.zip
             dist/checksums.txt
+            install.sh
 
       # À partir d'ici la release est encore un brouillon (`draft: true`) : on
       # télécharge ce qui est VRAIMENT en ligne, pas les fichiers locaux, pour
@@ -93,12 +94,19 @@ jobs:
           TAG: ${{ github.ref_name }}
         run: |
           set -euo pipefail
-          release_id="$(gh api --paginate "repos/${REPO}/releases" \
-            --jq '.[] | select(.tag_name == env.TAG) | .id' | sed -n 1p)"
-          if [ -z "${release_id}" ]; then
+          ids="$(gh api --paginate "repos/${REPO}/releases" \
+            --jq '.[] | select(.tag_name == env.TAG) | .id')"
+          if [ -z "${ids}" ]; then
             echo "::error::Aucune release trouvée pour le tag ${TAG}."
             exit 1
           fi
+          # Deux releases pour un même tag : on ne sait pas laquelle vérifier
+          # ni publier. On s'arrête plutôt que de deviner.
+          if [ "$(printf '%s\n' "${ids}" | wc -l)" -ne 1 ]; then
+            echo "::error::Plusieurs releases pour le tag ${TAG} (ids : $(printf '%s' "${ids}" | tr '\n' ' ')). Supprimer le brouillon en trop, puis relancer."
+            exit 1
+          fi
+          release_id="${ids}"
           echo "id=${release_id}" >> "${GITHUB_OUTPUT}"
 
           mkdir -p "${RUNNER_TEMP}/verif"
@@ -110,10 +118,16 @@ jobs:
               > "${RUNNER_TEMP}/verif/${asset_name}"
           done
           ls -l "${RUNNER_TEMP}/verif"
+          for required in checksums.txt checksums.txt.sigstore.json install.sh; do
+            if [ ! -s "${RUNNER_TEMP}/verif/${required}" ]; then
+              echo "::error::${required} est absent ou vide dans la release."
+              exit 1
+            fi
+          done
 
       # Trois preuves, toutes obligatoires : (1) la signature de checksums.txt
-      # vient bien de CE workflow sur un tag `v*` ; (2) chaque fichier a
-      # l'empreinte écrite dans checksums.txt ; (3) chaque archive a une
+      # vient bien de CE workflow sur un tag `v*` ; (2) chaque fichier (archives,
+      # SBOM et install.sh) a l'empreinte écrite dans checksums.txt ; (3) chaque archive a une
       # attestation de provenance. Le moindre échec arrête le job ICI, avant
       # la publication : le brouillon reste brouillon.
       #
@@ -123,6 +137,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
           IDENTITE: '^https://github.com/ValMtp3/chiffremento-go-cli/.github/workflows/release.yml@refs/tags/v'
           EMETTEUR: https://token.actions.githubusercontent.com
         run: |
@@ -136,7 +151,8 @@ jobs:
           sha256sum -c checksums.txt
           for archive in *.tar.gz *.zip; do
             gh attestation verify "${archive}" --repo "${REPO}" \
-              --signer-workflow "${REPO}/.github/workflows/release.yml"
+              --signer-workflow "${REPO}/.github/workflows/release.yml" \
+              --source-ref "refs/tags/${TAG}"
           done
 
       # Seulement si tout est vérifié. Sur une release déjà publiée (relance),
