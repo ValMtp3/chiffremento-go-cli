@@ -33,6 +33,23 @@
 └────────────────────────────────────────────────────┘
 ```
 
+## ✨ Nouveautés v2.4
+
+Lancer `chiffremento` ouvre maintenant une vraie application plein écran, et l'indicateur de force connaît le français. Les releases sont aussi signées : on peut vérifier qu'elles viennent bien du dépôt.
+
+> Le **format de fichier** ne change pas : il reste en v4. Les `.chto` créés avec les versions précédentes s'ouvrent comme avant.
+
+- **🖥️ Interface plein écran.** Un seul écran en plein terminal, avec une barre du haut (l'opération et l'étape) et une barre du bas (les touches utiles). Après chaque opération, on revient au menu : plus besoin de relancer le programme. `Échap` abandonne l'opération en cours, `q` quitte, `?` affiche l'aide, `o` oublie la phrase gardée. Une carte résume le résultat. En cas d'échec, un écran d'erreur donne la cause et un conseil court (mauvaise phrase, fichier abîmé, permission refusée…).
+- **🧠 Phrase gardée pour la session, sur demande.** Après une opération réussie, l'interface demande s'il faut garder la phrase pour la suivante (« non » par défaut). Elle est oubliée après 5 minutes sans touche, avec `o`, ou à la sortie. Seule la phrase est gardée, jamais la clé dérivée.
+- **📊 Indicateur de force en français.** Il reconnaît les mots français, les prénoms et les noms de famille de l'INSEE, avec ou sans accent. `zxcvbn`, le calcul qui estime combien d'essais il faut pour deviner un mot de passe, est maintenant une copie interne au projet. Elle corrige des défauts de l'original avec les caractères accentués : un mot de passe pouvait être estimé à 0 essai, et `andré` n'était pas reconnu comme un mot.
+- **🪶 Plus léger.** Le binaire passe de 8 348 898 à 6 312 914 octets. Lancer `-version` demande ~4,2 Mo de mémoire au lieu de ~15,5 Mo : les listes de mots ne sont chargées qu'à la première estimation de force.
+- **🔏 Releases signées.** Chaque release contient une signature de `checksums.txt` (faite avec `cosign`, un outil de signature), la liste des bibliothèques embarquées (SBOM) et une attestation de provenance. `install.sh` vérifie la signature si `cosign` est installé. Voir [Vérifier une release](#vérifier-une-release).
+- **🛡️ Fiabilité.**
+  - Plus aucun fichier temporaire déchiffré ne reste sur le disque après Ctrl+C, fermeture de la fenêtre ou plantage.
+  - La copie du mot de passe est effacée de la mémoire avant la sortie.
+  - Saisie du mot de passe : deux bouts de code pouvaient lire et écrire la saisie en même temps (une « course de données »). C'est corrigé pour le mot de passe et sa confirmation.
+  - `Échap` dans l'explorateur de fichiers remonte d'un dossier, au lieu de valider sans fichier.
+
 ## ✨ Nouveautés v2.3
 
 > Le **format de fichier** ne change pas : il reste en v4.
@@ -92,7 +109,7 @@
 - **📦 Compression** : **zstd**, optionnelle avant chiffrement et proposée active pour un dossier. Elle remplace gzip, mesurée ~8× plus rapide pour un ratio équivalent ; les anciens fichiers gzip restent déchiffrables mais ne sont plus produits.
 - **📏 Taille masquée** : option `-pad`, qui arrondit la taille au palier supérieur ([schéma Padmé](https://petsymposium.org/2019/files/papers/issue4/popets-2019-0056.pdf)) pour qu'un `.chto` ne trahisse plus la taille exacte de son contenu.
 - **🔗 Composable** : `-in -` et `-out -` lisent et écrivent sur les flux standard.
-- **📊 Indicateur de force réaliste** : la robustesse du mot de passe est évaluée par [`zxcvbn`](https://github.com/trustelem/zxcvbn), qui reconnaît les mots de dictionnaire, les prénoms, les dates et les suites de touches. `azerty123` est annoncé à ~13 bits, pas à ~60.
+- **📊 Indicateur de force réaliste** : la robustesse du mot de passe est évaluée par une copie interne de [`zxcvbn`](https://github.com/trustelem/zxcvbn), qui reconnaît les mots de dictionnaire (dont les mots, prénoms et noms français, accents compris), les dates et les suites de touches. `azerty123` est annoncé à ~13 bits, pas à ~60.
 - **🎲 Phrase de passe générée** : à l'étape du mot de passe, l'interface propose de générer une phrase de 7 mots français, avec majuscules, séparateurs et un chiffre tirés au hasard par `crypto/rand` — environ **128 bits**. Elle s'affiche masquée, se dévoile ou se copie dans le presse-papier, et l'interface demande confirmation qu'elle a été enregistrée avant de chiffrer. Aussi en ligne de commande : `-mode genpass [-mots N]`. Liste de mots : celle compilée par Tango pour Tails et le Tor Project ([CC0](https://github.com/ulif/diceware)).
 - **😱 Mode parano** : double chiffrement en cascade (ChaCha20 à l'extérieur, AES à l'intérieur), avec deux clés dérivées indépendamment par HKDF.
 - **🔗 En-tête authentifié** : version, drapeaux, algorithme, paramètres Argon2, sel et engagement de clé servent tous de données associées au scellement de l'enveloppe. Modifier un seul octet de l'en-tête empêche le déchiffrement. Jusqu'au format v3, ce liage passait par la dérivation de la clé elle-même.
@@ -506,6 +523,23 @@ MIT — voir [LICENSE](LICENSE). Les composants et données de tiers (zxcvbn, li
 
 **Chiffremento CLI** is a command-line tool written in Go for encrypting and decrypting files. It offers a guided interface, or flags for scripting.
 
+## ✨ New in v2.4
+
+Running `chiffremento` now opens a real full-screen application, and the strength meter knows French. Releases are also signed, so you can check they come from the repository.
+
+> The **file format** does not change: it stays at v4. `.chto` files created with earlier versions open as before.
+
+- **🖥️ Full-screen interface.** One screen filling the terminal, with a top bar (the operation and the step) and a bottom bar (the useful keys). After each operation you return to the menu: no need to relaunch the program. `Esc` abandons the current operation, `q` quits, `?` shows help, `o` forgets the kept passphrase. A card sums up the result. On failure, an error screen gives the cause and a short piece of advice (wrong passphrase, damaged file, permission denied…).
+- **🧠 Passphrase kept for the session, on request.** After a successful operation, the interface asks whether to keep the passphrase for the next one ("no" by default). It is forgotten after 5 minutes without a keypress, with `o`, or on exit. Only the passphrase is kept, never the derived key.
+- **📊 French-aware strength meter.** It recognises French words and INSEE first and last names, with or without accents. `zxcvbn`, the calculation that estimates how many guesses it takes to crack a password, is now an internal copy. It fixes defects of the original with accented characters: a password could be estimated at 0 guesses, and `andré` was not recognised as a word.
+- **🪶 Lighter.** The binary goes from 8,348,898 to 6,312,914 bytes. Running `-version` needs ~4.2 MB of memory instead of ~15.5 MB: the word lists are only loaded at the first strength estimate.
+- **🔏 Signed releases.** Every release contains a signature of `checksums.txt` (made with `cosign`, a signing tool), the list of embedded libraries (SBOM) and a provenance attestation. `install.sh` checks the signature when `cosign` is installed. See [Verify a release](#verify-a-release).
+- **🛡️ Reliability.**
+  - No decrypted temporary file is left on disk after Ctrl+C, closing the window or a crash.
+  - The password copy is wiped from memory before exit.
+  - Password input: two pieces of code could read and write the input at the same time (a "data race"). This is fixed for the password and its confirmation.
+  - `Esc` in the file browser goes up one folder, instead of submitting with no file.
+
 ## ✨ New in v2.3
 
 > The **file format** does not change: it stays at v4.
@@ -565,7 +599,7 @@ MIT — voir [LICENSE](LICENSE). Les composants et données de tiers (zxcvbn, li
 - **📦 Compression**: **zstd**, optional before encryption and offered pre-enabled for folders. It replaces gzip, measured ~8× faster at a comparable ratio; existing gzip files stay decryptable but are no longer produced.
 - **📏 Size masking**: the `-pad` option rounds the size up to the next bucket ([Padmé scheme](https://petsymposium.org/2019/files/papers/issue4/popets-2019-0056.pdf)), so a `.chto` no longer betrays the exact size of its contents.
 - **🔗 Composable**: `-in -` and `-out -` read from and write to the standard streams.
-- **📊 Realistic strength meter**: password strength is scored by [`zxcvbn`](https://github.com/trustelem/zxcvbn), which recognises dictionary words, names, dates and keyboard patterns. `azerty123` is reported at ~13 bits, not ~60.
+- **📊 Realistic strength meter**: password strength is scored by an internal copy of [`zxcvbn`](https://github.com/trustelem/zxcvbn), which recognises dictionary words (including French words and first and last names, accents included), dates and keyboard patterns. `azerty123` is reported at ~13 bits, not ~60.
 - **🎲 Generated passphrase**: at the password step, the interface offers to generate a 7-word French passphrase, with capitals, separators and one digit drawn by `crypto/rand` — about **128 bits**. It is shown masked, can be revealed or copied to the clipboard, and the interface asks for confirmation that it has been saved before encrypting. Also on the command line: `-mode genpass [-mots N]`. Word list: the one compiled by Tango for Tails and the Tor Project ([CC0](https://github.com/ulif/diceware)).
 - **😱 Parano mode**: cascaded double encryption (ChaCha20 outside, AES inside) with two independently derived keys via HKDF.
 - **🔗 Authenticated header**: version, flags, algorithm, Argon2 parameters, salt and key commitment all act as associated data for the envelope seal. Changing a single header byte makes decryption fail. Up to format v3, that binding went through key derivation itself.
