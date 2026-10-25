@@ -490,10 +490,15 @@ func programmeSansTerminal(t *testing.T, h *hote) *tea.Program {
 func TestSortieExterneLibereLeParcours(t *testing.T) {
 	h := nouvelHote(nil)
 	p := programmeSansTerminal(t, h)
+	// Send ne rend la main qu'une fois le message reçu par la boucle du
+	// programme : après recue, la demande est arrivée à l'hôte.
+	recue := make(chan struct{})
+	h.envoyer = func(msg tea.Msg) {
+		p.Send(msg)
+		close(recue)
+	}
 	issue := make(chan error, 1)
-	ouvert := make(chan struct{})
 	go func() {
-		close(ouvert)
 		_, err := h.afficher(&ecranDeTest{modele: texteFixe{"en attente"}})
 		issue <- err
 	}()
@@ -502,8 +507,7 @@ func TestSortieExterneLibereLeParcours(t *testing.T) {
 		interrompu, _ := h.executer(p)
 		fin <- interrompu
 	}()
-	<-ouvert
-	time.Sleep(50 * time.Millisecond) // le temps que la demande parte
+	<-recue
 	p.Quit()
 	select {
 	case interrompu := <-fin:
@@ -531,7 +535,8 @@ func TestQuitterTermineLeProgramme(t *testing.T) {
 		}
 		fin <- interrompu
 	}()
-	time.Sleep(50 * time.Millisecond)
+	// Pas d'attente : le QuitMsg de quitter part par Send, qui attend que
+	// la boucle du programme tourne pour le lui remettre.
 	h.quitter()
 	select {
 	case interrompu := <-fin:
