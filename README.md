@@ -162,12 +162,12 @@ Elle demande l'opération, puis comment désigner la cible : **saisir un chemin*
 
 Les décisions suivent la même grammaire : `↑↓` parcourent les réponses, `→` (ou `entrée`) valide, `←` revient à la décision précédente — y compris d'un écran à l'autre, en gardant les réponses déjà données. Dans un champ texte et dans l'explorateur, où `←` sert déjà, le retour se fait avec `shift+tab`.
 
-Elle occupe tout le terminal, dans un écran à part que la sortie rend tel qu'il était : une barre en haut (`chiffremento v2.3.0 · chiffrer › mot de passe`, et `● phrase en mémoire` à droite quand une phrase est gardée), le cadre au centre (de 52 à 80 colonnes selon la fenêtre), les touches de l'écran courant en bas. Sur un terminal trop petit, les barres disparaissent et le cadre prend toute la place. Le menu revient après chaque opération : une carte donne le résultat, un écran d'erreur donne la cause et quoi faire, `entrée` revient au menu. On quitte par la ligne « quitter » du menu ou par `q`. Les résumés complets de la session sont alors imprimés dans le terminal.
+Elle occupe tout le terminal, dans un écran à part que la sortie rend tel qu'il était : une barre en haut (`chiffremento v2.4.0 · chiffrer › mot de passe`, et `● phrase en mémoire` à droite quand une phrase est gardée), le cadre au centre (de 52 à 80 colonnes selon la fenêtre), les touches de l'écran courant en bas. Sur un terminal trop petit, les barres disparaissent et le cadre prend toute la place. Le menu revient après chaque opération : une carte donne le résultat, un écran d'erreur donne la cause et quoi faire, `entrée` revient au menu. On quitte par la ligne « quitter » du menu ou par `q`. Les résumés complets de la session sont alors imprimés dans le terminal.
 
 Captures réelles (terminal de 80×24, binaire lancé dans un pseudo-terminal), le menu puis les options de chiffrement :
 
 ```text
-  chiffremento 2.4.0 · menu
+  chiffremento v2.4.0 · menu
 
 
 
@@ -196,7 +196,7 @@ Captures réelles (terminal de 80×24, binaire lancé dans un pseudo-terminal), 
 L'écran des options est coupé en bas : le terminal ne fait que 24 lignes, l'interface défile pour garder le champ actif visible.
 
 ```text
-  chiffremento 2.4.0 · chiffrer › options
+  chiffremento v2.4.0 · chiffrer › options
 
 
   ┌──────────────────────────────────────────────────────────────────────────┐
@@ -220,6 +220,35 @@ L'écran des options est coupé en bas : le terminal ne fait que 24 lignes, l'in
 
 
   ↑↓ choisir  → valider  ← revenir                      ? aide  ctrl+c quitter
+```
+
+Et l'écran du mot de passe, avec l'indicateur de force pour « dupont » :
+
+```text
+  chiffremento v2.4.0 · chiffrer › options
+
+
+  ┌──────────────────────────────────────────────────────────────────────────┐
+  │ ┃ mot de passe                                                           │
+  │ ┃ ~5 bits — faible, une phrase de passe serait bien plus sûre · cassé en │
+  │ ┃ quelques secondes hors ligne                                           │
+  │ ┃ > ******                                                               │
+  │                                                                          │
+  │   confirmation                                                           │
+  │   une faute de frappe rendrait le fichier définitivement irrécupérable   │
+  │   >                                                                      │
+  │                                                                          │
+  │                                                                          │
+  │                                                                          │
+  │                                                                          │
+  │                                                                          │
+  │                                                                          │
+  │                                                                          │
+  │                                                                          │
+  └──────────────────────────────────────────────────────────────────────────┘
+
+
+  ⏎ valider  shift+tab revenir                          ? aide  ctrl+c quitter
 ```
 
 | Touche | Rôle |
@@ -602,12 +631,12 @@ It asks for the operation, then how to point at the target: **type a path** (or 
 
 Every decision follows the same grammar: `↑↓` move through the answers, `→` (or `enter`) confirms, `←` goes back to the previous decision — across screens too, keeping the answers already given. In a text field and in the browser, where `←` already has a job, going back is `shift+tab`.
 
-It takes over the whole terminal, in a separate screen that the exit restores as it was: a bar at the top (`chiffremento v2.3.0 · chiffrer › mot de passe`, and `● phrase en mémoire` on the right while a passphrase is kept), the frame in the middle (52 to 80 columns depending on the window), the keys of the current screen at the bottom. On a terminal that is too small, the bars disappear and the frame takes all the room. The menu comes back after every operation: a card shows the result, an error screen shows the cause and what to do, `enter` returns to the menu. You quit with the "quitter" line of the menu or with `q`. The full summaries of the session are then printed in the terminal.
+It takes over the whole terminal, in a separate screen that the exit restores as it was: a bar at the top (`chiffremento v2.4.0 · chiffrer › mot de passe`, and `● phrase en mémoire` on the right while a passphrase is kept), the frame in the middle (52 to 80 columns depending on the window), the keys of the current screen at the bottom. On a terminal that is too small, the bars disappear and the frame takes all the room. The menu comes back after every operation: a card shows the result, an error screen shows the cause and what to do, `enter` returns to the menu. You quit with the "quitter" line of the menu or with `q`. The full summaries of the session are then printed in the terminal.
 
 Real captures (80×24 terminal, the binary run in a pseudo-terminal), the menu then the encryption options (the interface itself is in French):
 
 ```text
-  chiffremento 2.4.0 · menu
+  chiffremento v2.4.0 · menu
 
 
 
@@ -636,7 +665,7 @@ Real captures (80×24 terminal, the binary run in a pseudo-terminal), the menu t
 The options screen is cut at the bottom: the terminal is only 24 rows high, the interface scrolls to keep the active field visible.
 
 ```text
-  chiffremento 2.4.0 · chiffrer › options
+  chiffremento v2.4.0 · chiffrer › options
 
 
   ┌──────────────────────────────────────────────────────────────────────────┐
@@ -660,6 +689,35 @@ The options screen is cut at the bottom: the terminal is only 24 rows high, the 
 
 
   ↑↓ choisir  → valider  ← revenir                      ? aide  ctrl+c quitter
+```
+
+And the password screen, with the strength indicator for "dupont" ("faible" means weak):
+
+```text
+  chiffremento v2.4.0 · chiffrer › options
+
+
+  ┌──────────────────────────────────────────────────────────────────────────┐
+  │ ┃ mot de passe                                                           │
+  │ ┃ ~5 bits — faible, une phrase de passe serait bien plus sûre · cassé en │
+  │ ┃ quelques secondes hors ligne                                           │
+  │ ┃ > ******                                                               │
+  │                                                                          │
+  │   confirmation                                                           │
+  │   une faute de frappe rendrait le fichier définitivement irrécupérable   │
+  │   >                                                                      │
+  │                                                                          │
+  │                                                                          │
+  │                                                                          │
+  │                                                                          │
+  │                                                                          │
+  │                                                                          │
+  │                                                                          │
+  │                                                                          │
+  └──────────────────────────────────────────────────────────────────────────┘
+
+
+  ⏎ valider  shift+tab revenir                          ? aide  ctrl+c quitter
 ```
 
 | Key | Role |
