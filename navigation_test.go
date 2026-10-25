@@ -723,3 +723,20 @@ func TestHoteDuCadreEnTermDumb(t *testing.T) {
 		t.Error("hoteDuCadre rend l'hôte en TERM=dumb")
 	}
 }
+
+// TestEchapDansUnChampTexteRevientAuMenu : dans un champ texte (le mot de
+// passe), Échap n'est pas un caractère : l'hôte la prend, et l'étape rend
+// errMenu — retour au menu sans rien écrire.
+func TestEchapDansUnChampTexteRevientAuMenu(t *testing.T) {
+	h, boite := hoteSynchrone(t, 100, 30)
+	password := ""
+	form, ancre := passwordForm("détails", &password)
+	issue := make(chan error, 1)
+	go func() { issue <- lancerEtapeNommee("mot de passe", form, ancre) }()
+	demandeRecue(t, h, boite)
+	taper(t, h, "abc")
+	envoyerHote(t, h, tea.KeyMsg{Type: tea.KeyEsc})
+	if err := issueRecue(t, issue); !errors.Is(err, errMenu) {
+		t.Fatalf("Échap dans le champ : %v, attendu errMenu", err)
+	}
+}

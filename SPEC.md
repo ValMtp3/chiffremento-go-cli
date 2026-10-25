@@ -166,7 +166,7 @@ rien ; dans l'explorateur, il remonte d'un dossier. Après l'écriture, sur la
 question de suppression ou de renommage, il vaut « garder » et ne compte pas
 comme un échec.
 
-Tests : TestE2EInterruption, TestE2EInterruptionPendantOperation, TestE2EInterruptionApresEcriture, TestCtrlCApresEcritureLeDit, TestCtrlCAttendQueLeParcoursEfface, TestSortieMalgreUnParcoursBloque, TestEchapAvantLancementRevientAuMenu, TestEchapSurLeMenuNeFaitRien, TestEchapApresEcritureGarde, TestEchapRemonteDansLExplorateur
+Tests : TestE2EInterruption, TestE2EInterruptionPendantOperation, TestE2EInterruptionApresEcriture, TestCtrlCApresEcritureLeDit, TestCtrlCAttendQueLeParcoursEfface, TestSortieMalgreUnParcoursBloque, TestE2ECtrlCAvecPhraseGardee, TestEchapAvantLancementRevientAuMenu, TestEchapDansUnChampTexteRevientAuMenu, TestEchapSurLeMenuNeFaitRien, TestEchapApresEcritureGarde, TestEchapRemonteDansLExplorateur
 
 ### R-TUI-05 — Mauvaise phrase de passe dans l'interface
 Une mauvaise phrase de passe donne un message clair, et rien n'est écrit. En
@@ -187,7 +187,7 @@ Tests : TestE2EMauvaisePhrase, TestEcranErreurMauvaisePhrase, TestEcranErreurQuo
 décision précédente en gardant les réponses déjà données ; dans un champ texte
 et dans l'explorateur, le retour se fait avec `shift+tab`.
 
-Tests : TestAuditValidationAuClavier, TestAuditRetourEnArriere, TestAuditDeplacementDansLesListes, TestAuditExplorateurFleches, TestRetourDepuis, TestRetourDepuisUneListe, TestRetourDepuisUneSaisie, TestRetourDepuisLexplorateur, TestPasDeRetourDepuisLesQuestionsSuivantes, TestEcranMotDePasseRevientEnArriere, TestOptionsSurviventAuRetour, TestFlecheDroiteValideLeDernierChamp, TestFlecheDroiteValideUneQuestionUnique, TestEntreeValideAussiLeDernierChamp, TestFlecheDroiteNeSoumetPasTropTot
+Tests : TestAuditValidationAuClavier, TestAuditRetourEnArriere, TestAuditDeplacementDansLesListes, TestAuditExplorateurFleches, TestRetourDepuis, TestRetourDepuisUneListe, TestRetourDepuisUneSaisie, TestRetourDepuisLexplorateur, TestPasDeRetourDepuisLesQuestionsSuivantes, TestEcranMotDePasseRevientEnArriere, TestOptionsSurviventAuRetour, TestFlecheDroiteValideLeDernierChamp, TestFlecheDroiteValideUneQuestionUnique, TestEntreeValideAussiLeDernierChamp, TestFlecheDroiteNeSoumetPasTropTot, TestTouchesExplorateurFerme, TestPremierChampLuApresInit
 
 ### R-TUI-07 — Changement de mot de passe réservé à la v4
 L'interface refuse de changer le mot de passe d'un fichier d'un ancien format,
@@ -236,7 +236,7 @@ ne laisse ni l'écran alternatif ni le terminal en mode brut ni de
 temporaire : la phrase est oubliée, le terminal rendu, puis la panique est
 imprimée (« erreur interne : … » et la pile) et la session sort en 2.
 
-Tests : TestQuitterDepuisLeMenu, TestMenuSansQuitterEnTermDumb, TestPaniqueDuParcoursRendLeTerminal, TestParcoursSansPaniqueNeRendRien, TestQSansEffetPendantSaisie, TestCodeSortieApresEchec, TestAnnulerLEcrasementNEstPasUnEchec, TestCtrlCTermineLaSession, TestSortieExterneLibereLeParcours, TestE2EChiffrerPuisDechiffrer, TestE2EMauvaisePhrase, TestE2EInterruptionGardeLesResumes, TestCarteResultatRevientAuMenu, TestQuestionSuppressionDansLaCarte, TestResumesImprimesALaSortie
+Tests : TestQuitterDepuisLeMenu, TestMenuSansQuitterEnTermDumb, TestHoteDuCadreEnTermDumb, TestAfficherPrefereLaReponseDeposee, TestPaniqueDuParcoursRendLeTerminal, TestParcoursSansPaniqueNeRendRien, TestQSansEffetPendantSaisie, TestCodeSortieApresEchec, TestAnnulerLEcrasementNEstPasUnEchec, TestCtrlCTermineLaSession, TestSortieExterneLibereLeParcours, TestE2EChiffrerPuisDechiffrer, TestE2EMauvaisePhrase, TestE2EInterruptionGardeLesResumes, TestCarteResultatRevientAuMenu, TestQuestionSuppressionDansLaCarte, TestResumesImprimesALaSortie
 
 ## FMT — compatibilité des formats
 

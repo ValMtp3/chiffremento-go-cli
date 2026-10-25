@@ -739,6 +739,33 @@ func TestE2EPhraseGardeePourLaSession(t *testing.T) {
 	}
 }
 
+// R-TUI-12 et R-TUI-04 : Ctrl+C avec une phrase gardée sort en 130 et rend
+// le terminal, comme sans phrase. L'effacement lui-même (octets à zéro avant
+// la sortie) se vérifie dans le processus : TestPhraseOublieeALaSortie.
+func TestE2ECtrlCAvecPhraseGardee(t *testing.T) {
+	dossier := t.TempDir()
+	ecrireFichier(t, filepath.Join(dossier, "secret.txt"), []byte("données\n"))
+
+	p := lancerPilote(t, dossier)
+	p.choisirAction("chiffrer")
+	p.saisirChemin("secret.txt")
+	p.validerOptionsParDefaut()
+	p.saisirPhrase("correct horse battery staple", true)
+	p.repondreSuppression(false)
+	p.repondreGarder(true)
+	p.attendre("● phrase en mémoire")
+	p.revenirAuMenu()
+	p.attendreMenu()
+	p.abandonnerParCtrlC()
+	if code := p.codeDeSortie(); code != exitInterrompu {
+		t.Fatalf("code %d, attendu %d ; fin de l'écran :\n%s", code, exitInterrompu, p.queue())
+	}
+	p.terminalRestaure()
+	if strings.Contains(p.ecran(), "erreur :") {
+		t.Errorf("Ctrl+C avec une phrase gardée affiche une erreur ; fin de l'écran :\n%s", p.queue())
+	}
+}
+
 // chiffrerPourTest prépare un .chto hors de l'interface, au profil standard.
 func chiffrerPourTest(t *testing.T, clair, chiffre, phrase string) {
 	t.Helper()
