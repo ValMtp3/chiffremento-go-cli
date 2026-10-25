@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/klauspost/compress/zstd"
 	"github.com/minio/sio"
@@ -154,9 +155,29 @@ func nettoyerRegistre() {
 		if f != nil {
 			f.Close()
 		}
-		os.RemoveAll(p)
+		supprimerAvecNouvelEssai(p)
 		delete(pending, p)
 	}
+}
+
+// supprimerTout est os.RemoveAll ; les tests simulent un échec.
+var supprimerTout = os.RemoveAll
+
+// delaiNouvelEssai : sous Windows, un fichier qu'on vient de fermer peut
+// rester verrouillé un court instant (antivirus, indexation, écriture d'une
+// autre goroutine pas encore retombée). Un seul nouvel essai, après ce délai
+// borné : le nettoyage précède la sortie du processus, il ne doit pas
+// l'arrêter longtemps.
+const delaiNouvelEssai = 30 * time.Millisecond
+
+// supprimerAvecNouvelEssai supprime p, et réessaie une fois si ça échoue.
+// Un second échec est abandonné : il n'y a plus personne à qui le dire.
+func supprimerAvecNouvelEssai(p string) {
+	if supprimerTout(p) == nil {
+		return
+	}
+	time.Sleep(delaiNouvelEssai)
+	_ = supprimerTout(p)
 }
 
 func trackTemp(p string) error { return trackTempFile(p, nil) }

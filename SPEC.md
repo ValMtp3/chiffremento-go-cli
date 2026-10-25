@@ -394,9 +394,11 @@ chiffré. Après le nettoyage d'une interruption, l'opération qui tourne encore
 jusqu'à la sortie du processus ne peut plus rien créer ni installer : aucune
 sortie, aucun temporaire, aucun dossier d'extraction recréé. La fermeture du
 terminal (SIGHUP) est une interruption comme les autres, en plein écran comme
-en `-mode` : mêmes nettoyages, sortie en 129 (128 + SIGHUP).
+en `-mode` : mêmes nettoyages, sortie en 129 (128 + SIGHUP). Une
+suppression de temporaire qui échoue (Windows : fichier tout juste fermé)
+est réessayée une fois, après 30 ms.
 
-Tests : TestEchecNeDetruitPasLaCible, TestDecryptFluxMauvaisMotDePasseGardeLaDestination, TestDecryptFluxMauvaisMotDePasseNeLaissePasDeFichier, TestNettoyageTemporaires, TestDossierMauvaisMotDePasse, TestE2EInterruption, TestE2EInterruptionPendantOperation, TestNettoyageFermeLeDescripteur, TestEncryptDossierIllisibleRemonteLErreur, TestCommitApresNettoyageRefuse, TestFermerTemporairesRefuseLesNouveaux, TestFermerTemporairesSupprimeCeQuiArrive, TestExtractionInterrompueNeLaisseRien, TestDechiffrementApresFermetureNeLaisseRien, TestExtractionFermeLeFichierOuvert, TestChangePasswordSauvegardeNettoyeeNeTouchePasLEntete, TestE2EInterruptionPendantExtraction, TestCLIRaccrochePendantExtraction, TestCodeDuSignal, TestSurRaccrochageSArrete, TestRunJobApresFermetureNeLancePasLOperation
+Tests : TestEchecNeDetruitPasLaCible, TestDecryptFluxMauvaisMotDePasseGardeLaDestination, TestDecryptFluxMauvaisMotDePasseNeLaissePasDeFichier, TestNettoyageTemporaires, TestDossierMauvaisMotDePasse, TestE2EInterruption, TestE2EInterruptionPendantOperation, TestNettoyageFermeLeDescripteur, TestEncryptDossierIllisibleRemonteLErreur, TestCommitApresNettoyageRefuse, TestFermerTemporairesRefuseLesNouveaux, TestFermerTemporairesSupprimeCeQuiArrive, TestExtractionInterrompueNeLaisseRien, TestDechiffrementApresFermetureNeLaisseRien, TestExtractionFermeLeFichierOuvert, TestChangePasswordSauvegardeNettoyeeNeTouchePasLEntete, TestE2EInterruptionPendantExtraction, TestCLIRaccrochePendantExtraction, TestCodeDuSignal, TestSurRaccrochageSArrete, TestNettoyageReessaieUneFois, TestNettoyageUnSeulEssaiSiReussi, TestRunJobApresFermetureNeLancePasLOperation
 
 ### R-FS-03 — Fichier vide : aller-retour exact
 Un fichier vide se chiffre et se déchiffre en un fichier vide, ainsi qu'un
