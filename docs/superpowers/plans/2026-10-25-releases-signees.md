@@ -23,8 +23,9 @@ publiée. `install.sh` vérifie la signature quand cosign est installé.
 | Signature | cosign sans clé (keyless, Sigstore), sur `checksums.txt` : un seul fichier signé couvre toutes les archives par leurs empreintes. Bundle `checksums.txt.sigstore.json` joint à la release |
 | SBOM | Option `sboms:` de GoReleaser avec syft, installé dans le job CI seulement (jamais dans `go.mod`) ; un SBOM par archive |
 | Provenance | Attestations GitHub (`actions/attest-build-provenance`, format SLSA), vérifiables avec `gh attestation verify` |
-| install.sh | Empreinte SHA-256 toujours vérifiée (déjà le cas). Si cosign est présent : vérifier la signature de `checksums.txt` (identité = ce workflow sur un tag `v*`), refuser si elle échoue. Si cosign est absent : avertir « signature non vérifiée : installe cosign pour plus de sûreté » et continuer |
-| CI macOS | Sous `-race`, les tests de `pkg` qui dérivent avec 256 Mio–1 Gio passent au profil de test le plus léger ; les profils lourds restent testés sans `-race` |
+| install.sh | Empreinte SHA-256 toujours vérifiée (déjà le cas). Si cosign est présent : vérifier la signature de `checksums.txt` (identité = ce workflow sur un tag `v*`), refuser si elle échoue. Si cosign est absent : avertir « signature non vérifiée : installe cosign pour plus de sûreté » et continuer. Décisions finales : cosign présent + bundle absent → toujours refuser (quelle que soit la version) ; cosign plus ancien que 2.6.2 (3.0.4 en v3) → refuser ; `install.sh` est joint à la release et listé dans `checksums.txt` (donc signé) |
+| Release | `replace_existing_draft: true` (un brouillon laissé par une vérification échouée est recréé à la relance) ; GoReleaser figé sur `v2.18.3` |
+| CI macOS | Sous `-race`, les tests de `pkg` qui dérivent avec 256 Mio–1 Gio passent au profil de test le plus léger ; les profils lourds restent testés sans `-race`, dans le job séparé `profils-lourds` |
 | Capture README | Bloc texte capturé d'une vraie session dans un pty (FR + EN), aucune capture fabriquée |
 | Branche | `ci/releases-signees`, empilée sur `feat/plein-ecran` (PR #23 pas encore mergée) ; la PR s'ouvre après le merge de #23 |
 
@@ -69,7 +70,7 @@ publiée. `install.sh` vérifie la signature quand cosign est installé.
 
 **Files :** Modify `install.sh`, `README.md` (FR + EN : section « Vérifier une release »). Create `install_test.sh` (ou test Go qui lance `sh install.sh` dans un dossier temporaire avec un faux `cosign` dans le PATH).
 
-- [ ] **Step 1 : tests.** Faux `cosign` qui réussit → installation ; qui échoue → refus avec message ; absent → avertissement exact « signature non vérifiée : installe cosign pour plus de sûreté » et installation ; bundle absent alors que cosign est présent → avertissement et continuer (anciennes releases) ; identité passée à cosign = exactement l'expression du Review Focus 1 (le faux cosign enregistre ses arguments) ; cosign sans réseau (faux cosign qui échoue avec une erreur réseau) → refus clair (Review Focus 2).
+- [ ] **Step 1 : tests.** Faux `cosign` qui réussit → installation ; qui échoue → refus avec message ; absent → avertissement exact « signature non vérifiée : installe cosign pour plus de sûreté » et installation ; bundle absent alors que cosign est présent → refuser, quelle que soit la version (décision finale : sans signature, `checksums.txt` ne prouve rien ; l'ancien « avertir et continuer » est abandonné) ; identité passée à cosign = exactement l'expression du Review Focus 1 (le faux cosign enregistre ses arguments) ; cosign sans réseau (faux cosign qui échoue avec une erreur réseau) → refus clair (Review Focus 2).
 - [ ] **Step 2 :** lancer, voir l'échec. **Step 3 :** implémenter. **Step 4 :** lancer, voir passer. Commit `feat: install.sh vérifie la signature de la release`.
 
 ### Tâche 4 : CI macOS sous sa limite
