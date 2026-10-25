@@ -500,11 +500,19 @@ veille ne prolongent la phrase, et le premier message reçu après l'échéance
 l'efface. Seule la phrase est gardée, jamais une clé dérivée. Un seul
 minuteur est en attente quand une phrase est gardée, aucun sinon.
 
-Limite acceptée : la mémoire n'est pas verrouillée (pas de `mlock`) ; comme
-toute phrase tapée, la phrase gardée peut être écrite dans le fichier
-d'échange du système.
+La phrase gardée vit dans une page verrouillée en mémoire vive, au mieux
+(`mlock` sous macOS et Linux, `VirtualLock` sous Windows) : elle n'est pas
+écrite dans le fichier d'échange du système. Si le verrouillage est refusé
+(limite `RLIMIT_MEMLOCK`, phrase plus longue qu'une page, autre système), la
+phrase est gardée quand même et une note le dit une fois, à la sortie. La
+page est mise à zéro puis déverrouillée à l'oubli.
 
-Tests : TestPrendreRendUneCopie, TestPhraseOublieeApresDelai, TestPhraseOublieeMemeSiLHorlogeBouge, TestToucheOOublie, TestPhraseOublieeALaSortie, TestUnSeulMinuteur, TestGarderDemandeAccord, TestPhraseProposeeALaSaisie, TestForcePhraseSession, TestPasswdNeProposePasLaPhrase, TestE2EPhraseGardeePourLaSession
+Limite qui reste : pendant la saisie, huh tient le mot de passe dans des
+chaînes Go (`string`), immuables, qui ne peuvent pas être mises à zéro : elles
+vivent jusqu'au passage du ramasse-miettes et ne sont pas verrouillées. Seules
+les copies en `[]byte` (opération, phrase gardée) sont effacées.
+
+Tests : TestPrendreRendUneCopie, TestPhraseOublieeApresDelai, TestPhraseOublieeMemeSiLHorlogeBouge, TestToucheOOublie, TestPhraseOublieeALaSortie, TestUnSeulMinuteur, TestGarderDemandeAccord, TestPhraseProposeeALaSaisie, TestForcePhraseSession, TestPhraseGardeeVerrouillee, TestPhraseNonVerrouilleeContinue, TestPhraseTropLonguePourUnePage, TestVerrouillageDeLaPlateforme, TestPasswdNeProposePasLaPhrase, TestE2EPhraseGardeePourLaSession
 
 ## PHR — phrase de passe
 

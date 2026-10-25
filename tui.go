@@ -125,6 +125,7 @@ func menerSession(h *hote, s *session, programme *tea.Program, parcours func()) 
 	// L'écran alternatif est quitté : ce qui y a été annoncé s'imprime
 	// maintenant, sur le terminal ordinaire.
 	s.imprimer(os.Stdout)
+	fmt.Fprint(os.Stderr, noteVerrouillage())
 	if note := garde.panique.Load(); note != nil {
 		fmt.Fprintf(os.Stderr, "\nerreur interne : %v\n\n%s", note.valeur, note.pile)
 		return exitErreurInterne, nil

@@ -142,7 +142,10 @@ func annoncer(w io.Writer, format string, args ...any) {
 const delaiOubli = 5 * time.Minute
 
 type phraseSession struct {
-	mu     sync.Mutex
+	mu sync.Mutex
+	// tampon porte la phrase, dans une page verrouillée en mémoire vive si
+	// possible (memoire_verrouillee.go) ; octets en est la partie utile.
+	tampon *tamponSecret
 	octets []byte
 	// derniere : l'instant de la garde ou de la dernière touche, lu sur les
 	// deux horloges (voir instant).
@@ -206,8 +209,9 @@ func (p *phraseSession) garder(secret []byte) {
 	if p.fermee {
 		return
 	}
-	zero(p.octets)
-	p.octets = append(make([]byte, 0, len(secret)), secret...)
+	p.tampon.liberer()
+	p.tampon = nouveauTamponSecret(len(secret))
+	p.octets = p.tampon.octets[:copy(p.tampon.octets, secret)]
 	p.derniere = p.maintenant()
 }
 
@@ -247,8 +251,8 @@ func (p *phraseSession) fermer() {
 }
 
 func (p *phraseSession) oublierVerrouillee() {
-	zero(p.octets)
-	p.octets, p.derniere = nil, instant{}
+	p.tampon.liberer()
+	p.tampon, p.octets, p.derniere = nil, nil, instant{}
 }
 
 // active dit si une phrase est gardée. Une phrase dont l'échéance est passée
