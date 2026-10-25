@@ -2,6 +2,7 @@ package main
 
 import (
 	"errors"
+	"io/fs"
 	"os"
 	"strings"
 
@@ -37,8 +38,8 @@ func carteResultat(lignes []string) sousEcran {
 }
 
 // ecranErreur montre la cause d'un échec, puis quoi faire quand un conseil
-// existe. Aucun texte n'est inventé ici : le conseil vient de l'erreur
-// elle-même — les lignes qui suivent sa cause — ou d'indiceForce.
+// existe : celui de l'erreur elle-même — les lignes qui suivent sa cause —,
+// ou celui d'une erreur courante (conseilCourant).
 func ecranErreur(err error) sousEcran {
 	return ecranErreurApres(nil, err)
 }
@@ -65,29 +66,57 @@ func ecranErreurApres(lignes []string, err error) sousEcran {
 	return &ecranResultat{titre: "erreur", corps: b.String()}
 }
 
+// Conseils courts des erreurs courantes, quand l'erreur n'en porte pas.
+const (
+	conseilDestinationApparue = "la destination vient d'apparaître : déplace-la ou renomme-la, puis réessaie"
+	conseilMauvaisePhrase     = "vérifie la phrase (majuscules, séparateurs, disposition du clavier), puis réessaie"
+	conseilFichierAbime       = "le fichier est abîmé ou n'est pas un fichier chiffremento : repars d'une copie intacte"
+	conseilAncienFormat       = "sur un fichier d'ancien format, une mauvaise phrase donne la même erreur : vérifie-la aussi"
+	conseilPermission         = "vérifie les droits sur le fichier ou le dossier, ou choisis un autre emplacement"
+)
+
 // causeEtConseil sépare la première ligne d'une erreur, sa cause, des
 // suivantes, qui disent quoi faire (conseilSauvegarde, suppression refusée…).
 //
-// Seul le conseil d'indiceForce vit hors de l'erreur : il est repris tel
-// quel. Son « relance avec -force » ne parle pas à l'interface, mais c'est le
-// message existant, et une destination déjà prise n'arrive ici que si elle
-// est apparue entre la question de l'écrasement et l'écriture.
+// Le conseil porté par l'erreur passe toujours en premier, et seul : il
+// connaît la situation (« x n'a pas été supprimé… »). Sans lui, les erreurs
+// courantes reçoivent un conseil court (conseilCourant).
 //
 // Les lignes du conseil perdent leur retrait commun de deux espaces, pas
 // leur retrait relatif : les sous-cas de conseilSauvegarde restent décalés.
 func causeEtConseil(err error) (cause, conseil string) {
 	cause, reste, _ := strings.Cut(err.Error(), "\n")
-	if errors.Is(err, pkg.ErrDestinationExistante) {
-		// indiceForce ajoute son conseil après « <erreur> : ».
-		reste = strings.TrimPrefix(indiceForce(err).Error(), err.Error()+" : ") + "\n" + reste
-	}
 	var lignes []string
 	for _, l := range strings.Split(reste, "\n") {
 		if strings.TrimSpace(l) != "" {
 			lignes = append(lignes, strings.TrimPrefix(l, "  "))
 		}
 	}
+	if len(lignes) == 0 {
+		return cause, conseilCourant(err)
+	}
 	return cause, strings.Join(lignes, "\n")
+}
+
+// conseilCourant rend le conseil d'une erreur courante, "" sinon.
+//
+// Une destination déjà prise n'arrive ici que si elle est apparue entre la
+// question de l'écrasement et l'écriture : l'interface n'a pas de -force, le
+// conseil d'indiceForce n'y aurait pas de sens.
+func conseilCourant(err error) string {
+	switch {
+	case errors.Is(err, pkg.ErrDestinationExistante):
+		return conseilDestinationApparue
+	case errors.Is(err, pkg.ErrBadPassword):
+		return conseilMauvaisePhrase
+	case pkg.ContenuNonAuthentifie(err):
+		return conseilFichierAbime + "\n" + conseilAncienFormat
+	case pkg.FichierAbime(err):
+		return conseilFichierAbime
+	case errors.Is(err, fs.ErrPermission):
+		return conseilPermission
+	}
+	return ""
 }
 
 // corpsCarte assemble les résumés comme ils s'imprimeraient, sans les lignes

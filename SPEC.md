@@ -168,11 +168,16 @@ Tests : TestE2EInterruption, TestE2EInterruptionPendantOperation, TestE2EInterru
 ### R-TUI-05 — Mauvaise phrase de passe dans l'interface
 Une mauvaise phrase de passe donne un message clair, et rien n'est écrit. En
 plein écran, comme tout échec, elle s'affiche dans le cadre : la cause, puis
-« quoi faire » quand un conseil existe déjà dans le message (aucun n'est
-inventé : pour une mauvaise phrase, la cause seule) ; `entrée` revient au
-menu.
+« quoi faire ». Le conseil porté par le message passe en premier, et seul ;
+sinon les erreurs courantes ont un conseil court : mauvaise phrase (vérifier
+majuscules, séparateurs, disposition du clavier), fichier abîmé ou qui n'est
+pas un fichier chiffremento (repartir d'une copie intacte ; sur un fichier
+d'ancien format, une mauvaise phrase donne la même erreur), droits refusés
+(vérifier les droits ou choisir un autre emplacement), destination apparue
+entre la question et l'écriture (la déplacer ou la renommer — l'interface ne
+propose pas -force). `entrée` revient au menu.
 
-Tests : TestE2EMauvaisePhrase, TestEcranErreurMauvaisePhrase, TestEcranErreurQuoiFaire
+Tests : TestE2EMauvaisePhrase, TestEcranErreurMauvaisePhrase, TestEcranErreurQuoiFaire, TestFichierAbime, TestContenuNonAuthentifie
 
 ### R-TUI-06 — Grammaire de navigation
 `↑↓` parcourent les réponses, `→` ou `entrée` valident, `←` revient à la

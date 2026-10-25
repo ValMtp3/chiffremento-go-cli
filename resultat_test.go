@@ -4,12 +4,16 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"io/fs"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/huh"
+	"github.com/minio/sio"
 
 	"chiffremento-cli/pkg"
 )
@@ -42,17 +46,19 @@ func TestCarteResultatRevientAuMenu(t *testing.T) {
 }
 
 // TestEcranErreurMauvaisePhrase : une mauvaise phrase s'affiche dans le
-// cadre, cause seule — aucun conseil n'existe pour elle, on n'en invente
-// pas —, puis ⏎ revient au menu.
+// cadre, la cause puis quoi faire — vérifier la phrase —, puis ⏎ revient au
+// menu.
 func TestEcranErreurMauvaisePhrase(t *testing.T) {
 	h := hoteDeTest(t, 84, 30)
-	demande := montrer(t, h, ecranErreur(pkg.ErrBadPassword))
+	demande := montrer(t, h, ecranErreurApres(nil, pkg.ErrBadPassword))
 	vue := h.View()
-	if !strings.Contains(vue, pkg.ErrBadPassword.Error()) {
-		t.Errorf("la cause n'est pas affichée :\n%s", vue)
+	iCause := strings.Index(vue, pkg.ErrBadPassword.Error())
+	iConseil := strings.Index(vue, "quoi faire")
+	if iCause < 0 || iConseil < 0 || iConseil < iCause {
+		t.Fatalf("attendu la cause puis « quoi faire » :\n%s", vue)
 	}
-	if strings.Contains(vue, "quoi faire") {
-		t.Errorf("un conseil est affiché alors qu'aucun n'existe pour cette erreur :\n%s", vue)
+	if !strings.Contains(vue[iConseil:], "vérifie la phrase") {
+		t.Errorf("le conseil de la mauvaise phrase manque :\n%s", vue)
 	}
 	envoyerHote(t, h, touche("enter"))
 	if r, ok := reponseRecue(t, demande); !ok || r.err != nil {
@@ -60,39 +66,87 @@ func TestEcranErreurMauvaisePhrase(t *testing.T) {
 	}
 }
 
-// TestEcranErreurQuoiFaire : le conseil vient des messages existants — les
-// lignes qui suivent la cause, et l'indice d'indiceForce — sans texte neuf.
+// erreurDeVerification rend l'erreur que pkg.Verify donne sur un fichier au
+// contenu donné : la vraie erreur d'un fichier abîmé, sans la recopier.
+func erreurDeVerification(t *testing.T, contenu []byte) error {
+	t.Helper()
+	chemin := filepath.Join(t.TempDir(), "x.chto")
+	if err := os.WriteFile(chemin, contenu, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	err := pkg.Verify(chemin, []byte("phrase"), pkg.Options{})
+	if err == nil {
+		t.Fatal("pkg.Verify a accepté un fichier abîmé")
+	}
+	return err
+}
+
+// TestEcranErreurQuoiFaire : sous la cause, « quoi faire » montre d'abord les
+// lignes que l'erreur porte elle-même ; à défaut, un conseil court pour les
+// erreurs courantes (destination apparue, fichier abîmé, droits refusés).
 func TestEcranErreurQuoiFaire(t *testing.T) {
 	cas := []struct {
 		nom            string
 		err            error
 		cause, conseil string
+		absent         string
 	}{
 		{
-			"lignes après la cause",
-			errors.New("x.chto ne se relit pas (abîmé)\n  x n'a pas été supprimé : c'est la seule copie lisible"),
-			"x.chto ne se relit pas (abîmé)",
-			"x n'a pas été supprimé : c'est la seule copie lisible",
+			nom:     "lignes après la cause",
+			err:     fmt.Errorf("x.chto ne se relit pas (%w)\n  x n'a pas été supprimé : c'est la seule copie lisible", sio.Error{}),
+			cause:   "x.chto ne se relit pas",
+			conseil: "x n'a pas été supprimé : c'est la seule copie lisible",
+			absent:  "copie intacte",
 		},
 		{
-			"destination existante",
-			fmt.Errorf("écriture : %w", pkg.ErrDestinationExistante),
-			pkg.ErrDestinationExistante.Error(),
-			"déplace-le, renomme-le",
+			nom:     "destination existante",
+			err:     fmt.Errorf("écriture : %w", pkg.ErrDestinationExistante),
+			cause:   pkg.ErrDestinationExistante.Error(),
+			conseil: "la destination vient d'apparaître : déplace-la ou renomme-la, puis réessaie",
+			absent:  "-force",
+		},
+		{
+			nom:     "pas un fichier chiffremento",
+			err:     erreurDeVerification(t, []byte("ceci n'est pas un fichier chiffré, juste du texte")),
+			cause:   "format inconnu",
+			conseil: "le fichier est abîmé ou n'est pas un fichier chiffremento : repars d'une copie intacte",
+		},
+		{
+			nom:     "fichier tronqué",
+			err:     erreurDeVerification(t, []byte("CHF")),
+			cause:   "tronqué",
+			conseil: "repars d'une copie intacte",
+		},
+		{
+			nom:     "contenu non authentifié",
+			err:     fmt.Errorf("déchiffrement: %w", sio.Error{}),
+			cause:   "déchiffrement",
+			conseil: "sur un fichier d'ancien format, une mauvaise phrase donne la même erreur : vérifie-la aussi",
+		},
+		{
+			nom:     "permission refusée",
+			err:     fmt.Errorf("lecture: %w", &fs.PathError{Op: "open", Path: "x", Err: fs.ErrPermission}),
+			cause:   "lecture",
+			conseil: "vérifie les droits sur le fichier ou le dossier, ou choisis un autre emplacement",
 		},
 	}
 	for _, c := range cas {
 		t.Run(c.nom, func(t *testing.T) {
 			h := hoteDeTest(t, 84, 30)
-			montrer(t, h, ecranErreur(c.err))
+			montrer(t, h, ecranErreurApres(nil, c.err))
 			vue := h.View()
 			iCause := strings.Index(vue, c.cause)
 			iConseil := strings.Index(vue, "quoi faire")
 			if iCause < 0 || iConseil < 0 || iConseil < iCause {
 				t.Fatalf("attendu la cause puis « quoi faire » :\n%s", vue)
 			}
-			if !strings.Contains(vue[iConseil:], c.conseil) {
-				t.Errorf("le conseil %q manque sous « quoi faire » :\n%s", c.conseil, vue)
+			// Le texte exact se lit sur causeEtConseil : le cadre, plus étroit
+			// que certains conseils, les replie sur deux lignes.
+			if _, conseil := causeEtConseil(c.err); !strings.Contains(conseil, c.conseil) {
+				t.Errorf("conseil = %q, attendu %q", conseil, c.conseil)
+			}
+			if c.absent != "" && strings.Contains(vue, c.absent) {
+				t.Errorf("l'écran montre %q :\n%s", c.absent, vue)
 			}
 		})
 	}
