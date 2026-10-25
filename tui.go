@@ -9,6 +9,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -33,7 +34,8 @@ func isInteractive() bool {
 // hôte, en écran alternatif) et les parcours tournent dans une goroutine qui
 // lui confie chaque écran. Le menu revient après chaque opération, jusqu'à ce
 // que l'utilisateur quitte : code 0 si tout a réussi, 1 si une opération au
-// moins a échoué, 130 sur Ctrl+C.
+// moins a échoué, 130 sur Ctrl+C, 2 si le parcours a paniqué (terminal rendu,
+// temporaires supprimés, phrase oubliée, puis la panique imprimée).
 //
 // TERM=dumb garde le comportement d'avant : huh en mode accessible, sans
 // écran alternatif, une seule opération ; l'erreur éventuelle remonte à main.
@@ -61,7 +63,16 @@ func runTUI() (int, error) {
 	// l'efface à la sortie (fermer, appelé par executer et par Ctrl+C), donc
 	// avant que main n'appelle os.Exit.
 	h.phrase = &s.phrase
-	go parcoursSession(h, s)
+	var garde gardeParcours
+	go garde.mener(func() { parcoursSession(h, s) }, func() {
+		// Une panique dans le parcours tuerait le processus sur-le-champ :
+		// écran alternatif affiché, terminal en mode brut, clair d'une
+		// extraction laissé. On nettoie, on oublie la phrase, puis Kill fait
+		// rendre la main à Run, qui rend le terminal.
+		pkg.FermerTemporaires()
+		h.fermer()
+		programme.Kill()
+	})
 
 	interrompu, err := h.executer(programme)
 	if interrompu || err != nil {
@@ -74,6 +85,10 @@ func runTUI() (int, error) {
 	// L'écran alternatif est quitté : ce qui y a été annoncé s'imprime
 	// maintenant, sur le terminal ordinaire.
 	s.imprimer(os.Stdout)
+	if note := garde.panique.Load(); note != nil {
+		fmt.Fprintf(os.Stderr, "\nerreur interne : %v\n\n%s", note.valeur, note.pile)
+		return exitErreurInterne, nil
+	}
 	switch {
 	case err != nil:
 		return 1, err
@@ -81,6 +96,38 @@ func runTUI() (int, error) {
 		return exitInterrompu, nil
 	}
 	return s.codeSortie(), nil
+}
+
+// exitErreurInterne : le code d'une panique Go non rattrapée. Une panique du
+// parcours, rattrapée pour rendre le terminal, sort avec le même.
+const exitErreurInterne = 2
+
+// paniqueParcours : ce qu'une panique du parcours laisse, sa valeur et la
+// pile de la goroutine où elle est née.
+type paniqueParcours struct {
+	valeur any
+	pile   []byte
+}
+
+// gardeParcours rattrape une panique de la goroutine du parcours.
+type gardeParcours struct {
+	panique atomic.Pointer[paniqueParcours]
+}
+
+// mener exécute parcours. S'il panique, la panique est notée, puis rendre
+// est appelé : à lui de nettoyer et de faire sortir le programme. La pile est
+// prise dans le recover, avant de quitter la goroutine : c'est la seule qui
+// montre l'origine.
+func (g *gardeParcours) mener(parcours, rendre func()) {
+	defer func() {
+		r := recover()
+		if r == nil {
+			return
+		}
+		g.panique.Store(&paniqueParcours{valeur: r, pile: debug.Stack()})
+		rendre()
+	}()
+	parcours()
 }
 
 // optionsPleinEcran : les réglages communs (sortie sur stderr, 30 images/s)

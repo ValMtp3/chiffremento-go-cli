@@ -539,3 +539,66 @@ func TestQuitterTermineLeProgramme(t *testing.T) {
 		t.Fatal("quitter n'a pas terminé le programme")
 	}
 }
+
+// TestPaniqueDuParcoursRendLeTerminal : une panique dans la goroutine du
+// parcours ne fait plus sortir le processus terminal cassé. Elle est notée,
+// rendre est appelé (comme runTUI : temporaires, phrase, puis Kill), et Run
+// rend la main — c'est lui qui quitte l'écran alternatif et rend le mode du
+// terminal.
+func TestPaniqueDuParcoursRendLeTerminal(t *testing.T) {
+	h := nouvelHote(nil)
+	p := programmeSansTerminal(t, h)
+	h.phrase = &phraseSession{}
+	h.phrase.garder([]byte("phrase à oublier"))
+
+	fin := make(chan bool, 1)
+	go func() {
+		interrompu, err := h.executer(p)
+		if err != nil {
+			t.Errorf("executer = %v", err)
+		}
+		fin <- interrompu
+	}()
+	var garde gardeParcours
+	rendu := make(chan struct{})
+	go garde.mener(func() { panic("boum") }, func() {
+		h.fermer()
+		p.Kill()
+		close(rendu)
+	})
+
+	select {
+	case interrompu := <-fin:
+		if !interrompu {
+			t.Error("une panique du parcours doit compter comme une interruption")
+		}
+	case <-time.After(delaiTest):
+		t.Fatal("Run n'a pas rendu la main après la panique du parcours")
+	}
+	select {
+	case <-rendu:
+	case <-time.After(delaiTest):
+		t.Fatal("rendre n'a pas été appelé")
+	}
+	note := garde.panique.Load()
+	if note == nil || note.valeur != "boum" {
+		t.Fatalf("panique notée = %+v, attendu « boum »", note)
+	}
+	if !strings.Contains(string(note.pile), "TestPaniqueDuParcoursRendLeTerminal") {
+		t.Errorf("la pile notée ne montre pas l'origine :\n%s", note.pile)
+	}
+	if h.phrase.active() {
+		t.Error("la phrase de session n'a pas été oubliée")
+	}
+}
+
+// TestParcoursSansPaniqueNeRendRien : un parcours qui finit normalement ne
+// note rien et n'appelle pas rendre.
+func TestParcoursSansPaniqueNeRendRien(t *testing.T) {
+	var garde gardeParcours
+	appele := false
+	garde.mener(func() {}, func() { appele = true })
+	if appele || garde.panique.Load() != nil {
+		t.Errorf("rendre appelé = %v, panique = %v", appele, garde.panique.Load())
+	}
+}

@@ -227,9 +227,12 @@ si au moins une opération a échoué, 130 sur Ctrl+C. Les résumés des
 opérations faites, ceux-là mêmes qu'affiche la carte, s'impriment une fois
 l'écran alternatif quitté, y compris sur Ctrl+C pendant une opération
 suivante. Hors plein écran (TERM=dumb), une seule opération est menée et le
-menu garde ses quatre lignes, sans « quitter ».
+menu garde ses quatre lignes, sans « quitter ». Une panique dans le parcours
+ne laisse ni l'écran alternatif ni le terminal en mode brut ni de
+temporaire : la phrase est oubliée, le terminal rendu, puis la panique est
+imprimée (« erreur interne : … » et la pile) et la session sort en 2.
 
-Tests : TestQuitterDepuisLeMenu, TestMenuSansQuitterEnTermDumb, TestQSansEffetPendantSaisie, TestCodeSortieApresEchec, TestAnnulerLEcrasementNEstPasUnEchec, TestCtrlCTermineLaSession, TestSortieExterneLibereLeParcours, TestE2EChiffrerPuisDechiffrer, TestE2EMauvaisePhrase, TestE2EInterruptionGardeLesResumes, TestCarteResultatRevientAuMenu, TestQuestionSuppressionDansLaCarte, TestResumesImprimesALaSortie
+Tests : TestQuitterDepuisLeMenu, TestMenuSansQuitterEnTermDumb, TestPaniqueDuParcoursRendLeTerminal, TestParcoursSansPaniqueNeRendRien, TestQSansEffetPendantSaisie, TestCodeSortieApresEchec, TestAnnulerLEcrasementNEstPasUnEchec, TestCtrlCTermineLaSession, TestSortieExterneLibereLeParcours, TestE2EChiffrerPuisDechiffrer, TestE2EMauvaisePhrase, TestE2EInterruptionGardeLesResumes, TestCarteResultatRevientAuMenu, TestQuestionSuppressionDansLaCarte, TestResumesImprimesALaSortie
 
 ## FMT — compatibilité des formats
 
