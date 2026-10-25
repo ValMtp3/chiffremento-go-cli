@@ -12,6 +12,11 @@ before:
 # GitHub.
 
 release:
+  # Brouillon : la release n'est visible (et le cask Homebrew utilisable) que
+  # si la vérification de la signature a réussi. Une release publiée d'emblée
+  # ne pourrait plus être retirée sans que des utilisateurs l'aient déjà
+  # téléchargée. L'étape qui la publie est dans .github/workflows/release.yml.
+  draft: true
   # Rend une relance possible sur un tag déjà publié : sans ça, goreleaser
   # échoue sur « asset already_exists » et s'arrête avant l'étape Homebrew.
   replace_existing_artifacts: true
@@ -56,6 +61,30 @@ archives:
 
 checksum:
   name_template: "checksums.txt"
+
+# Un SBOM (inventaire des composants embarqués, format SPDX) par archive, généré
+# par syft. Il permet à un utilisateur ou à un scanner de vulnérabilités de
+# savoir quelles bibliothèques sont dans le binaire sans le décompiler. syft
+# est installé dans le job CI seulement : il n'entre jamais dans go.mod.
+sboms:
+  - artifacts: archive
+
+# Signature « sans clé » (Sigstore) du seul checksums.txt : il contient
+# l'empreinte de chaque archive, donc une seule signature les couvre toutes.
+# Pas de clé privée à garder ni à faire fuiter : la preuve d'identité est le
+# jeton OIDC (`id-token: write`) du workflow GitHub, enregistré dans le
+# journal public Sigstore. `--bundle` met signature et certificat dans un seul
+# fichier (cosign v3). Au rejeu d'une release (`replace_existing_artifacts`),
+# le bundle porte toujours le même nom : il est remplacé, pas dupliqué.
+signs:
+  - cmd: cosign
+    signature: "${artifact}.sigstore.json"
+    args:
+      - "sign-blob"
+      - "--bundle=${signature}"
+      - "${artifact}"
+      - "--yes"
+    artifacts: checksum
 
 snapshot:
   version_template: "{{ .Tag }}-next"
