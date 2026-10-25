@@ -38,7 +38,7 @@ pas terminée.
 - Archivage et extraction : un seul tampon de copie par opération, jamais un
   par fichier (`io.Copy` en alloue un de 32 Kio à chaque appel).
 - Interface : 30 images/s (`imagesParSeconde`, `navigation.go`) : ~120 à 170
-  changements de contexte par seconde au repos au lieu de ~250 (menu ~123,
+  changements de contexte par seconde au repos (menu ~123,
   formulaire ~165, plein écran et ancienne interface pareils à 3 % près ; les
   « idle wakeups » de `top` fluctuent, eux, de 14 à 57/s d'une mesure à
   l'autre) ; premier écran en ~39 ms, plein écran comme avant.
