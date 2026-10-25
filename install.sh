@@ -3,7 +3,14 @@
 set -e
 
 BINARY_NAME="chiffremento"
-INSTALL_DIR="/usr/local/bin"
+# CHIFFREMENTO_INSTALL_DIR : dossier d'installation, /usr/local/bin par défaut.
+# Sert surtout aux tests, pour ne rien écrire dans le système.
+INSTALL_DIR="${CHIFFREMENTO_INSTALL_DIR:-/usr/local/bin}"
+
+# Identité attendue de la signature : le workflow release.yml de ce dépôt, sur
+# un tag v*. Ces deux valeurs sont les mêmes dans release.yml et RELEASE.md.
+SIGNATURE_IDENTITE='^https://github.com/ValMtp3/chiffremento-go-cli/.github/workflows/release.yml@refs/tags/v'
+SIGNATURE_EMETTEUR='https://token.actions.githubusercontent.com'
 WORKDIR=""
 
 cleanup() { [ -n "$WORKDIR" ] && rm -rf "$WORKDIR"; }
@@ -47,6 +54,39 @@ CHECKSUMS=""
 for candidate in "./checksums.txt" "./build/checksums.txt"; do
     [ -f "$candidate" ] && CHECKSUMS="$candidate" && break
 done
+
+# Signature de checksums.txt (cosign, sans clé). Elle passe AVANT toute
+# lecture des empreintes : un checksums.txt falsifié rendrait la vérification
+# SHA-256 inutile. Une vérification qui échoue (signature fausse ou réseau
+# absent) refuse l'installation : jamais de repli silencieux.
+verify_signature() {
+    local bundle
+    [ -z "$CHECKSUMS" ] && return 0
+
+    if ! command -v cosign >/dev/null 2>&1; then
+        echo "⚠️  signature non vérifiée : installe cosign pour plus de sûreté"
+        return 0
+    fi
+
+    bundle="$(dirname "$CHECKSUMS")/checksums.txt.sigstore.json"
+    if [ ! -f "$bundle" ]; then
+        echo "⚠️  Pas de checksums.txt.sigstore.json : signature non vérifiée (release ancienne ?)."
+        return 0
+    fi
+
+    if ! cosign verify-blob --bundle "$bundle" \
+        --certificate-identity-regexp "$SIGNATURE_IDENTITE" \
+        --certificate-oidc-issuer "$SIGNATURE_EMETTEUR" \
+        "$CHECKSUMS"; then
+        echo "❌ Signature de checksums.txt non vérifiée : installation refusée."
+        echo "   Soit la signature est fausse, soit cosign n'a pas pu la vérifier (réseau absent ?)."
+        echo "   Rien n'est installé. Vérifie la connexion, retélécharge les fichiers, puis relance."
+        exit 1
+    fi
+    echo "🔏 Signature vérifiée : checksums.txt"
+}
+
+verify_signature
 
 # verify_checksum <fichier> — échoue si l'empreinte ne correspond pas.
 # Renvoie 2 si le fichier n'est pas listé dans checksums.txt.

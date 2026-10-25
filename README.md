@@ -119,6 +119,25 @@ bash install.sh
 
 Le script vérifie l'empreinte SHA-256 de l'archive avant d'installer quoi que ce soit.
 
+### Vérifier une release
+
+Chaque release contient `checksums.txt` (les empreintes de toutes les archives), sa signature `checksums.txt.sigstore.json`, un SBOM par archive (la liste des bibliothèques embarquées) et une attestation de provenance. La signature est faite par la CI, sans clé à garder : elle prouve que les fichiers viennent du workflow de ce dépôt sur un tag `v*`. Pour la vérifier à la main, avec [cosign](https://docs.sigstore.dev/cosign/system_config/installation/) et la [CLI GitHub](https://cli.github.com/) :
+
+```bash
+cosign verify-blob --bundle checksums.txt.sigstore.json \
+  --certificate-identity-regexp '^https://github.com/ValMtp3/chiffremento-go-cli/.github/workflows/release.yml@refs/tags/v' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  checksums.txt
+gh attestation verify chiffremento_X.Y.Z_linux_amd64.tar.gz --repo ValMtp3/chiffremento-go-cli \
+  --signer-workflow ValMtp3/chiffremento-go-cli/.github/workflows/release.yml
+```
+
+`install.sh` fait la première vérification lui-même, avant de lire les empreintes :
+
+- cosign présent et `checksums.txt.sigstore.json` dans le dossier : la signature est vérifiée avec l'identité ci-dessus. Si elle échoue, ou si cosign ne peut pas la vérifier (réseau absent), l'installation est **refusée**.
+- cosign absent : le script affiche « signature non vérifiée : installe cosign pour plus de sûreté » et continue. L'empreinte SHA-256 est toujours vérifiée.
+- fichier `.sigstore.json` absent (release ancienne) : même avertissement, l'installation continue.
+
 ### Depuis les sources
 
 ```bash
@@ -477,6 +496,25 @@ bash install.sh
 ```
 
 The script verifies the archive's SHA-256 checksum before installing anything.
+
+### Verify a release
+
+Each release contains `checksums.txt` (the checksums of every archive), its signature `checksums.txt.sigstore.json`, one SBOM per archive (the list of embedded libraries) and a provenance attestation. The CI signs without any key to keep: the signature proves the files come from this repository's workflow on a `v*` tag. To check it by hand, with [cosign](https://docs.sigstore.dev/cosign/system_config/installation/) and the [GitHub CLI](https://cli.github.com/):
+
+```bash
+cosign verify-blob --bundle checksums.txt.sigstore.json \
+  --certificate-identity-regexp '^https://github.com/ValMtp3/chiffremento-go-cli/.github/workflows/release.yml@refs/tags/v' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  checksums.txt
+gh attestation verify chiffremento_X.Y.Z_linux_amd64.tar.gz --repo ValMtp3/chiffremento-go-cli \
+  --signer-workflow ValMtp3/chiffremento-go-cli/.github/workflows/release.yml
+```
+
+`install.sh` runs the first check itself, before reading the checksums:
+
+- cosign installed and `checksums.txt.sigstore.json` in the folder: the signature is verified against the identity above. If it fails, or if cosign cannot verify it (no network), installation is **refused**.
+- cosign missing: the script prints "signature non vérifiée : installe cosign pour plus de sûreté" and carries on. The SHA-256 checksum is still verified.
+- `.sigstore.json` file missing (older release): same warning, installation carries on.
 
 ### From source
 
