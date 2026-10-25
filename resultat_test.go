@@ -13,6 +13,8 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/huh"
+	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/minio/sio"
 
 	"chiffremento-cli/pkg"
@@ -312,5 +314,31 @@ func TestSortieNormaleSansMentionDInterruption(t *testing.T) {
 	sessionCourante.imprimer(&sortie)
 	if strings.Contains(sortie.String(), "interruption") || strings.Count(sortie.String(), "a.chto") != 1 {
 		t.Errorf("résumés inattendus : %q", sortie.String())
+	}
+}
+
+// TestConseilReplieGardeSonRetrait : un conseil plus large que le cadre se
+// replie, et chaque ligne repliée garde le retrait de deux colonnes du bloc
+// d'erreur, sans dépasser la largeur ; un sous-cas décalé le reste.
+func TestConseilReplieGardeSonRetrait(t *testing.T) {
+	err := fmt.Errorf("lecture: %w", sio.Error{})
+	avecSousCas := errors.New("x ne se relit pas\n  " + conseilFichierAbime + "\n    sous-cas décalé")
+	for _, largeur := range []int{52, 80} {
+		for _, e := range []error{err, avecSousCas} {
+			ecran := ecranErreurApres(nil, e).(*ecranResultat)
+			ecran.Update(tea.WindowSizeMsg{Width: largeur})
+			lignes := strings.Split(ansi.Strip(ecran.View()), "\n")
+			for i, ligne := range lignes {
+				if w := lipgloss.Width(ligne); w > largeur {
+					t.Errorf("largeur %d : la ligne %d dépasse (%d) : %q", largeur, i, w, ligne)
+				}
+				if strings.TrimSpace(ligne) != "" && !strings.HasPrefix(ligne, "  ") {
+					t.Errorf("largeur %d : la ligne %d perd son retrait : %q", largeur, i, ligne)
+				}
+			}
+			if e == avecSousCas && !strings.Contains(ansi.Strip(ecran.View()), "    sous-cas décalé") {
+				t.Errorf("largeur %d : le sous-cas a perdu son décalage :\n%s", largeur, ansi.Strip(ecran.View()))
+			}
+		}
 	}
 }

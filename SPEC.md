@@ -180,7 +180,7 @@ d'ancien format, une mauvaise phrase donne la même erreur), droits refusés
 entre la question et l'écriture (la déplacer ou la renommer — l'interface ne
 propose pas -force). `entrée` revient au menu.
 
-Tests : TestE2EMauvaisePhrase, TestEcranErreurMauvaisePhrase, TestEcranErreurQuoiFaire, TestFichierAbime, TestContenuNonAuthentifie
+Tests : TestE2EMauvaisePhrase, TestEcranErreurMauvaisePhrase, TestEcranErreurQuoiFaire, TestConseilReplieGardeSonRetrait, TestFichierAbime, TestContenuNonAuthentifie
 
 ### R-TUI-06 — Grammaire de navigation
 `↑↓` parcourent les réponses, `→` ou `entrée` valident, `←` revient à la

@@ -27,8 +27,12 @@ const touchesResultat = "⏎ revenir au menu"
 // ecranResultat affiche un texte fixe ; ⏎ le referme. Échap aussi, par
 // l'hôte : les deux mènent au menu.
 type ecranResultat struct {
-	titre   string
-	corps   string
+	titre string
+	corps string
+	// erreur est le bloc de l'échec (cause, quoi faire), sans retrait :
+	// View le replie avec un retrait de deux colonnes, que chaque ligne
+	// repliée garde.
+	erreur  string
 	largeur int
 }
 
@@ -45,20 +49,14 @@ func carteResultat(lignes []string) sousEcran {
 func ecranErreurApres(lignes []string, err error) sousEcran {
 	cause, conseil := causeEtConseil(err)
 	var b strings.Builder
-	if avant := corpsCarte(lignes); avant != "" {
-		b.WriteString(avant)
-		b.WriteString("\n\n")
-	}
-	// Même retrait de deux colonnes que les résumés (« ✓ ») : tout s'aligne
-	// quand l'erreur suit un résumé.
-	b.WriteString("  " + styleError.Render("échec :") + " " + styleText.Render(cause))
+	b.WriteString(styleError.Render("échec :") + " " + styleText.Render(cause))
 	if conseil != "" {
-		b.WriteString("\n\n  " + styleDim.Render("quoi faire"))
+		b.WriteString("\n\n" + styleDim.Render("quoi faire"))
 		for _, ligne := range strings.Split(conseil, "\n") {
-			b.WriteString("\n  " + styleText.Render(ligne))
+			b.WriteString("\n" + styleText.Render(ligne))
 		}
 	}
-	return &ecranResultat{titre: "erreur", corps: b.String()}
+	return &ecranResultat{titre: "erreur", corps: corpsCarte(lignes), erreur: b.String()}
 }
 
 // Conseils courts des erreurs courantes, quand l'erreur n'en porte pas.
@@ -136,7 +134,31 @@ func (e *ecranResultat) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 // View replie le texte au mot près à la largeur du cadre plutôt que de le
 // laisser couper : un chemin long reste lisible en entier.
-func (e *ecranResultat) View() string { return replier(e.corps, e.largeur) }
+func (e *ecranResultat) View() string {
+	vue := replier(e.corps, e.largeur)
+	if e.erreur == "" {
+		return vue
+	}
+	if vue != "" {
+		vue += "\n\n"
+	}
+	return vue + replierEnRetrait(e.erreur, e.largeur)
+}
+
+// retraitErreur : même retrait de deux colonnes que les résumés (« ✓ ») —
+// tout s'aligne quand l'erreur suit un résumé.
+const retraitErreur = 2
+
+// replierEnRetrait replie texte à largeur colonnes, retrait compris : chaque
+// ligne, repliée ou non, commence par retraitErreur espaces. Le retrait
+// relatif d'une ligne (un sous-cas décalé) est gardé.
+func replierEnRetrait(texte string, largeur int) string {
+	if largeur <= retraitErreur {
+		marge := strings.Repeat(" ", retraitErreur)
+		return marge + strings.ReplaceAll(texte, "\n", "\n"+marge)
+	}
+	return lipgloss.NewStyle().PaddingLeft(retraitErreur).Width(largeur).Render(texte)
+}
 
 func (e *ecranResultat) Titre() string   { return e.titre }
 func (e *ecranResultat) Touches() string { return touchesResultat }
