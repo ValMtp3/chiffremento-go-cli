@@ -238,7 +238,7 @@ func TestEtapePhraseParLHote(t *testing.T) {
 	issue := make(chan resultat, 1)
 	go func() {
 		p, err := etapePhrase()
-		issue <- resultat{p, err}
+		issue <- resultat{p.Texte, err}
 	}()
 
 	demandeRecue(t, h, boite)
@@ -265,7 +265,7 @@ func TestEtapePhraseParLHote(t *testing.T) {
 
 	go func() {
 		p, err := etapePhrase()
-		issue <- resultat{p, err}
+		issue <- resultat{p.Texte, err}
 	}()
 	demandeRecue(t, h, boite)
 	envoyerHote(t, h, toucheP("échap"))

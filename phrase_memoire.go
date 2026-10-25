@@ -39,7 +39,10 @@ func phraseCourante() *phraseSession {
 //
 // secret n'est que lu : la session en garde sa propre copie, et l'appelant
 // efface la sienne comme d'habitude.
-func proposerDeGarder(secret []byte) error {
+//
+// force est le verdict de force connu de la phrase ("" s'il ne l'est pas) :
+// gardé avec elle, il évite de charger zxcvbn pour la proposer.
+func proposerDeGarder(secret []byte, force string) error {
 	p := phraseCourante()
 	if p == nil || len(secret) == 0 {
 		return nil
@@ -56,7 +59,7 @@ func proposerDeGarder(secret []byte) error {
 		return err
 	}
 	if garder {
-		p.garder(secret)
+		p.garder(secret, force)
 		hoteCourant.signalerPhraseGardee()
 	}
 	return nil
@@ -112,21 +115,32 @@ func formulaireMotDePasse(details string, password *string, saisir *bool) (*huh.
 	return form, ancre, false
 }
 
-// forcePhrase rend le verdict de strengthHint pour la phrase gardée, "" s'il
-// n'y en a pas (ou plus).
+// forceParZxcvbn calcule le verdict d'une phrase tapée ; les tests le
+// remplacent pour vérifier qu'il n'est pas appelé.
+var forceParZxcvbn = strengthHint
+
+// forcePhrase rend le verdict de force de la phrase gardée, "" s'il n'y en a
+// pas (ou plus). Le verdict gardé avec elle sert tel quel (phrase générée,
+// ou tapée au chiffrement) ; sinon — phrase tapée au déchiffrement — il est
+// calculé par zxcvbn une fois, puis gardé.
 //
-// Le calcul se fait sur une copie prise, mise à zéro aussitôt. zxcvbn ne lit
+// Ce calcul se fait sur une copie prise, mise à zéro aussitôt. zxcvbn ne lit
 // que des chaînes : une conversion en string reste inévitable — une seule
 // ici, plus les découpes que zxcvbn fait lui-même. Comme toute string Go,
 // elles ne s'effacent pas et vivent jusqu'au passage du ramasse-miettes,
 // exactement comme le mot de passe saisi (o.password).
 func forcePhrase(p *phraseSession) string {
+	if force := p.forceGardee(); force != "" {
+		return force
+	}
 	copie, ok := p.prendre()
 	if !ok {
 		return ""
 	}
 	defer zero(copie)
-	return strengthHint(string(copie))
+	force := forceParZxcvbn(string(copie))
+	p.noterForce(copie, force)
+	return force
 }
 
 // secretPourOperation rend la copie effaçable du secret de l'opération, que

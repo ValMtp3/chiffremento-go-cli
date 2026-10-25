@@ -1,6 +1,7 @@
 package main
 
 import (
+	"crypto/subtle"
 	"fmt"
 	"io"
 	"sync"
@@ -147,6 +148,9 @@ type phraseSession struct {
 	// possible (memoire_verrouillee.go) ; octets en est la partie utile.
 	tampon *tamponSecret
 	octets []byte
+	// force : le verdict de force de la phrase (texte court, pas secret),
+	// oublié avec elle. Vide s'il n'est pas encore connu.
+	force string
 	// derniere : l'instant de la garde ou de la dernière touche, lu sur les
 	// deux horloges (voir instant).
 	derniere instant
@@ -198,9 +202,10 @@ func (p *phraseSession) resteVerrouille() time.Duration {
 	return delaiOubli - max(now.mur.Sub(p.derniere.mur), now.mono-p.derniere.mono)
 }
 
-// garder remplace la phrase gardée par une copie de secret : l'appelant reste
-// libre d'effacer la sienne. L'ancienne est mise à zéro avant d'être lâchée.
-func (p *phraseSession) garder(secret []byte) {
+// garder remplace la phrase gardée par une copie de secret, avec son verdict
+// de force ("" s'il n'est pas connu) : l'appelant reste libre d'effacer la
+// sienne. L'ancienne est mise à zéro avant d'être lâchée.
+func (p *phraseSession) garder(secret []byte, force string) {
 	if p == nil || len(secret) == 0 {
 		return
 	}
@@ -212,6 +217,7 @@ func (p *phraseSession) garder(secret []byte) {
 	p.tampon.liberer()
 	p.tampon = nouveauTamponSecret(len(secret))
 	p.octets = p.tampon.octets[:copy(p.tampon.octets, secret)]
+	p.force = force
 	p.derniere = p.maintenant()
 }
 
@@ -252,7 +258,34 @@ func (p *phraseSession) fermer() {
 
 func (p *phraseSession) oublierVerrouillee() {
 	p.tampon.liberer()
-	p.tampon, p.octets, p.derniere = nil, nil, instant{}
+	p.tampon, p.octets, p.force, p.derniere = nil, nil, "", instant{}
+}
+
+// forceGardee rend le verdict gardé avec une phrase encore active, "" sinon.
+func (p *phraseSession) forceGardee() string {
+	if p == nil {
+		return ""
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if !p.activeVerrouillee() {
+		return ""
+	}
+	return p.force
+}
+
+// noterForce garde le verdict calculé pour la phrase phrase, si c'est
+// toujours elle qui est gardée : elle a pu être oubliée ou remplacée pendant
+// le calcul.
+func (p *phraseSession) noterForce(phrase []byte, force string) {
+	if p == nil {
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.activeVerrouillee() && subtle.ConstantTimeCompare(p.octets, phrase) == 1 {
+		p.force = force
+	}
 }
 
 // active dit si une phrase est gardée. Une phrase dont l'échéance est passée

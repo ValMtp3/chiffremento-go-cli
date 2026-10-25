@@ -38,7 +38,7 @@ func TestPhraseGardeeVerrouillee(t *testing.T) {
 		})
 
 	var p phraseSession
-	p.garder([]byte("correct horse battery staple"))
+	p.garder([]byte("correct horse battery staple"), "")
 	if len(verrouillees) != 1 {
 		t.Fatalf("%d pages verrouillées, attendu 1", len(verrouillees))
 	}
@@ -76,8 +76,8 @@ func TestPhraseNonVerrouilleeContinue(t *testing.T) {
 		func([]byte) error { t.Error("déverrouillage d'une page jamais verrouillée"); return nil })
 
 	var p phraseSession
-	p.garder([]byte("première phrase"))
-	p.garder([]byte("seconde phrase"))
+	p.garder([]byte("première phrase"), "")
+	p.garder([]byte("seconde phrase"), "")
 	if prise, ok := p.prendre(); !ok || string(prise) != "seconde phrase" {
 		t.Fatalf("prendre = (%q, %v)", prise, ok)
 	}
@@ -106,7 +106,7 @@ func TestPhraseTropLonguePourUnePage(t *testing.T) {
 		func([]byte) error { return nil })
 	var p phraseSession
 	longue := strings.Repeat("a", os.Getpagesize()+1)
-	p.garder([]byte(longue))
+	p.garder([]byte(longue), "")
 	if prise, ok := p.prendre(); !ok || string(prise) != longue {
 		t.Fatal("la phrase trop longue n'est pas gardée")
 	}
@@ -125,7 +125,7 @@ func TestVerrouillageDeLaPlateforme(t *testing.T) {
 	var p phraseSession
 	raisonNonVerrouille.Store(nil)
 	t.Cleanup(func() { raisonNonVerrouille.Store(nil) })
-	p.garder([]byte("phrase verrouillée pour de vrai"))
+	p.garder([]byte("phrase verrouillée pour de vrai"), "")
 	if p.tampon == nil || !p.tampon.verrouille {
 		t.Fatalf("la page n'a pas été verrouillée : %v", raisonNonVerrouille.Load())
 	}

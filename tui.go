@@ -644,6 +644,9 @@ type optionsChiffrement struct {
 	// l'avoir enregistrée.
 	genererPhrase bool
 	phrase        string
+	// phraseBits : l'entropie exacte de la phrase générée, pour son verdict
+	// de force sans zxcvbn (forceAGarder).
+	phraseBits float64
 
 	// memoire : une phrase est gardée pour la session au moment d'afficher
 	// l'écran, et la question qui la propose est donc posée. Ce n'est pas
@@ -895,7 +898,7 @@ func tuiEncrypt(path string, o *optionsChiffrement) error {
 			if err != nil {
 				return err
 			}
-			o.phrase = phrase
+			o.phrase, o.phraseBits = phrase.Texte, phrase.Bits
 		}
 
 		// La ligne « sel » du cadre reste sur une seule ligne : les mentions
@@ -994,8 +997,19 @@ func tuiEncrypt(path string, o *optionsChiffrement) error {
 		if errSuppression != nil || depuisSession {
 			return errSuppression
 		}
-		return proposerDeGarder(motDePasse)
+		return proposerDeGarder(motDePasse, forceAGarder(o))
 	}
+}
+
+// forceAGarder rend le verdict de force gardé avec la phrase de
+// l'opération : celui de son entropie exacte pour une phrase générée (sans
+// charger zxcvbn), celui de l'indicateur pour une phrase tapée — zxcvbn est
+// déjà chargé, il l'a calculé à chaque frappe.
+func forceAGarder(o *optionsChiffrement) string {
+	if o.genererPhrase {
+		return verdictDeForce(o.phraseBits)
+	}
+	return strengthHint(o.password)
 }
 
 // passwordForm est l'écran commun au déchiffrement et à la vérification : le
@@ -1108,7 +1122,7 @@ func tuiDecrypt(path string) error {
 		if err := supprimerChiffre(path); err != nil || depuisSession {
 			return err
 		}
-		return proposerDeGarder(motDePasse)
+		return proposerDeGarder(motDePasse, "")
 	}
 }
 
@@ -1342,7 +1356,7 @@ func tuiVerify(path string) error {
 	if err != nil || depuisSession {
 		return err
 	}
-	return proposerDeGarder(motDePasse)
+	return proposerDeGarder(motDePasse, "")
 }
 
 // teaOptions est vide en production. Les tests s'en servent pour faire
@@ -1729,7 +1743,13 @@ func strengthHint(s string) string {
 	if s == "" {
 		return "jamais affiché, jamais visible dans ps ni dans l'historique"
 	}
-	bits := passwordEntropy(s)
+	return verdictDeForce(passwordEntropy(s))
+}
+
+// verdictDeForce met en mots une entropie : bits, verdict, ordre de grandeur
+// d'une attaque hors ligne. Sans zxcvbn : une phrase générée connaît son
+// entropie exacte (pkg.Phrase.Bits).
+func verdictDeForce(bits float64) string {
 	verdict := "solide"
 	switch {
 	case bits < bitsFaible:

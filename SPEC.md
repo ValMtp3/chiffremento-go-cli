@@ -497,9 +497,13 @@ Rien n'est gardé sans oui. Une phrase gardée est signalée par « ● phrase e
 mémoire » en haut, et proposée à la saisie suivante (« utiliser la phrase en
 mémoire », par défaut, ou « la saisir ») ; l'utiliser au chiffrement saute la
 génération, la saisie et la confirmation ; au chiffrement, la question
-montre sous elle le même verdict de force que l'indicateur habituel, calculé
-sur une copie mise à zéro ensuite (pas au déchiffrement ni à la
-vérification). La question de la garder n'est pas
+montre sous elle le même verdict de force que l'indicateur habituel (pas au
+déchiffrement ni à la vérification). Ce verdict, texte court et non secret,
+est gardé avec la phrase et oublié avec elle : tiré de l'entropie exacte
+pour une phrase générée (zxcvbn n'est pas chargé), repris de l'indicateur
+pour une phrase tapée au chiffrement ; seule une phrase tapée au
+déchiffrement le fait calculer par zxcvbn, une fois, sur une copie mise à
+zéro ensuite. La question de la garder n'est pas
 reposée quand la phrase venait de la session. Changer de mot de passe demande
 toujours une saisie.
 
@@ -524,7 +528,7 @@ chaînes Go (`string`), immuables, qui ne peuvent pas être mises à zéro : ell
 vivent jusqu'au passage du ramasse-miettes et ne sont pas verrouillées. Seules
 les copies en `[]byte` (opération, phrase gardée) sont effacées.
 
-Tests : TestPrendreRendUneCopie, TestPhraseOublieeApresDelai, TestPhraseOublieeMemeSiLHorlogeBouge, TestToucheOOublie, TestPhraseOublieeALaSortie, TestUnSeulMinuteur, TestGarderDemandeAccord, TestPhraseProposeeALaSaisie, TestForcePhraseSession, TestPhraseGardeeVerrouillee, TestPhraseNonVerrouilleeContinue, TestPhraseTropLonguePourUnePage, TestVerrouillageDeLaPlateforme, TestPasswdNeProposePasLaPhrase, TestE2EPhraseGardeePourLaSession
+Tests : TestPrendreRendUneCopie, TestPhraseOublieeApresDelai, TestPhraseOublieeMemeSiLHorlogeBouge, TestToucheOOublie, TestPhraseOublieeALaSortie, TestUnSeulMinuteur, TestGarderDemandeAccord, TestPhraseProposeeALaSaisie, TestForcePhraseSession, TestForcePhraseGenereeSansZxcvbn, TestForcePhraseTapeeAuChiffrement, TestVerdictOublieAvecLaPhrase, TestPhraseGardeeVerrouillee, TestPhraseNonVerrouilleeContinue, TestPhraseTropLonguePourUnePage, TestVerrouillageDeLaPlateforme, TestPasswdNeProposePasLaPhrase, TestE2EPhraseGardeePourLaSession
 
 ## PHR — phrase de passe
 

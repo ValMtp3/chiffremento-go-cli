@@ -271,7 +271,7 @@ func TestBarres(t *testing.T) {
 	}
 
 	h.phrase = &phraseSession{}
-	h.phrase.garder([]byte("phrase gardée"))
+	h.phrase.garder([]byte("phrase gardée"), "")
 	envoyerHote(t, h, phraseGardeeMsg{})
 	haut = strings.Split(h.View(), "\n")[0]
 	if !strings.Contains(haut, "● phrase en mémoire") {
@@ -557,7 +557,7 @@ func TestPaniqueDuParcoursRendLeTerminal(t *testing.T) {
 	h := nouvelHote(nil)
 	p := programmeSansTerminal(t, h)
 	h.phrase = &phraseSession{}
-	h.phrase.garder([]byte("phrase à oublier"))
+	h.phrase.garder([]byte("phrase à oublier"), "")
 
 	fin := make(chan bool, 1)
 	go func() {

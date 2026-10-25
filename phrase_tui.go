@@ -172,18 +172,18 @@ func (m *modelePhrase) View() string {
 // La question de confirmation part sur « pas encore » : un fichier chiffré
 // avec une phrase que personne n'a notée est perdu, et la touche Entrée
 // machinale ne doit pas suffire à le sceller.
-func etapePhrase() (string, error) {
+func etapePhrase() (pkg.Phrase, error) {
 	m, err := newModelePhrase(pkg.DefautMotsPhrase, clipboard.WriteAll, pkg.GenererPhrase)
 	if err != nil {
-		return "", err
+		return pkg.Phrase{}, err
 	}
 	for {
 		m.issue = issueAucune
 		if err := afficherPhrase(m); err != nil {
-			return "", err
+			return pkg.Phrase{}, err
 		}
 		if m.issue != issueContinuer {
-			return "", errRetour
+			return pkg.Phrase{}, errRetour
 		}
 
 		enregistree := false
@@ -196,10 +196,10 @@ func etapePhrase() (string, error) {
 			WithTheme(formTheme()).WithKeyMap(formKeyMap()).WithShowHelp(true)
 		err := lancerEtapeNommee("phrase enregistrée", form, champ)
 		if err != nil && !errors.Is(err, errRetour) {
-			return "", err
+			return pkg.Phrase{}, err
 		}
 		if err == nil && enregistree {
-			return m.phrase.Texte, nil
+			return m.phrase, nil
 		}
 		// « pas encore » ou retour : on revient à la phrase, inchangée.
 	}

@@ -61,7 +61,7 @@ func hoteAvecPhrase(t *testing.T) (*hote, *phraseSession, *horlogeDeTest, *minut
 // le tableau gardé, pour vérifier ensuite qu'il a bien été mis à zéro.
 func garderSurLHote(t *testing.T, h *hote, p *phraseSession, phrase string) []byte {
 	t.Helper()
-	p.garder([]byte(phrase))
+	p.garder([]byte(phrase), "")
 	garde := p.octets
 	envoyerHote(t, h, phraseGardeeMsg{})
 	return garde
@@ -85,7 +85,7 @@ func indicateurAffiche(h *hote) bool {
 func TestPrendreRendUneCopie(t *testing.T) {
 	var p phraseSession
 	secret := []byte("correct horse battery staple")
-	p.garder(secret)
+	p.garder(secret, "")
 	zero(secret) // l'appelant efface la sienne aussitôt
 
 	prise, ok := p.prendre()
@@ -103,7 +103,7 @@ func TestPrendreRendUneCopie(t *testing.T) {
 
 	// Garder une autre phrase efface la précédente.
 	ancienne := p.octets
-	p.garder([]byte("autre phrase"))
+	p.garder([]byte("autre phrase"), "")
 	if !toutAZero(ancienne) {
 		t.Errorf("l'ancienne phrase n'a pas été mise à zéro : %q", ancienne)
 	}
@@ -245,7 +245,7 @@ func TestPhraseOublieeALaSortie(t *testing.T) {
 		if p.active() || !toutAZero(garde) {
 			t.Errorf("Ctrl+C n'a pas effacé la phrase : %q", garde)
 		}
-		p.garder([]byte("trop tard"))
+		p.garder([]byte("trop tard"), "")
 		if p.active() {
 			t.Error("une phrase a été gardée après la sortie")
 		}
@@ -258,7 +258,7 @@ func TestPhraseOublieeALaSortie(t *testing.T) {
 		h := nouvelHote(func(msg tea.Msg) { programme.Send(msg) })
 		h.phrase, h.minuterie = p, minuterie.programmer
 		programme = tea.NewProgram(h, tea.WithInput(nil), tea.WithOutput(io.Discard))
-		p.garder([]byte("correct horse battery staple"))
+		p.garder([]byte("correct horse battery staple"), "")
 		garde := p.octets
 
 		fini := make(chan bool, 1)
@@ -336,7 +336,7 @@ func TestGarderDemandeAccord(t *testing.T) {
 
 			secret := []byte("correct horse battery staple")
 			issue := make(chan error, 1)
-			go func() { issue <- proposerDeGarder(secret) }()
+			go func() { issue <- proposerDeGarder(secret, "") }()
 			demandeRecue(t, h, boite)
 			if !strings.Contains(h.View(), "garder cette phrase pour la session ?") {
 				t.Fatalf("question absente :\n%s", h.View())
@@ -440,7 +440,7 @@ func TestPhraseProposeeALaSaisie(t *testing.T) {
 // le verdict habituel, calculé sur une copie prise ; sans phrase, rien.
 func TestForcePhraseSession(t *testing.T) {
 	var p phraseSession
-	p.garder([]byte("correct horse battery staple"))
+	p.garder([]byte("correct horse battery staple"), "")
 	if got, attendu := forcePhrase(&p), strengthHint("correct horse battery staple"); got != attendu {
 		t.Errorf("forcePhrase = %q, attendu %q", got, attendu)
 	}
@@ -471,7 +471,7 @@ func TestPasswdNeProposePasLaPhrase(t *testing.T) {
 	sessionCourante = s
 	t.Cleanup(func() { sessionCourante = nil })
 	h.phrase = &s.phrase
-	s.phrase.garder([]byte("ancienne phrase"))
+	s.phrase.garder([]byte("ancienne phrase"), "")
 
 	issue := make(chan error, 1)
 	go func() { issue <- tuiPasswd(chiffre) }()
@@ -551,4 +551,66 @@ func TestPhraseOublieeMemeSiLHorlogeBouge(t *testing.T) {
 			t.Errorf("minuteurs = %v, attendu un dernier de 2m0s", minuterie.delais)
 		}
 	})
+}
+
+// interdireZxcvbn fait échouer le test si la force est calculée par zxcvbn.
+func interdireZxcvbn(t *testing.T) {
+	t.Helper()
+	ancien := forceParZxcvbn
+	forceParZxcvbn = func(string) string {
+		t.Error("zxcvbn appelé alors que le verdict était connu")
+		return ""
+	}
+	t.Cleanup(func() { forceParZxcvbn = ancien })
+}
+
+// TestForcePhraseGenereeSansZxcvbn : une phrase générée gardée porte son
+// verdict, tiré de son entropie exacte ; la proposition le montre sans
+// charger zxcvbn (~9 Mo).
+func TestForcePhraseGenereeSansZxcvbn(t *testing.T) {
+	interdireZxcvbn(t)
+	o := optionsChiffrement{genererPhrase: true, phraseBits: pkg.EntropiePhrase(pkg.DefautMotsPhrase)}
+	verdict := forceAGarder(&o)
+	if verdict != verdictDeForce(pkg.EntropiePhrase(pkg.DefautMotsPhrase)) || !strings.Contains(verdict, "bits") {
+		t.Fatalf("verdict d'une phrase générée = %q", verdict)
+	}
+	var p phraseSession
+	p.garder([]byte("mots tirés au hasard"), verdict)
+	if got := forcePhrase(&p); got != verdict {
+		t.Errorf("forcePhrase = %q, attendu le verdict gardé %q", got, verdict)
+	}
+}
+
+// TestForcePhraseTapeeAuChiffrement : une phrase tapée au chiffrement garde
+// le verdict de l'indicateur (zxcvbn y était déjà chargé) ; celle tapée au
+// déchiffrement n'en a pas, et le calcul se fait à la proposition, une fois.
+func TestForcePhraseTapeeAuChiffrement(t *testing.T) {
+	o := optionsChiffrement{password: "correct horse battery staple"}
+	if got := forceAGarder(&o); got != strengthHint("correct horse battery staple") {
+		t.Errorf("verdict d'une phrase tapée = %q", got)
+	}
+
+	appels := 0
+	ancien := forceParZxcvbn
+	forceParZxcvbn = func(s string) string { appels++; return strengthHint(s) }
+	t.Cleanup(func() { forceParZxcvbn = ancien })
+	var p phraseSession
+	p.garder([]byte("tapée au déchiffrement"), "")
+	premier, second := forcePhrase(&p), forcePhrase(&p)
+	if premier == "" || premier != second || appels != 1 {
+		t.Errorf("forcePhrase = %q puis %q, %d calculs, attendu un seul", premier, second, appels)
+	}
+}
+
+// TestVerdictOublieAvecLaPhrase : le verdict part avec la phrase.
+func TestVerdictOublieAvecLaPhrase(t *testing.T) {
+	var p phraseSession
+	p.garder([]byte("phrase"), "~128 bits — solide")
+	p.oublier()
+	if p.force != "" {
+		t.Errorf("verdict resté après l'oubli : %q", p.force)
+	}
+	if got := forcePhrase(&p); got != "" {
+		t.Errorf("forcePhrase sans phrase = %q", got)
+	}
 }
