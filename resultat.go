@@ -223,7 +223,7 @@ func enCours(titre, texte string, travail func() error) error {
 	var err error
 	go func() {
 		defer close(fini)
-		err = travail()
+		err = sansPanique(travail)
 	}()
 	// Un travail bref (la lecture d'un en-tête) finit avant le seuil : aucun
 	// écran, il ne ferait que clignoter une image. Le minuteur n'existe que

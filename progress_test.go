@@ -2,6 +2,7 @@ package main
 
 import (
 	"errors"
+	"fmt"
 	"io"
 	"strings"
 	"sync/atomic"
@@ -416,4 +417,49 @@ func TestRunJobApresFermetureNeLancePasLOperation(t *testing.T) {
 	if lancee {
 		t.Error("l'opération a été lancée alors que l'hôte est fermé")
 	}
+}
+
+// TestPaniqueDeLOperationDevientErreur : une panique dans la goroutine de
+// l'opération ne tue plus le processus terminal cassé : elle est rattrapée,
+// les temporaires sont fermés, et elle remonte comme une erreur qui porte
+// la valeur et la pile d'origine.
+func TestPaniqueDeLOperationDevientErreur(t *testing.T) {
+	appels := remplacerFermerTemporaires(t)
+	modele, finie := lancerOperation(jobInfo{Action: "test", In: "/etc/hosts"},
+		func(func(int64, int64)) error { panic("boum dans l'opération") }, 80)
+	select {
+	case <-finie:
+	case <-time.After(delaiTest):
+		t.Fatal("l'opération n'a pas rendu la main")
+	}
+	err := <-modele.fin
+	var p *paniqueOperation
+	if !errors.As(err, &p) || p.valeur != "boum dans l'opération" {
+		t.Fatalf("erreur = %v, attendu une paniqueOperation « boum dans l'opération »", err)
+	}
+	if !strings.Contains(string(p.pile), "TestPaniqueDeLOperationDevientErreur") {
+		t.Errorf("la pile ne montre pas l'origine :\n%s", p.pile)
+	}
+	if appels.Load() != 1 {
+		t.Errorf("FermerTemporaires appelée %d fois, attendu 1", appels.Load())
+	}
+}
+
+// TestPaniqueDeLOperationSuitLeCheminDeF5 : le parcours qui reçoit cette
+// erreur relance la panique ; gardeParcours la note avec la valeur et la
+// pile de l'opération, pas celles du parcours, et rend le terminal.
+func TestPaniqueDeLOperationSuitLeCheminDeF5(t *testing.T) {
+	origine := &paniqueOperation{valeur: "boum", pile: []byte("pile de l'opération")}
+	var garde gardeParcours
+	rendu := false
+	garde.mener(func() { relancerPanique(fmt.Errorf("chiffrement : %w", origine)) }, func() { rendu = true })
+	note := garde.panique.Load()
+	if note == nil || note.valeur != "boum" || string(note.pile) != "pile de l'opération" {
+		t.Fatalf("panique notée = %+v", note)
+	}
+	if !rendu {
+		t.Error("rendre n'a pas été appelé")
+	}
+	relancerPanique(errors.New("erreur ordinaire")) // ne panique pas
+	relancerPanique(nil)
 }

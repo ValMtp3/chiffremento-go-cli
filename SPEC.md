@@ -236,9 +236,12 @@ suivante. Hors plein écran (TERM=dumb), une seule opération est menée et le
 menu garde ses quatre lignes, sans « quitter ». Une panique dans le parcours
 ne laisse ni l'écran alternatif ni le terminal en mode brut ni de
 temporaire : la phrase est oubliée, le terminal rendu, puis la panique est
-imprimée (« erreur interne : … » et la pile) et la session sort en 2.
+imprimée (« erreur interne : … » et la pile) et la session sort en 2. Une
+panique dans la goroutine d'une opération (progression, travail « en
+cours ») suit le même chemin, avec la pile de l'opération ; hors plein
+écran, elle remonte en erreur (« erreur interne dans l'opération : … »).
 
-Tests : TestQuitterDepuisLeMenu, TestMenuSansQuitterEnTermDumb, TestHoteDuCadreEnTermDumb, TestAfficherPrefereLaReponseDeposee, TestPaniqueDuParcoursRendLeTerminal, TestParcoursSansPaniqueNeRendRien, TestQSansEffetPendantSaisie, TestCodeSortieApresEchec, TestAnnulerLEcrasementNEstPasUnEchec, TestCtrlCTermineLaSession, TestSortieExterneLibereLeParcours, TestE2EChiffrerPuisDechiffrer, TestE2EMauvaisePhrase, TestE2EInterruptionGardeLesResumes, TestCarteResultatRevientAuMenu, TestQuestionSuppressionDansLaCarte, TestResumesImprimesALaSortie
+Tests : TestQuitterDepuisLeMenu, TestMenuSansQuitterEnTermDumb, TestHoteDuCadreEnTermDumb, TestAfficherPrefereLaReponseDeposee, TestPaniqueDuParcoursRendLeTerminal, TestParcoursSansPaniqueNeRendRien, TestPaniqueDeLOperationDevientErreur, TestPaniqueDeLOperationSuitLeCheminDeF5, TestEnCoursPaniqueDevientErreur, TestQSansEffetPendantSaisie, TestCodeSortieApresEchec, TestAnnulerLEcrasementNEstPasUnEchec, TestCtrlCTermineLaSession, TestSortieExterneLibereLeParcours, TestE2EChiffrerPuisDechiffrer, TestE2EMauvaisePhrase, TestE2EInterruptionGardeLesResumes, TestCarteResultatRevientAuMenu, TestQuestionSuppressionDansLaCarte, TestResumesImprimesALaSortie
 
 ## FMT — compatibilité des formats
 

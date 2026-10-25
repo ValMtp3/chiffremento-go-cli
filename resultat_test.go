@@ -342,3 +342,15 @@ func TestConseilReplieGardeSonRetrait(t *testing.T) {
 		}
 	}
 }
+
+// TestEnCoursPaniqueDevientErreur : une panique dans le travail « en cours »
+// (changement de mot de passe) est rattrapée comme celle d'une opération.
+func TestEnCoursPaniqueDevientErreur(t *testing.T) {
+	appels := remplacerFermerTemporaires(t)
+	hoteSynchrone(t, 100, 30)
+	err := enCours("mots de passe", "changement en cours…", func() error { panic("boum") })
+	var p *paniqueOperation
+	if !errors.As(err, &p) || p.valeur != "boum" || appels.Load() != 1 {
+		t.Fatalf("enCours = %v (fermetures %d), attendu une paniqueOperation", err, appels.Load())
+	}
+}

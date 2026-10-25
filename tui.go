@@ -179,7 +179,13 @@ func (g *gardeParcours) mener(parcours, rendre func()) {
 		if r == nil {
 			return
 		}
-		g.panique.Store(&paniqueParcours{valeur: r, pile: debug.Stack()})
+		note := &paniqueParcours{valeur: r, pile: debug.Stack()}
+		// Panique d'une opération relancée par le parcours : sa pile à elle
+		// montre l'origine, celle du parcours seulement la relance.
+		if p, ok := r.(*paniqueOperation); ok {
+			note = &paniqueParcours{valeur: p.valeur, pile: p.pile}
+		}
+		g.panique.Store(note)
 		rendre()
 	}()
 	parcours()
@@ -213,6 +219,7 @@ func parcoursSession(h *hote, s *session) {
 		// Le menu repart toujours de la première ligne : le curseur au même
 		// endroit à chaque retour vaut mieux que la dernière opération faite.
 		err := uneOperation(&choixMenu{action: "enc", mode: "saisie"})
+		relancerPanique(err)
 		lignes := s.resumesOperation()
 		var fin sousEcran
 		switch {
@@ -1350,7 +1357,7 @@ func lancerOperation(info jobInfo, op func(progress func(done, total int64)) err
 	model.fin = fin
 	go func() {
 		defer close(fini)
-		err := op(func(d, _ int64) { done.Store(d) })
+		err := menerOperation(op, done)
 		// La sortie est sur le disque, mais son ✓ attendra la fin de
 		// l'animation : noté ici, à l'instant même, il survit à un Ctrl+C
 		// pendant ces quelques secondes (session.imprimer).
@@ -1361,6 +1368,54 @@ func lancerOperation(info jobInfo, op func(progress func(done, total int64)) err
 		fin <- err
 	}()
 	return model, fini
+}
+
+// menerOperation exécute op. Une panique y est rattrapée : elle tuerait le
+// processus sur-le-champ, terminal en mode brut et clair d'une extraction
+// laissé. Les temporaires sont fermés, et la panique remonte comme une
+// erreur, paniqueOperation, que le parcours relance (relancerPanique) pour
+// suivre le chemin de F5 : terminal rendu, phrase oubliée, sortie en 2.
+//
+// Pourquoi pas une simple erreur et le retour au menu : après une panique au
+// milieu du chiffrement, l'état du processus n'est plus sûr, et le registre
+// des temporaires est fermé pour de bon — l'opération suivante échouerait.
+func menerOperation(op func(progress func(done, total int64)) error, done *atomic.Int64) error {
+	return sansPanique(func() error { return op(func(d, _ int64) { done.Store(d) }) })
+}
+
+// sansPanique exécute travail et change une panique en paniqueOperation,
+// temporaires fermés (voir menerOperation). Sert à toute goroutine qui mène
+// un travail pour le parcours : opération avec progression, travail « en
+// cours » (enCours).
+func sansPanique(travail func() error) (err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			fermerTemporaires()
+			err = &paniqueOperation{valeur: r, pile: debug.Stack()}
+		}
+	}()
+	return travail()
+}
+
+// paniqueOperation : une panique rattrapée dans la goroutine d'une
+// opération, avec sa valeur et la pile où elle est née.
+type paniqueOperation struct {
+	valeur any
+	pile   []byte
+}
+
+func (p *paniqueOperation) Error() string {
+	return fmt.Sprintf("erreur interne dans l'opération : %v", p.valeur)
+}
+
+// relancerPanique relance, dans la goroutine du parcours, la panique d'une
+// opération remontée en erreur ; sans effet sur toute autre erreur. Hors
+// plein écran, l'erreur remonte simplement à main.
+func relancerPanique(err error) {
+	var p *paniqueOperation
+	if errors.As(err, &p) {
+		panic(p)
+	}
 }
 
 // runJobDansHote affiche la progression dans le cadre de l'hôte.
