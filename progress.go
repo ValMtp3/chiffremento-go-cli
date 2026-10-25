@@ -254,7 +254,7 @@ func (m *progressModel) View() string {
 	}
 	title := styleDim.Render("chiffremento ") + styleAccent.Render(m.info.Action)
 	return "\n" + lipgloss.JoinVertical(lipgloss.Left,
-		"  "+title+styleFaint.Render("  "+version),
+		"  "+title+styleFaint.Render("  "+versionAffichee(version)),
 		box,
 	) + "\n"
 }

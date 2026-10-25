@@ -32,6 +32,30 @@ func TestThemeUnSeulChevronParChampTexte(t *testing.T) {
 	}
 }
 
+// Même règle pour un champ qui n'a pas le focus : le second champ du groupe
+// est inactif, son prompt vient du thème « Blurred ».
+func TestThemeUnSeulChevronChampSansFocus(t *testing.T) {
+	premier := huh.NewInput().Title("premier")
+	second := huh.NewInput().Title("second")
+	form := huh.NewForm(huh.NewGroup(premier, second)).WithTheme(formTheme()).WithWidth(60)
+	form.Init()
+
+	vue := ansi.Strip(form.View())
+	lignes := 0
+	for _, l := range strings.Split(vue, "\n") {
+		if !strings.Contains(l, ">") {
+			continue
+		}
+		lignes++
+		if n := strings.Count(l, ">"); n != 1 {
+			t.Errorf("%d chevrons devant le champ, un seul attendu : %q", n, l)
+		}
+	}
+	if lignes != 2 {
+		t.Errorf("%d champs avec chevron, 2 attendus :\n%s", lignes, vue)
+	}
+}
+
 func TestVersionAffichee(t *testing.T) {
 	cas := map[string]string{
 		"2.4.0":      "v2.4.0", // goreleaser, sans « v »
