@@ -745,7 +745,7 @@ func preparerChiffrement(src source, opts Options) (*header, []byte, int64, erro
 	h := &header{
 		Version: currentVersion,
 		Algo:    algo,
-		Argon:   profile.argonParams(),
+		Argon:   profile.argonPourEcriture(),
 		Comp:    opts.Comp,
 		Salt:    salt,
 	}

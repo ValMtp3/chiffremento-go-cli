@@ -55,6 +55,7 @@ func TestProfilsKDFCroissantsEtValides(t *testing.T) {
 // TestProfilKDFInscritDansLeHeader : le profil choisi doit se retrouver dans le
 // fichier, sinon il serait impossible de le relire.
 func TestProfilKDFInscritDansLeHeader(t *testing.T) {
+	profilReel(t) // le sujet est la valeur 512 Mio écrite dans le header
 	dir := t.TempDir()
 	in := write(t, dir, "clair.txt", []byte("contenu"))
 	enc := filepath.Join(dir, "fort.chto")

@@ -1,6 +1,9 @@
 package pkg
 
-import "fmt"
+import (
+	"fmt"
+	"sync/atomic"
+)
 
 // Profils de dérivation de clé.
 //
@@ -41,6 +44,26 @@ func (p KDFProfile) argonParams() argonParams {
 		// ~144 ms : le défaut, imperceptible à la saisie.
 		return defaultArgonParams()
 	}
+}
+
+// argonAlegeDesTests vaut vrai quand les tests de la CI sous -race demandent
+// des paramètres Argon2 allégés (voir allege_race_test.go). Il n'est jamais
+// levé en production : seul un fichier _test.go peut le faire.
+var argonAlegeDesTests atomic.Bool
+
+// argonAlege : paramètres du plus léger des profils d'essai, 8 Mio et une
+// passe. Valides pour validate(), donc relisibles par Decrypt.
+func argonAlege() argonParams {
+	return argonParams{Time: 1, Memory: 8 * 1024, Threads: defaultArgonThreads}
+}
+
+// argonPourEcriture donne les paramètres inscrits dans le header d'un nouveau
+// fichier : ceux du profil, sauf allègement demandé par les tests.
+func (p KDFProfile) argonPourEcriture() argonParams {
+	if argonAlegeDesTests.Load() {
+		return argonAlege()
+	}
+	return p.argonParams()
 }
 
 // AllKDFProfiles liste les profils dans l'ordre croissant de coût.
