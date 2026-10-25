@@ -136,9 +136,11 @@ gh attestation verify chiffremento_X.Y.Z_linux_amd64.tar.gz --repo ValMtp3/chiff
 
 - cosign présent et `checksums.txt.sigstore.json` dans le dossier : la signature est vérifiée avec l'identité ci-dessus. Si elle échoue, ou si cosign ne peut pas la vérifier (réseau absent), l'installation est **refusée**.
 - cosign absent : le script affiche « signature non vérifiée : installe cosign pour plus de sûreté » et continue. L'empreinte SHA-256 est toujours vérifiée.
-- fichier `.sigstore.json` absent : l'installation est **refusée**, quelle que soit la version (sans signature, `checksums.txt` ne prouve rien). Télécharge le fichier depuis la même page de release. Pour une release antérieure à la 2.4.0, qui n'est pas signée, utilise l'`install.sh` fourni avec cette release.
+- cosign installé, mais fichier `.sigstore.json` absent : l'installation est **refusée**, quelle que soit la version (sans signature, `checksums.txt` ne prouve rien). Télécharge le fichier depuis la même page de release. Pour une release antérieure à la 2.4.0, qui n'est pas signée, utilise l'`install.sh` fourni avec cette release.
 
 > Sans cosign, seule l'empreinte est vérifiée : rien ne protège contre un remplacement complet des fichiers (archive et `checksums.txt`).
+
+> Un binaire nu (`chiffremento-<os>-<arch>`, produit par `make build-all`) posé sans `checksums.txt`, ou absent de ce fichier, est installé **sans vérification** : le script affiche seulement « Aucune empreinte disponible … installation non vérifiée ». Une archive de release, elle, est refusée si elle n'est pas listée dans `checksums.txt`.
 
 ### Depuis les sources
 
@@ -161,6 +163,64 @@ Elle demande l'opération, puis comment désigner la cible : **saisir un chemin*
 Les décisions suivent la même grammaire : `↑↓` parcourent les réponses, `→` (ou `entrée`) valide, `←` revient à la décision précédente — y compris d'un écran à l'autre, en gardant les réponses déjà données. Dans un champ texte et dans l'explorateur, où `←` sert déjà, le retour se fait avec `shift+tab`.
 
 Elle occupe tout le terminal, dans un écran à part que la sortie rend tel qu'il était : une barre en haut (`chiffremento v2.3.0 · chiffrer › mot de passe`, et `● phrase en mémoire` à droite quand une phrase est gardée), le cadre au centre (de 52 à 80 colonnes selon la fenêtre), les touches de l'écran courant en bas. Sur un terminal trop petit, les barres disparaissent et le cadre prend toute la place. Le menu revient après chaque opération : une carte donne le résultat, un écran d'erreur donne la cause et quoi faire, `entrée` revient au menu. On quitte par la ligne « quitter » du menu ou par `q`. Les résumés complets de la session sont alors imprimés dans le terminal.
+
+Captures réelles (terminal de 80×24, binaire lancé dans un pseudo-terminal), le menu puis les options de chiffrement :
+
+```text
+  chiffremento 2.4.0 · menu
+
+
+
+
+
+  ┌──────────────────────────────────────────────────────────────────────────┐
+  │ ┃ opération                                                              │
+  │ ┃ > chiffrer un fichier ou un dossier                                    │
+  │ ┃   déchiffrer un .chto  (fichier ou dossier)                            │
+  │ ┃   vérifier un .chto  (sans rien écrire)                                │
+  │ ┃   changer le mot de passe d'un .chto                                   │
+  │ ┃   quitter                                                              │
+  │                                                                          │
+  │   désigner la cible                                                      │
+  │     saisir un chemin  (ou glisser-déposer)                               │
+  │     parcourir les fichiers                                               │
+  └──────────────────────────────────────────────────────────────────────────┘
+
+
+
+
+
+  ↑↓ choisir  → valider  q quitter                      ? aide  ctrl+c quitter
+```
+
+L'écran des options est coupé en bas : le terminal ne fait que 24 lignes, l'interface défile pour garder le champ actif visible.
+
+```text
+  chiffremento 2.4.0 · chiffrer › options
+
+
+  ┌──────────────────────────────────────────────────────────────────────────┐
+  │ ┃ algorithme                                                             │
+  │ ┃ > aes-256-gcm  (défaut)                                                │
+  │ ┃   chacha20-poly1305                                                    │
+  │ ┃   cascade  chacha20 + aes  (parano)                                    │
+  │                                                                          │
+  │   coût de la dérivation de clé                                           │
+  │   argon2id  m=256MiB t=3 p=4 · 256 Mio de mémoire, exigés aussi au       │
+  │   déchiffrement                                                          │
+  │     standard  (défaut)                                                   │
+  │     fort                                                                 │
+  │     maximum                                                              │
+  │                                                                          │
+  │   compresser avant chiffrement  (zstd)                                   │
+  │   réduit la taille, mais laisse fuiter la compressibilité du contenu     │
+  │     oui                                                                  │
+  │     non                                                                  │
+  └──────────────────────────────────────────────────────────────────────────┘
+
+
+  ↑↓ choisir  → valider  ← revenir                      ? aide  ctrl+c quitter
+```
 
 | Touche | Rôle |
 |---|---|
@@ -516,9 +576,11 @@ gh attestation verify chiffremento_X.Y.Z_linux_amd64.tar.gz --repo ValMtp3/chiff
 
 - cosign installed and `checksums.txt.sigstore.json` in the folder: the signature is verified against the identity above. If it fails, or if cosign cannot verify it (no network), installation is **refused**.
 - cosign missing: the script prints "signature non vérifiée : installe cosign pour plus de sûreté" and carries on. The SHA-256 checksum is still verified.
-- `.sigstore.json` file missing: installation is **refused**, whatever the version (without a signature, `checksums.txt` proves nothing). Download the file from the same release page. For a release older than 2.4.0, which is not signed, use the `install.sh` shipped with that release.
+- cosign installed but `.sigstore.json` file missing: installation is **refused**, whatever the version (without a signature, `checksums.txt` proves nothing). Download the file from the same release page. For a release older than 2.4.0, which is not signed, use the `install.sh` shipped with that release.
 
 > Without cosign, only the checksum is verified: nothing protects against a full replacement of the files (archive and `checksums.txt`).
+
+> A bare binary (`chiffremento-<os>-<arch>`, built by `make build-all`) placed without `checksums.txt`, or missing from that file, is installed **unverified**: the script only prints a warning ("Aucune empreinte disponible … installation non vérifiée"). A release archive, on the other hand, is refused if it is not listed in `checksums.txt`.
 
 ### From source
 
@@ -541,6 +603,64 @@ It asks for the operation, then how to point at the target: **type a path** (or 
 Every decision follows the same grammar: `↑↓` move through the answers, `→` (or `enter`) confirms, `←` goes back to the previous decision — across screens too, keeping the answers already given. In a text field and in the browser, where `←` already has a job, going back is `shift+tab`.
 
 It takes over the whole terminal, in a separate screen that the exit restores as it was: a bar at the top (`chiffremento v2.3.0 · chiffrer › mot de passe`, and `● phrase en mémoire` on the right while a passphrase is kept), the frame in the middle (52 to 80 columns depending on the window), the keys of the current screen at the bottom. On a terminal that is too small, the bars disappear and the frame takes all the room. The menu comes back after every operation: a card shows the result, an error screen shows the cause and what to do, `enter` returns to the menu. You quit with the "quitter" line of the menu or with `q`. The full summaries of the session are then printed in the terminal.
+
+Real captures (80×24 terminal, the binary run in a pseudo-terminal), the menu then the encryption options (the interface itself is in French):
+
+```text
+  chiffremento 2.4.0 · menu
+
+
+
+
+
+  ┌──────────────────────────────────────────────────────────────────────────┐
+  │ ┃ opération                                                              │
+  │ ┃ > chiffrer un fichier ou un dossier                                    │
+  │ ┃   déchiffrer un .chto  (fichier ou dossier)                            │
+  │ ┃   vérifier un .chto  (sans rien écrire)                                │
+  │ ┃   changer le mot de passe d'un .chto                                   │
+  │ ┃   quitter                                                              │
+  │                                                                          │
+  │   désigner la cible                                                      │
+  │     saisir un chemin  (ou glisser-déposer)                               │
+  │     parcourir les fichiers                                               │
+  └──────────────────────────────────────────────────────────────────────────┘
+
+
+
+
+
+  ↑↓ choisir  → valider  q quitter                      ? aide  ctrl+c quitter
+```
+
+The options screen is cut at the bottom: the terminal is only 24 rows high, the interface scrolls to keep the active field visible.
+
+```text
+  chiffremento 2.4.0 · chiffrer › options
+
+
+  ┌──────────────────────────────────────────────────────────────────────────┐
+  │ ┃ algorithme                                                             │
+  │ ┃ > aes-256-gcm  (défaut)                                                │
+  │ ┃   chacha20-poly1305                                                    │
+  │ ┃   cascade  chacha20 + aes  (parano)                                    │
+  │                                                                          │
+  │   coût de la dérivation de clé                                           │
+  │   argon2id  m=256MiB t=3 p=4 · 256 Mio de mémoire, exigés aussi au       │
+  │   déchiffrement                                                          │
+  │     standard  (défaut)                                                   │
+  │     fort                                                                 │
+  │     maximum                                                              │
+  │                                                                          │
+  │   compresser avant chiffrement  (zstd)                                   │
+  │   réduit la taille, mais laisse fuiter la compressibilité du contenu     │
+  │     oui                                                                  │
+  │     non                                                                  │
+  └──────────────────────────────────────────────────────────────────────────┘
+
+
+  ↑↓ choisir  → valider  ← revenir                      ? aide  ctrl+c quitter
+```
 
 | Key | Role |
 |---|---|
