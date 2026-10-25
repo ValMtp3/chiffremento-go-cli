@@ -160,7 +160,15 @@ func (h *hote) afficher(ecran sousEcran) (tea.Model, error) {
 	case r := <-demande.reponse:
 		return r.modele, r.err
 	case <-h.termine:
-		return nil, huh.ErrUserAborted
+		// Ctrl+C a pu déposer la réponse juste avant de fermer : le select
+		// choisit au hasard entre deux cas prêts, on préfère la réponse,
+		// qui porte le modèle final.
+		select {
+		case r := <-demande.reponse:
+			return r.modele, r.err
+		default:
+			return nil, huh.ErrUserAborted
+		}
 	}
 }
 

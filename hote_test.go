@@ -694,3 +694,23 @@ func TestSortieMalgreUnParcoursBloque(t *testing.T) {
 		t.Errorf("la sortie a attendu %v un parcours bloqué", duree)
 	}
 }
+
+// TestAfficherPrefereLaReponseDeposee : quand la réponse de l'écran est déjà
+// déposée et que l'hôte se ferme en même temps (Ctrl+C), afficher rend la
+// réponse — le modèle final et son erreur — plutôt que nil au hasard du
+// select.
+func TestAfficherPrefereLaReponseDeposee(t *testing.T) {
+	attendu := texteFixe{"modèle final"}
+	for range 200 {
+		var h *hote
+		h = nouvelHote(func(msg tea.Msg) {
+			d := msg.(demandeEcran)
+			d.reponse <- resultatEcran{modele: attendu, err: huh.ErrUserAborted}
+			h.fermer()
+		})
+		modele, err := h.afficher(&ecranDeTest{modele: texteFixe{"écran"}})
+		if modele != attendu || !errors.Is(err, huh.ErrUserAborted) {
+			t.Fatalf("afficher = (%v, %v), attendu (%v, ErrUserAborted)", modele, err, attendu)
+		}
+	}
+}
