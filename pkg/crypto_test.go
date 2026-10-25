@@ -489,6 +489,7 @@ func TestCompatibiliteV1(t *testing.T) {
 }
 
 func TestEncryptEcritLaVersionCouranteAvecArgonRenforce(t *testing.T) {
+	profilReel(t) // le sujet est la valeur 256 Mio écrite dans le header
 	dir := t.TempDir()
 	in := write(t, dir, "clair.txt", []byte("x"))
 	enc := filepath.Join(dir, "out.chto")

@@ -12,6 +12,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/huh"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 )
 
 func demoModel(ratio float64, largeur int) *progressModel {
@@ -394,6 +395,21 @@ func TestProgressionAutonomeLargeurFixe(t *testing.T) {
 		if w := lipgloss.Width(ligne); w != contentWidth+2 {
 			t.Errorf("ligne %d : %d colonnes au lieu de %d", i, w, contentWidth+2)
 		}
+	}
+}
+
+// TestProgressionAutonomeVersionAvecV : l'écran de progression autonome
+// préfixe la version de « v », comme la barre du haut de l'hôte.
+func TestProgressionAutonomeVersionAvecV(t *testing.T) {
+	avant := version
+	t.Cleanup(func() { version = avant })
+	version = "2.4.0"
+	m := demoModel(0.5, contentWidth+2)
+	m.autonome = true
+	m.Update(tea.WindowSizeMsg{Width: 200, Height: 50})
+	titre := ansi.Strip(strings.Split(strings.Trim(m.View(), "\n"), "\n")[0])
+	if !strings.Contains(titre, " v2.4.0") {
+		t.Errorf("titre sans « v2.4.0 » : %q", titre)
 	}
 }
 

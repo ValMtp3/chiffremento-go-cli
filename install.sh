@@ -3,10 +3,18 @@
 set -e
 
 BINARY_NAME="chiffremento"
-INSTALL_DIR="/usr/local/bin"
+# CHIFFREMENTO_INSTALL_DIR : dossier d'installation, /usr/local/bin par défaut.
+# Réservé aux tests et aux installations manuelles : ce n'est pas une
+# interface stable, elle peut changer sans prévenir.
+INSTALL_DIR="${CHIFFREMENTO_INSTALL_DIR:-/usr/local/bin}"
+
+# Identité attendue de la signature : le workflow release.yml de ce dépôt, sur
+# un tag v*. Ces deux valeurs sont les mêmes dans release.yml et RELEASE.md.
+SIGNATURE_IDENTITE='^https://github.com/ValMtp3/chiffremento-go-cli/.github/workflows/release.yml@refs/tags/v'
+SIGNATURE_EMETTEUR='https://token.actions.githubusercontent.com'
 WORKDIR=""
 
-cleanup() { [ -n "$WORKDIR" ] && rm -rf "$WORKDIR"; }
+cleanup() { [ -z "$WORKDIR" ] || rm -rf "$WORKDIR"; }
 trap cleanup EXIT
 
 # 1. Détection du système et de l'architecture
@@ -48,6 +56,75 @@ for candidate in "./checksums.txt" "./build/checksums.txt"; do
     [ -f "$candidate" ] && CHECKSUMS="$candidate" && break
 done
 
+# Signature de checksums.txt (cosign, sans clé). Elle passe AVANT toute
+# lecture des empreintes : un checksums.txt falsifié rendrait la vérification
+# SHA-256 inutile. Une vérification qui échoue (signature fausse ou réseau
+# absent) refuse l'installation : jamais de repli silencieux.
+# Versions de cosign sachant lire le bundle .sigstore.json (format Sigstore
+# récent, produit par la CI avec cosign v3) : le format est lu depuis la 2.4.0,
+# mais les versions <= 2.6.1 et <= 3.0.3 acceptent n'importe quelle entrée
+# Rekor valide (GHSA-whqx-f9j3-ch6m), ce qui affaiblit la vérification. On exige
+# donc au moins 2.6.2 (v2) ou 3.0.4 (v3).
+COSIGN_VERSION_MINIMALE="2.6.2 (ou 3.0.4 en v3)"
+
+# cosign_assez_recent — succès si cosign est assez récent, ou si sa version est
+# illisible (cosign verify-blob tranche alors, il échoue si le bundle est
+# trop neuf pour lui).
+cosign_assez_recent() {
+    local version major minor patch
+    version="$(cosign version 2>/dev/null | sed -n 's/^GitVersion:[[:space:]]*v\{0,1\}\([0-9][0-9]*\)\.\([0-9][0-9]*\)\.\([0-9][0-9]*\).*/\1 \2 \3/p' | head -n1)"
+    [ -z "$version" ] && return 0
+    set -- $version
+    major="$1"; minor="$2"; patch="$3"
+    [ "$major" -gt 3 ] && return 0
+    if [ "$major" -eq 3 ]; then
+        [ "$minor" -gt 0 ] || [ "$patch" -ge 4 ]
+        return
+    fi
+    [ "$major" -eq 2 ] || return 1
+    [ "$minor" -gt 6 ] || { [ "$minor" -eq 6 ] && [ "$patch" -ge 2 ]; }
+}
+
+verify_signature() {
+    local bundle
+    [ -z "$CHECKSUMS" ] && return 0
+
+    if ! command -v cosign >/dev/null 2>&1; then
+        echo "⚠️  signature non vérifiée : installe cosign pour plus de sûreté"
+        return 0
+    fi
+
+    bundle="$(dirname "$CHECKSUMS")/checksums.txt.sigstore.json"
+    if [ ! -f "$bundle" ]; then
+        # Refus quelle que soit la version : sans signature, checksums.txt ne
+        # prouve rien, et le nom de l'archive (donc sa « version ») est
+        # modifiable par un attaquant.
+        echo "❌ checksums.txt.sigstore.json est absent : installation refusée."
+        echo "   Sans la signature, rien ne prouve que checksums.txt est authentique."
+        echo "   Télécharge checksums.txt.sigstore.json depuis la même page de release, dans ce dossier, puis relance."
+        echo "   Pour une release antérieure à la 2.4.0 (non signée), utilise l'install.sh fourni avec cette release."
+        exit 1
+    fi
+
+    if ! cosign_assez_recent; then
+        echo "❌ cosign trop ancien (faille connue GHSA-whqx-f9j3-ch6m) : installe au moins $COSIGN_VERSION_MINIMALE, installation refusée."
+        echo "   Mets cosign à jour (https://docs.sigstore.dev/cosign/system_config/installation/), puis relance."
+        exit 1
+    fi
+
+    if ! cosign verify-blob --bundle "$bundle" \
+        --certificate-identity-regexp "$SIGNATURE_IDENTITE" \
+        --certificate-oidc-issuer "$SIGNATURE_EMETTEUR" \
+        "$CHECKSUMS"; then
+        echo "❌ Signature de checksums.txt non vérifiée : installation refusée."
+        echo "   Soit la signature est fausse, soit cosign n'a pas pu la vérifier (réseau absent ?)."
+        echo "   Rien n'est installé. Vérifie la connexion, retélécharge les fichiers, puis relance."
+        exit 1
+    fi
+    echo "🔏 Signature vérifiée : checksums.txt"
+}
+
+
 # verify_checksum <fichier> — échoue si l'empreinte ne correspond pas.
 # Renvoie 2 si le fichier n'est pas listé dans checksums.txt.
 verify_checksum() {
@@ -83,6 +160,9 @@ ARCHIVE=""
 for candidate in ./${BINARY_NAME}_*_${OS}_${ARCH}.tar.gz ./build/${BINARY_NAME}_*_${OS}_${ARCH}.tar.gz; do
     [ -f "$candidate" ] && ARCHIVE="$candidate" && break
 done
+
+# La signature passe avant toute lecture des empreintes (verify_checksum).
+verify_signature
 
 if [ -n "$ARCHIVE" ]; then
     echo "📦 Archive trouvée : $ARCHIVE"
@@ -121,7 +201,7 @@ else
     }
 fi
 
-# 4. Installation dans /usr/local/bin
+# 4. Installation dans $INSTALL_DIR (/usr/local/bin, ou CHIFFREMENTO_INSTALL_DIR)
 echo "🚀 Installation de $BINARY_NAME dans $INSTALL_DIR..."
 echo "🔑 Un mot de passe peut être demandé pour les permissions (sudo)..."
 

@@ -69,7 +69,7 @@ func formTheme() *huh.Theme {
 	t.Focused.SelectSelector = t.Focused.SelectSelector.Foreground(accent).SetString("> ")
 	t.Focused.SelectedOption = t.Focused.SelectedOption.Foreground(accent)
 	t.Focused.UnselectedOption = t.Focused.UnselectedOption.Foreground(textColor)
-	t.Focused.TextInput.Prompt = t.Focused.TextInput.Prompt.Foreground(accent).SetString("> ")
+	t.Focused.TextInput.Prompt = t.Focused.TextInput.Prompt.Foreground(accent)
 	t.Focused.TextInput.Cursor = t.Focused.TextInput.Cursor.Foreground(accent)
 	t.Focused.TextInput.Placeholder = t.Focused.TextInput.Placeholder.Foreground(faintColor)
 	t.Focused.TextInput.Text = t.Focused.TextInput.Text.Foreground(textColor)
@@ -81,7 +81,7 @@ func formTheme() *huh.Theme {
 	t.Blurred.Base = t.Blurred.Base.BorderForeground(faintColor)
 	t.Blurred.Title = t.Blurred.Title.Foreground(dimColor)
 	t.Blurred.Description = t.Blurred.Description.Foreground(faintColor)
-	t.Blurred.TextInput.Prompt = t.Blurred.TextInput.Prompt.Foreground(faintColor).SetString("  ")
+	t.Blurred.TextInput.Prompt = t.Blurred.TextInput.Prompt.Foreground(faintColor)
 	t.Blurred.SelectSelector = t.Blurred.SelectSelector.SetString("  ")
 
 	t.Help.ShortKey = t.Help.ShortKey.Foreground(dimColor)

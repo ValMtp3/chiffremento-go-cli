@@ -2,7 +2,7 @@
 
 Ce document décrit chaque étape d'une release de Chiffremento, de la décision du numéro jusqu'à la vérification de l'installation par Homebrew. On le suit dans l'ordre : chaque étape suppose la précédente terminée.
 
-Le principe à retenir : **un tag `v*` poussé sur GitHub déclenche toute la publication**. Le workflow `.github/workflows/release.yml` lance GoReleaser, qui compile les binaires, crée la release GitHub et met à jour le cask Homebrew. Tout ce qui doit figurer dans la release — code, README, ROADMAP — doit donc être sur `main` **avant** le tag.
+Le principe à retenir : **un tag `v*` poussé sur GitHub déclenche toute la publication**. Le workflow `.github/workflows/release.yml` lance GoReleaser, qui compile les binaires, crée la release GitHub (en brouillon), signe et atteste les fichiers, puis met à jour le cask Homebrew. La release n'est publiée qu'une fois la signature vérifiée. Tout ce qui doit figurer dans la release — code, README, ROADMAP — doit donc être sur `main` **avant** le tag.
 
 ## Vue d'ensemble
 
@@ -12,9 +12,9 @@ Le principe à retenir : **un tag `v*` poussé sur GitHub déclenche toute la pu
 | 2 | Vérifier que `main` est prêt | local + CI |
 | 3 | Mettre à jour la documentation | PR vers `main` |
 | 4 | Poser et pousser le tag | local |
-| 5 | Suivre la publication (GitHub + Homebrew) | Actions |
+| 5 | Suivre la publication (brouillon vérifié puis publié, Homebrew) | Actions |
 | 6 | Écrire la description de la release | GitHub |
-| 7 | Vérifier l'installation | macOS, Linux |
+| 7 | Vérifier signature, provenance et installation | macOS, Linux |
 
 ---
 
@@ -107,14 +107,47 @@ gh run watch <id>
 GoReleaser fait alors, dans l'ordre :
 
 1. `go mod tidy`, puis compilation pour **6 cibles** : Linux, macOS et Windows, chacun en `amd64` et `arm64`. Les binaires sont compilés avec `-trimpath` (reproductibles) et la version injectée par `-X main.version`.
-2. Archives `chiffremento_X.Y.Z_<os>_<arch>.tar.gz` (`.zip` pour Windows), `checksums.txt`, et `install.sh` joint tel quel (`release.extra_files`).
-3. Release GitHub, avec un changelog généré à partir des commits. Les commits `docs:` et `test:` en sont exclus.
-4. **Homebrew** : écriture de `Casks/chiffremento.rb` dans le dépôt [`ValMtp3/homebrew-tap`](https://github.com/ValMtp3/homebrew-tap). Le cask retire l'attribut de quarantaine de macOS après l'installation, car les binaires ne sont pas signés.
+2. Archives `chiffremento_X.Y.Z_<os>_<arch>.tar.gz` (`.zip` pour Windows), `checksums.txt` (qui contient aussi l'empreinte d'`install.sh`, `checksum.extra_files`), et `install.sh` joint tel quel (`release.extra_files`).
+3. Release GitHub **en brouillon** (`draft: true`), avec un changelog généré à partir des commits. Les commits `docs:` et `test:` en sont exclus.
+4. Un SBOM par archive (syft : la liste des bibliothèques embarquées), puis la signature de `checksums.txt` par cosign, sans clé (`checksums.txt.sigstore.json`).
+5. **Homebrew** : écriture de `Casks/chiffremento.rb` dans le dépôt [`ValMtp3/homebrew-tap`](https://github.com/ValMtp3/homebrew-tap). Le cask retire l'attribut de quarantaine de macOS après l'installation, car les binaires ne sont pas signés.
+
+Ensuite, le workflow fait ce que GoReleaser ne fait pas :
+
+1. **Provenance** : `actions/attest-build-provenance` atteste que les archives, `checksums.txt` et `install.sh` sortent de ce workflow, sur ce tag.
+2. **Vérification du brouillon** : il retélécharge les fichiers du brouillon, puis vérifie la signature de `checksums.txt` (identité de référence ci-dessous), les empreintes des archives, des SBOM et d'`install.sh` (`sha256sum -c`, tous dans `checksums.txt` donc couverts par la signature) et l'attestation de chaque archive (`gh attestation verify`).
+3. **Publication** : seulement si tout est bon, la release passe de brouillon à publiée. Au moindre échec, le job devient rouge et la release reste un brouillon, invisible du public.
+
+Pourquoi un brouillon : une release publiée d'emblée peut être téléchargée avant qu'on ait vérifié quoi que ce soit, et on ne la retire plus proprement. Image : on ne met pas le colis en rayon avant d'avoir contrôlé le scellé.
+
+### Identité de signature (référence unique)
+
+C'est ce qui prouve qu'une signature vient de ce dépôt et de ce workflow, pas d'un autre. Les mêmes deux valeurs sont dans `release.yml` et dans `install.sh` ; en changer une impose de changer les autres :
+
+| | Valeur |
+| :--- | :--- |
+| Identité (expression régulière) | `^https://github.com/ValMtp3/chiffremento-go-cli/.github/workflows/release.yml@refs/tags/v` |
+| Émetteur | `https://token.actions.githubusercontent.com` |
+
+**Règle d'`install.sh`** : avec cosign présent, `install.sh` vérifie cette signature et **refuse toute installation si `checksums.txt.sigstore.json` est absent**, quelle que soit la version (y compris une pré-version comme `2.4.0-rc1`) : sans signature, `checksums.txt` ne prouve rien, et le nom d'une archive ne dit rien de fiable sur son âge. Pour une release antérieure à la 2.4.0 (non signée), on utilise l'`install.sh` livré avec elle. Sans cosign, le script avertit et ne vérifie que l'empreinte SHA-256. Avec un cosign trop ancien (< 2.6.2, ou < 3.0.4 en v3 ; seuils tirés de l'avis GHSA-whqx-f9j3-ch6m, par prudence, et du CHANGELOG de cosign, la 2.4.0 étant la première à lire le format de bundle), le script refuse (« cosign trop ancien »).
+
+### Fenêtre du cask Homebrew
+
+GoReleaser écrit le cask dans le tap **pendant que la release est encore un brouillon**. Les fichiers qu'il désigne répondent 404 au public tant que la release n'est pas publiée : un `brew upgrade --cask chiffremento` lancé dans cette fenêtre échoue (rien n'est cassé, on relance plus tard).
+
+La fenêtre dure de l'étape « Homebrew » jusqu'à l'étape « Publier la release » : l'attestation, le téléchargement et les trois vérifications, soit **quelques dizaines de secondes à 2 minutes** (estimation d'après les étapes ; à chronométrer sur la première vraie release et à noter ici). Une vérification qui échoue laisse la fenêtre ouverte : voir plus bas.
+
+Choix : on documente au lieu de déplacer l'écriture du cask après la publication. GoReleaser ne sait pas publier le cask seul après coup ; il faudrait `skip_upload` plus un second GoReleaser, soit plus de pièces à maintenir pour une fenêtre de quelques minutes.
 
 ### Si le workflow échoue
 
 - **Étape Homebrew en erreur d'authentification** : le secret `TAP_GITHUB_TOKEN` a sans doute expiré. C'est un jeton personnel GitHub avec un droit d'écriture sur `homebrew-tap`. Le régénérer, le mettre à jour (`gh secret set TAP_GITHUB_TOKEN`), puis relancer.
-- **Relancer sans toucher au tag** : depuis l'onglet Actions, « Run workflow » sur le tag concerné (`workflow_dispatch`). `replace_existing_artifacts: true` permet de republier des fichiers déjà envoyés.
+- **Relancer sans toucher au tag** : depuis l'onglet Actions, « Run workflow » sur le tag concerné (`workflow_dispatch`). `replace_existing_artifacts: true` permet de republier des fichiers déjà envoyés ; la signature (même nom de fichier) est remplacée, pas dupliquée.
+- **La vérification échoue (signature, empreinte ou attestation)** : la release reste en brouillon et le cask du tap pointe déjà vers elle (fenêtre ci-dessus). Les deux correctifs :
+  1. Lire l'étape en erreur dans le journal. Cause fréquente : réseau ou service Sigstore indisponible. On relance alors le workflow (« Run workflow ») : GoReleaser supprime l'ancien brouillon (`replace_existing_draft`) et en recrée un, il n'en reste donc qu'un. Si le journal dit « Plusieurs releases pour le tag », supprimer à la main le brouillon en trop (`gh release list`, puis `gh release delete vX.Y.Z --yes`) avant de relancer.
+  2. Si les fichiers eux-mêmes sont en cause (empreinte fausse, identité inattendue) : ne **pas** publier à la main. Supprimer le brouillon (`gh release delete vX.Y.Z --yes`, sans `--cleanup-tag`), corriger, relancer. La release n'a jamais été publique, mais la règle de l'étape 4 reste la même : sans accord, on ne le déplace pas.
+- **Relance sur une release déjà publiée** : GoReleaser garde l'état de la release (vérifié dans son code, v2.18.3). Elle reste publiée, ses fichiers sont remplacés. L'étape « Publier » ne fait alors rien. ⚠️ Si la vérification échoue pendant cette relance, la release **reste publique** (le workflow ne dépublie jamais, ce serait pire pour ceux qui l'ont déjà téléchargée) mais ses fichiers viennent d'être remplacés par des fichiers non vérifiés. Rejouer vite le workflow ; à défaut, repasser la release en brouillon à la main (`gh release edit vX.Y.Z --draft=true`) le temps d'enquêter.
+- **Release à blanc** : le workflow `.github/workflows/release-a-blanc.yml` rejoue compilation, archives, checksums et SBOM (`--snapshot`, sans signature ni publication) sur toute PR qui touche `.goreleaser.yaml`, `release.yml`, lui-même ou `install.sh`. Une faute de config se voit donc sur la PR, pas pendant la release. On peut aussi le lancer à la main (« Run workflow »).
 - Pour tester la configuration en local (GoReleaser n'est pas une dépendance du projet, à installer à part) :
 
   ```bash
@@ -204,11 +237,11 @@ Upgrade: `brew upgrade --cask chiffremento`.
 
 La description de la [v2.3.0](https://github.com/ValMtp3/chiffremento-go-cli/releases/tag/v2.3.0) sert d'exemple complet.
 
-## 7. Vérifier l'installation
+## 7. Vérifier signature, provenance et installation
 
 Une release n'est terminée qu'une fois installée comme le ferait un utilisateur.
 
-1. **Les fichiers de la release** : 6 archives, `checksums.txt` et `install.sh`.
+1. **Les fichiers de la release** : 6 archives, 6 SBOM (`.sbom.json`), `checksums.txt`, `checksums.txt.sigstore.json` et `install.sh`. La release est publiée (pas en brouillon).
 
    ```bash
    gh release view vX.Y.Z --json assets -q '.assets[].name'
@@ -230,11 +263,28 @@ Une release n'est terminée qu'une fois installée comme le ferait un utilisateu
 4. **Une archive Linux** : l'empreinte correspond à `checksums.txt`.
 
    ```bash
-   gh release download vX.Y.Z -p 'chiffremento_*_linux_amd64.tar.gz' -p checksums.txt
+   gh release download vX.Y.Z -p 'chiffremento_*_linux_amd64.tar.gz' -p checksums.txt -p checksums.txt.sigstore.json -p install.sh
    sha256sum --ignore-missing -c checksums.txt
    ```
 
-5. **Un aller-retour réel** avec le binaire installé : chiffrer puis déchiffrer un fichier, et ouvrir un `.chto` créé par la version précédente.
+5. **Signature et provenance**, à refaire à la main (le workflow l'a déjà fait, mais l'utilisateur doit pouvoir le refaire). Avec les fichiers de l'étape 4 :
+
+   ```bash
+   cosign verify-blob --bundle checksums.txt.sigstore.json \
+     --certificate-identity-regexp '^https://github.com/ValMtp3/chiffremento-go-cli/.github/workflows/release.yml@refs/tags/v' \
+     --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+     checksums.txt
+   sha256sum --ignore-missing -c checksums.txt   # macOS : shasum -a 256 --ignore-missing -c checksums.txt
+   gh attestation verify chiffremento_X.Y.Z_linux_amd64.tar.gz --repo ValMtp3/chiffremento-go-cli \
+     --signer-workflow ValMtp3/chiffremento-go-cli/.github/workflows/release.yml \
+     --source-ref refs/tags/vX.Y.Z
+   ```
+
+   À faire AVANT `bash install.sh` : le script est lui-même le vérificateur, on le contrôle d'abord.
+
+   Les trois commandes (cosign, sha256sum, gh) doivent réussir : cosign et gh finissent sur « Verified OK » (ou un message équivalent), sha256sum liste chaque fichier « OK » dont `install.sh`. Sinon, voir « La vérification échoue » dans la section « Si le workflow échoue ».
+
+6. **Un aller-retour réel** avec le binaire installé : chiffrer puis déchiffrer un fichier, et ouvrir un `.chto` créé par la version précédente.
 
 ## Aide-mémoire
 
@@ -243,7 +293,7 @@ Une release n'est terminée qu'une fois installée comme le ferait un utilisateu
 [ ] 2. main à jour, CI verte sur 3 systèmes, make lint + make test OK
 [ ] 3. README (FR + EN), ROADMAP, CLAUDE.md : PR mergée
 [ ] 4. git tag -a vX.Y.Z && git push origin vX.Y.Z
-[ ] 5. Workflow goreleaser vert, cask mis à jour
+[ ] 5. Workflow goreleaser vert (brouillon vérifié puis publié), cask mis à jour
 [ ] 6. Description de la release écrite (modèle ci-dessus)
-[ ] 7. brew upgrade + chiffremento -version + aller-retour OK
+[ ] 7. Signature + provenance vérifiées, brew upgrade + chiffremento -version + aller-retour OK
 ```

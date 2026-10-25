@@ -77,6 +77,9 @@ func TestV4RoundTrip(t *testing.T) {
 
 	for _, c := range cases {
 		t.Run(c.nom, func(t *testing.T) {
+			if c.opts.KDF != "" {
+				profilReel(t) // le cas « kdf fort » vérifie la dérivation à 512 Mio
+			}
 			chto := chiffreV4(t, contenu, c.opts)
 			out := filepath.Join(t.TempDir(), "clair.bin")
 			if err := Decrypt(chto, out, []byte(motDePasseV4), Options{}); err != nil {

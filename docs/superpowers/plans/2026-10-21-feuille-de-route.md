@@ -14,7 +14,7 @@ nouvelle demande.
 | 0 | Filet de sécurité : SPEC.md + tests | `test/filet-securite` | `2026-10-21-filet-de-securite.md` | fait (PR #21) |
 | 1 | zxcvbn allégé | `perf/zxcvbn-interne` | `2026-10-23-zxcvbn-interne.md` | fait (PR #22) |
 | 3 | Interface plein écran | `feat/plein-ecran` | `2026-10-24-plein-ecran.md` | en cours (branche prête, PR à ouvrir) |
-| 2 | Releases signées | `ci/releases-signees` | à écrire | à faire |
+| 2 | Releases signées | `ci/releases-signees` | `2026-10-25-releases-signees.md` | en cours (branche prête, PR à ouvrir après #23) |
 | 4 | Format v5 | `feat/format-v5` | à écrire | à faire |
 | 5 | Mode destinataire | `feat/destinataire` | à écrire (séance de questions d'abord) | à faire |
 | 6 | FORMAT.md + explication courte + ROADMAP.md | `docs/format` | à écrire | à faire |
@@ -47,6 +47,8 @@ L'étape 0 passe en premier : les parcours de l'interface (`tuiEncrypt`,
 - Mesurer : taille du binaire (`-s -w`), mémoire et temps au lancement.
 
 ### 2. Releases signées
+- Contenu de la v2.4.0, décidé le 2026-10-25 : zxcvbn + correctifs + plein
+  écran + releases signées + CI macOS + capture du README.
 - cosign keyless + SBOM + provenance.
 - `install.sh` : si cosign est absent, vérifie le SHA-256, avertit
   (« signature non vérifiée : installe cosign pour plus de sûreté ») et

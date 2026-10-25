@@ -100,3 +100,20 @@ jobs:
       - name: Benchmarks (fumée)
         if: matrix.os == 'ubuntu-latest'
         run: go test ./pkg -run '^$' -bench . -benchtime 1x
+
+  # Les tests de pkg sous -race écrivent leurs fichiers avec un Argon2 allégé
+  # (pkg/allege_race_test.go) pour tenir la limite du runner macOS. Ce job
+  # rejoue la suite SANS -race, donc avec les vrais profils (256 Mio à 1 Gio) :
+  # les dérivations lourdes sont exercées à chaque PR. Il n'écrit aucun profil
+  # de couverture : celui de scripts/couverture.sh vient du job « test ».
+  profils-lourds:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: stable
+
+      - name: Tests de pkg sans -race
+        run: go test -count=1 -timeout 15m ./pkg

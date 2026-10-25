@@ -792,7 +792,7 @@ func TestKDFLabel(t *testing.T) {
 		if !strings.Contains(label, "argon2id") {
 			t.Errorf("profil %s : étiquette KDF %q, attendu qu'elle nomme argon2id", p, label)
 		}
-		// Elle doit décrire les paramètres réellement écrits dans les fichiers.
+		// Elle doit décrire les paramètres réellement écrits dans les fichiers (hors allègement -race).
 		if want := p.argonParams().String(); !strings.Contains(label, want) {
 			t.Errorf("profil %s : étiquette KDF %q, attendu qu'elle contienne %q", p, label, want)
 		}

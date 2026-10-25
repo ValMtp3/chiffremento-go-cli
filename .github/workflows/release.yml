@@ -8,8 +8,10 @@ on:
   # avoir à supprimer puis repousser le tag.
   workflow_dispatch:
 
+# Droits par défaut : lecture seule. Le job de release demande lui-même ce qu'il
+# lui faut en plus (voir plus bas).
 permissions:
-  contents: write
+  contents: read
 
 # Les actions sont épinglées par SHA de commit, pas par tag : un tag se déplace,
 # un SHA non. Ce job détient un jeton qui écrit dans le tap Homebrew — une
@@ -22,25 +24,162 @@ jobs:
     # tag de version peut publier.
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
+    # `contents: write` crée la release ; `id-token: write` laisse le job
+    # demander à GitHub un jeton d'identité, que cosign échange contre un
+    # certificat Sigstore de courte durée (signature sans clé). Ces droits ne
+    # sont donnés qu'à ce job. `attestations: write` laisse
+    # actions/attest-build-provenance enregistrer l'attestation de provenance
+    # (qui a construit ces fichiers, depuis quel commit).
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
+          # GoReleaser reçoit son jeton par l'environnement, la vérification
+          # `gh` utilise GH_TOKEN : rien n'a besoin des identifiants git
+          # laissés par le checkout.
+          persist-credentials: false
 
       - name: Set up Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: stable
+          go-version-file: go.mod
+          # Pas de cache : le job détient des jetons d'écriture, un cache
+          # empoisonné par un autre workflow n'a pas à y entrer.
+          cache: false
+
+      # cosign signe checksums.txt ; syft produit les SBOM (voir
+      # .goreleaser.yaml). Installés ici seulement, jamais dans go.mod.
+      - name: Install cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+
+      - name: Install syft
+        uses: anchore/sbom-action/download-syft@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
 
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@a4f02ab5355a589de60d917a659ce617ed19b3de # v7.3.0
         with:
           distribution: goreleaser
-          # Figé sur la v2 majeure : une v3 pourrait changer le format de
-          # .goreleaser.yaml sans prévenir au milieu d'une release.
-          version: '~> v2'
+          # Version exacte : une release publie sur le tap Homebrew, un outil qui
+          # change sans prévenir n'a rien à y faire. Dependabot ne la monte
+          # pas ; montée à la main, en relisant le code comme pour v2.18.3.
+          version: 'v2.18.3'
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAP_GITHUB_TOKEN: ${{ secrets.TAP_GITHUB_TOKEN }}
+
+      # Provenance (SLSA) : GitHub atteste, par signature, que ces fichiers
+      # sortent de CE workflow sur CE tag. Vérifiable avec `gh attestation
+      # verify`. install.sh est attesté avec les archives. Les SBOM ne le sont
+      # pas : checksums.txt les couvre.
+      - name: Attester la provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: |
+            dist/*.tar.gz
+            dist/*.zip
+            dist/checksums.txt
+            install.sh
+
+      # À partir d'ici la release est encore un brouillon (`draft: true`) : on
+      # télécharge ce qui est VRAIMENT en ligne, pas les fichiers locaux, pour
+      # vérifier ce que les utilisateurs recevraient. Le brouillon est cherché
+      # dans la liste des releases : l'API « par tag » ne renvoie pas les
+      # brouillons.
+      #
+      # Relance sur un tag déjà publié : goreleaser garde l'état de la release
+      # (`data.Draft = release.Draft`, internal/client/github.go) ; elle reste
+      # publiée et seuls ses fichiers sont remplacés.
+      - name: Télécharger la release
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          ids="$(gh api --paginate "repos/${REPO}/releases" \
+            --jq '.[] | select(.tag_name == env.TAG) | .id')"
+          if [ -z "${ids}" ]; then
+            echo "::error::Aucune release trouvée pour le tag ${TAG}."
+            exit 1
+          fi
+          # Deux releases pour un même tag : on ne sait pas laquelle vérifier
+          # ni publier. On s'arrête plutôt que de deviner.
+          if [ "$(printf '%s\n' "${ids}" | wc -l)" -ne 1 ]; then
+            echo "::error::Plusieurs releases pour le tag ${TAG} (ids : $(printf '%s' "${ids}" | tr '\n' ' ')). Supprimer le brouillon en trop, puis relancer."
+            exit 1
+          fi
+          release_id="${ids}"
+          echo "id=${release_id}" >> "${GITHUB_OUTPUT}"
+
+          mkdir -p "${RUNNER_TEMP}/verif"
+          gh api "repos/${REPO}/releases/${release_id}/assets" --paginate \
+            --jq '.[] | "\(.id) \(.name)"' |
+          while read -r asset_id asset_name; do
+            gh api -H "Accept: application/octet-stream" \
+              "repos/${REPO}/releases/assets/${asset_id}" \
+              > "${RUNNER_TEMP}/verif/${asset_name}"
+          done
+          ls -l "${RUNNER_TEMP}/verif"
+          for required in checksums.txt checksums.txt.sigstore.json install.sh; do
+            if [ ! -s "${RUNNER_TEMP}/verif/${required}" ]; then
+              echo "::error::${required} est absent ou vide dans la release."
+              exit 1
+            fi
+          done
+
+      # Trois preuves, toutes obligatoires : (1) la signature de checksums.txt
+      # vient bien de CE workflow sur un tag `v*` ; (2) chaque fichier (archives,
+      # SBOM et install.sh) a l'empreinte écrite dans checksums.txt ; (3) chaque archive a une
+      # attestation de provenance. Le moindre échec arrête le job ICI, avant
+      # la publication : le brouillon reste brouillon.
+      #
+      # Cette identité est la référence unique : RELEASE.md et install.sh
+      # doivent utiliser exactement la même.
+      - name: Vérifier signature, empreintes et provenance
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+          IDENTITE: '^https://github.com/ValMtp3/chiffremento-go-cli/.github/workflows/release.yml@refs/tags/v'
+          EMETTEUR: https://token.actions.githubusercontent.com
+        run: |
+          set -euo pipefail
+          cd "${RUNNER_TEMP}/verif"
+          cosign verify-blob \
+            --bundle checksums.txt.sigstore.json \
+            --certificate-identity-regexp "${IDENTITE}" \
+            --certificate-oidc-issuer "${EMETTEUR}" \
+            checksums.txt
+          sha256sum -c checksums.txt
+          for archive in *.tar.gz *.zip; do
+            gh attestation verify "${archive}" --repo "${REPO}" \
+              --signer-workflow "${REPO}/.github/workflows/release.yml" \
+              --source-ref "refs/tags/${TAG}"
+          done
+
+      # Seulement si tout est vérifié. Sur une release déjà publiée (relance),
+      # il n'y a rien à publier : on ne touche à rien. À l'inverse, un échec
+      # plus haut ne dépublie jamais une release déjà publique : voir RELEASE.md.
+      # `make_latest=legacy` : GitHub choisit « dernière release » selon la
+      # version, sans jamais élire une pré-version.
+      - name: Publier la release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RELEASE_ID: ${{ steps.release.outputs.id }}
+        run: |
+          set -euo pipefail
+          is_draft="$(gh api "repos/${REPO}/releases/${RELEASE_ID}" --jq .draft)"
+          if [ "${is_draft}" != "true" ]; then
+            echo "Release déjà publiée : rien à publier."
+            exit 0
+          fi
+          gh api --method PATCH "repos/${REPO}/releases/${RELEASE_ID}" \
+            -F draft=false -f make_latest=legacy --jq '.html_url'

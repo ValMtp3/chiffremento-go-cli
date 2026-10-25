@@ -1,0 +1,63 @@
+name: release-a-blanc
+
+# Fichier séparé de ci.yml : `paths:` s'applique à tout le workflow, pas à un
+# job. Dans ci.yml, il aurait empêché les tests de tourner sur les PR qui ne
+# touchent pas la release.
+#
+# Pourquoi une « release à blanc » : la config de release n'est exécutée
+# qu'au moment d'un tag, donc une faute dans .goreleaser.yaml ou dans
+# release.yml se découvre en pleine release. Ici on rejoue tout le chemin
+# (compilation, archives, checksums, SBOM) sur la PR, sans rien publier.
+on:
+  pull_request:
+    paths:
+      - '.goreleaser.yaml'
+      - '.github/workflows/release.yml'
+      - '.github/workflows/release-a-blanc.yml'
+      - 'install.sh'
+  workflow_dispatch:
+
+# Lecture seule, aucun secret : une PR (même d'un fork) ne doit pouvoir ni
+# écrire dans le dépôt, ni signer, ni toucher au tap Homebrew.
+permissions:
+  contents: read
+
+jobs:
+  release-a-blanc:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # goreleaser lit l'historique git pour calculer la version.
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: stable
+
+      # Même syft que release.yml : sans lui, la génération des SBOM
+      # échouerait ici et la release à blanc ne vérifierait plus rien.
+      - name: Install syft
+        uses: anchore/sbom-action/download-syft@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
+
+      - name: Vérifier la config
+        uses: goreleaser/goreleaser-action@a4f02ab5355a589de60d917a659ce617ed19b3de # v7.3.0
+        with:
+          distribution: goreleaser
+          # Exact, montée à la main (voir release.yml) : Dependabot ne la monte pas.
+          version: 'v2.18.3'
+          args: check
+
+      # `sign` est sauté : la signature sans clé exige le jeton d'identité du
+      # workflow de release, qu'on ne donne pas à une PR. `publish` est sauté
+      # pour ne rien envoyer à GitHub ni au tap.
+      - name: Release à blanc
+        uses: goreleaser/goreleaser-action@a4f02ab5355a589de60d917a659ce617ed19b3de # v7.3.0
+        with:
+          distribution: goreleaser
+          # Exact, montée à la main (voir release.yml) : Dependabot ne la monte pas.
+          version: 'v2.18.3'
+          args: release --snapshot --clean --skip=publish,sign
