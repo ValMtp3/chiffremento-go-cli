@@ -114,7 +114,7 @@ GoReleaser fait alors, dans l'ordre :
 
 Ensuite, le workflow fait ce que GoReleaser ne fait pas :
 
-1. **Provenance** : `actions/attest-build-provenance` atteste que les archives et `checksums.txt` sortent de ce workflow, sur ce tag.
+1. **Provenance** : `actions/attest-build-provenance` atteste que les archives, `checksums.txt` et `install.sh` sortent de ce workflow, sur ce tag.
 2. **Vérification du brouillon** : il retélécharge les fichiers du brouillon, puis vérifie la signature de `checksums.txt` (identité de référence ci-dessous), les empreintes des archives, des SBOM et d'`install.sh` (`sha256sum -c`, tous dans `checksums.txt` donc couverts par la signature) et l'attestation de chaque archive (`gh attestation verify`).
 3. **Publication** : seulement si tout est bon, la release passe de brouillon à publiée. Au moindre échec, le job devient rouge et la release reste un brouillon, invisible du public.
 
@@ -129,7 +129,7 @@ C'est ce qui prouve qu'une signature vient de ce dépôt et de ce workflow, pas 
 | Identité (expression régulière) | `^https://github.com/ValMtp3/chiffremento-go-cli/.github/workflows/release.yml@refs/tags/v` |
 | Émetteur | `https://token.actions.githubusercontent.com` |
 
-**Règle d'`install.sh`** : avec cosign présent, `install.sh` vérifie cette signature et **refuse toute installation si `checksums.txt.sigstore.json` est absent**, quelle que soit la version (y compris une pré-version comme `2.4.0-rc1`) : sans signature, `checksums.txt` ne prouve rien, et le nom d'une archive ne dit rien de fiable sur son âge. Pour une release antérieure à la 2.4.0 (non signée), on utilise l'`install.sh` livré avec elle. Sans cosign, le script avertit et ne vérifie que l'empreinte SHA-256.
+**Règle d'`install.sh`** : avec cosign présent, `install.sh` vérifie cette signature et **refuse toute installation si `checksums.txt.sigstore.json` est absent**, quelle que soit la version (y compris une pré-version comme `2.4.0-rc1`) : sans signature, `checksums.txt` ne prouve rien, et le nom d'une archive ne dit rien de fiable sur son âge. Pour une release antérieure à la 2.4.0 (non signée), on utilise l'`install.sh` livré avec elle. Sans cosign, le script avertit et ne vérifie que l'empreinte SHA-256. Avec un cosign trop ancien (< 2.6.2, ou < 3.0.4 en v3 ; seuils tirés de l'avis GHSA-whqx-f9j3-ch6m et du CHANGELOG de cosign, la 2.4.0 étant la première à lire le format de bundle), le script refuse (« cosign trop ancien »).
 
 ### Fenêtre du cask Homebrew
 
@@ -274,9 +274,13 @@ Une release n'est terminée qu'une fois installée comme le ferait un utilisateu
      --certificate-identity-regexp '^https://github.com/ValMtp3/chiffremento-go-cli/.github/workflows/release.yml@refs/tags/v' \
      --certificate-oidc-issuer https://token.actions.githubusercontent.com \
      checksums.txt
+   sha256sum --ignore-missing -c checksums.txt   # macOS : shasum -a 256 --ignore-missing -c checksums.txt
    gh attestation verify chiffremento_X.Y.Z_linux_amd64.tar.gz --repo ValMtp3/chiffremento-go-cli \
-     --signer-workflow ValMtp3/chiffremento-go-cli/.github/workflows/release.yml
+     --signer-workflow ValMtp3/chiffremento-go-cli/.github/workflows/release.yml \
+     --source-ref refs/tags/vX.Y.Z
    ```
+
+   À faire AVANT `bash install.sh` : le script est lui-même le vérificateur, on le contrôle d'abord.
 
    Les deux doivent finir sur « Verified OK » (ou un message équivalent). Sinon, voir « La vérification échoue » à l'étape 5.
 
