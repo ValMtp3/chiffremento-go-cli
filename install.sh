@@ -4,7 +4,8 @@ set -e
 
 BINARY_NAME="chiffremento"
 # CHIFFREMENTO_INSTALL_DIR : dossier d'installation, /usr/local/bin par défaut.
-# Sert surtout aux tests, pour ne rien écrire dans le système.
+# Réservé aux tests et aux installations manuelles : ce n'est pas une
+# interface stable, elle peut changer sans prévenir.
 INSTALL_DIR="${CHIFFREMENTO_INSTALL_DIR:-/usr/local/bin}"
 
 # Identité attendue de la signature : le workflow release.yml de ce dépôt, sur
@@ -13,7 +14,7 @@ SIGNATURE_IDENTITE='^https://github.com/ValMtp3/chiffremento-go-cli/.github/work
 SIGNATURE_EMETTEUR='https://token.actions.githubusercontent.com'
 WORKDIR=""
 
-cleanup() { [ -n "$WORKDIR" ] && rm -rf "$WORKDIR"; }
+cleanup() { [ -z "$WORKDIR" ] || rm -rf "$WORKDIR"; }
 trap cleanup EXIT
 
 # 1. Détection du système et de l'architecture
@@ -59,6 +60,31 @@ done
 # lecture des empreintes : un checksums.txt falsifié rendrait la vérification
 # SHA-256 inutile. Une vérification qui échoue (signature fausse ou réseau
 # absent) refuse l'installation : jamais de repli silencieux.
+# Versions de cosign sachant lire le bundle .sigstore.json (format Sigstore
+# récent, produit par la CI avec cosign v3) : le format est lu depuis la 2.4.0,
+# mais les versions <= 2.6.1 et <= 3.0.3 acceptent n'importe quelle entrée
+# Rekor valide (GHSA-whqx-f9j3-ch6m), ce qui affaiblit la vérification. On exige
+# donc au moins 2.6.2 (v2) ou 3.0.4 (v3).
+COSIGN_VERSION_MINIMALE="2.6.2 (ou 3.0.4 en v3)"
+
+# cosign_assez_recent — succès si cosign est assez récent, ou si sa version est
+# illisible (cosign verify-blob tranche alors, il échoue si le bundle est
+# trop neuf pour lui).
+cosign_assez_recent() {
+    local version major minor patch
+    version="$(cosign version 2>/dev/null | sed -n 's/^GitVersion:[[:space:]]*v\{0,1\}\([0-9][0-9]*\)\.\([0-9][0-9]*\)\.\([0-9][0-9]*\).*/\1 \2 \3/p' | head -n1)"
+    [ -z "$version" ] && return 0
+    set -- $version
+    major="$1"; minor="$2"; patch="$3"
+    [ "$major" -gt 3 ] && return 0
+    if [ "$major" -eq 3 ]; then
+        [ "$minor" -gt 0 ] || [ "$patch" -ge 4 ]
+        return
+    fi
+    [ "$major" -eq 2 ] || return 1
+    [ "$minor" -gt 6 ] || { [ "$minor" -eq 6 ] && [ "$patch" -ge 2 ]; }
+}
+
 verify_signature() {
     local bundle
     [ -z "$CHECKSUMS" ] && return 0
@@ -80,12 +106,18 @@ verify_signature() {
         exit 1
     fi
 
+    if ! cosign_assez_recent; then
+        echo "❌ cosign trop ancien pour lire cette signature : version ≥ $COSIGN_VERSION_MINIMALE requise, installation refusée."
+        echo "   Mets cosign à jour (https://docs.sigstore.dev/cosign/system_config/installation/), puis relance."
+        exit 1
+    fi
+
     if ! cosign verify-blob --bundle "$bundle" \
         --certificate-identity-regexp "$SIGNATURE_IDENTITE" \
         --certificate-oidc-issuer "$SIGNATURE_EMETTEUR" \
         "$CHECKSUMS"; then
         echo "❌ Signature de checksums.txt non vérifiée : installation refusée."
-        echo "   Soit la signature est fausse, soit cosign n'a pas pu la vérifier (réseau absent ?)."
+        echo "   Soit la signature est fausse, soit cosign n'a pas pu la vérifier (réseau absent ? cosign trop ancien : version ≥ $COSIGN_VERSION_MINIMALE requise ?)."
         echo "   Rien n'est installé. Vérifie la connexion, retélécharge les fichiers, puis relance."
         exit 1
     fi

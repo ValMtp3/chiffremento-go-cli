@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
 	"testing"
@@ -33,7 +34,15 @@ type bacInstall struct {
 // et le message demandés.
 func ecrireFauxCosign(t *testing.T, bin, appels string, code int, message string) {
 	t.Helper()
-	script := fmt.Sprintf("#!/bin/sh\nfor a in \"$@\"; do printf '%%s\\n' \"$a\" >> %q; done\n", appels)
+	ecrireFauxCosignVersion(t, bin, appels, "v3.0.4", code, message)
+}
+
+// Même faux cosign, qui annonce la version donnée à `cosign version` (appel
+// non consigné : appels ne garde que la vérification).
+func ecrireFauxCosignVersion(t *testing.T, bin, appels, version string, code int, message string) {
+	t.Helper()
+	script := fmt.Sprintf("#!/bin/sh\nif [ \"$1\" = version ]; then echo 'GitVersion:    %s'; exit 0; fi\n", version)
+	script += fmt.Sprintf("for a in \"$@\"; do printf '%%s\\n' \"$a\" >> %q; done\n", appels)
 	if message != "" {
 		script += fmt.Sprintf("echo %q >&2\n", message)
 	}
@@ -287,5 +296,109 @@ func TestInstallEmpreinteFausseRefuseeMemeSigne(t *testing.T) {
 	sortie, err := b.lancer(t)
 	if err == nil || b.installe() {
 		t.Fatalf("refus attendu\n%s", sortie)
+	}
+}
+
+// Le script ne doit pas sortir en erreur après une installation réussie : le
+// binaire nu n'a pas de dossier temporaire à nettoyer.
+func TestInstallBinaireNuCodeSortieZero(t *testing.T) {
+	b := preparerInstall(t, true)
+	ecrireFauxCosign(t, b.bin, b.appels, 0, "")
+	if err := os.Remove(filepath.Join(b.dossier, fmt.Sprintf("chiffremento_1.0.0_%s_%s.tar.gz", runtime.GOOS, runtime.GOARCH))); err != nil {
+		t.Fatal(err)
+	}
+	nu := []byte("#!/bin/sh\necho nu\n")
+	ecrire(t, filepath.Join(b.dossier, fmt.Sprintf("chiffremento-%s-%s", runtime.GOOS, runtime.GOARCH)), nu)
+	ecrire(t, filepath.Join(b.dossier, "checksums.txt"),
+		[]byte(fmt.Sprintf("%x  chiffremento-%s-%s\n", sha256.Sum256(nu), runtime.GOOS, runtime.GOARCH)))
+	sortie, err := b.lancer(t)
+	if err != nil {
+		t.Fatalf("code de sortie 0 attendu après une installation réussie : %v\n%s", err, sortie)
+	}
+	if !b.installe() {
+		t.Fatalf("binaire absent\n%s", sortie)
+	}
+}
+
+// cosign trop ancien pour lire le bundle : refus clair, sans lancer la
+// vérification. Seuils : 2.6.2 (v2) et 3.0.4 (v3), voir install.sh.
+func TestInstallCosignVersionMinimale(t *testing.T) {
+	cas := []struct {
+		version string
+		accepte bool
+	}{
+		{"v2.4.0", false},
+		{"v2.5.0", false},
+		{"v2.6.1", false},
+		{"v2.6.2", true},
+		{"v2.10.0", true},
+		{"v3.0.3", false},
+		{"v3.0.4", true},
+		{"v3.1.0", true},
+		{"devel", true}, // illisible : on laisse cosign trancher
+	}
+	for _, c := range cas {
+		t.Run(c.version, func(t *testing.T) {
+			b := preparerInstall(t, true)
+			ecrireFauxCosignVersion(t, b.bin, b.appels, c.version, 0, "")
+			sortie, err := b.lancer(t)
+			if c.accepte {
+				if err != nil || !b.installe() {
+					t.Fatalf("installation attendue : %v\n%s", err, sortie)
+				}
+				return
+			}
+			if err == nil || b.installe() {
+				t.Fatalf("refus attendu\n%s", sortie)
+			}
+			for _, voulu := range []string{"cosign trop ancien", "2.6.2", "3.0.4", "installation refusée"} {
+				if !strings.Contains(sortie, voulu) {
+					t.Errorf("%q absent du message :\n%s", voulu, sortie)
+				}
+			}
+			if _, err := os.Stat(b.appels); err == nil {
+				t.Error("la vérification ne doit pas être lancée avec un cosign trop ancien")
+			}
+		})
+	}
+}
+
+// L'identité attendue est écrite à trois endroits (release.yml, install.sh,
+// RELEASE.md) : ils doivent rester identiques, sinon une release signée par la
+// CI serait refusée par install.sh, ou pire, l'inverse.
+func TestInstallIdentiteIdentiqueDansTousLesFichiers(t *testing.T) {
+	lire := func(chemin string) string {
+		t.Helper()
+		brut, err := os.ReadFile(chemin)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(brut)
+	}
+	extraire := func(chemin, motif string) string {
+		t.Helper()
+		m := regexp.MustCompile(motif).FindStringSubmatch(lire(chemin))
+		if m == nil {
+			t.Fatalf("%s : motif %q introuvable", chemin, motif)
+		}
+		return m[1]
+	}
+	release := ".github/workflows/release.yml"
+	identite := extraire(release, `IDENTITE: '([^']+)'`)
+	emetteur := extraire(release, `EMETTEUR: (\S+)`)
+	if identite != identiteAttendue || emetteur != emetteurAttendu {
+		t.Errorf("release.yml : %q / %q, attendu %q / %q", identite, emetteur, identiteAttendue, emetteurAttendu)
+	}
+	if got := extraire("install.sh", `SIGNATURE_IDENTITE='([^']+)'`); got != identite {
+		t.Errorf("install.sh : identité %q, release.yml : %q", got, identite)
+	}
+	if got := extraire("install.sh", `SIGNATURE_EMETTEUR='([^']+)'`); got != emetteur {
+		t.Errorf("install.sh : émetteur %q, release.yml : %q", got, emetteur)
+	}
+	releaseMd := lire("RELEASE.md")
+	for _, voulu := range []string{identite, emetteur} {
+		if !strings.Contains(releaseMd, voulu) {
+			t.Errorf("RELEASE.md ne contient pas %q", voulu)
+		}
 	}
 }
