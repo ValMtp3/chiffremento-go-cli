@@ -47,8 +47,10 @@ func (p KDFProfile) argonParams() argonParams {
 }
 
 // argonAlegeDesTests vaut vrai quand les tests de la CI sous -race demandent
-// des paramètres Argon2 allégés (voir allege_race_test.go). Il n'est jamais
-// levé en production : seul un fichier _test.go peut le faire.
+// des paramètres Argon2 allégés (voir allege_race_test.go). Seul un fichier
+// _test.go le lève, et argonPourEcriture ne le lit que si raceEnabled : hors
+// -race, la branche est éliminée à la compilation et n'existe pas dans le
+// binaire livré.
 var argonAlegeDesTests atomic.Bool
 
 // argonAlege : paramètres du plus léger des profils d'essai, 8 Mio et une
@@ -60,7 +62,7 @@ func argonAlege() argonParams {
 // argonPourEcriture donne les paramètres inscrits dans le header d'un nouveau
 // fichier : ceux du profil, sauf allègement demandé par les tests.
 func (p KDFProfile) argonPourEcriture() argonParams {
-	if argonAlegeDesTests.Load() {
+	if raceEnabled && argonAlegeDesTests.Load() {
 		return argonAlege()
 	}
 	return p.argonParams()

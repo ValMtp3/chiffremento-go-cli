@@ -23,7 +23,9 @@ func TestMain(m *testing.M) {
 // profilReel rend aux nouveaux fichiers les paramètres réels de leur profil
 // pour la durée du test. À appeler en tête d'un test qui vérifie ce que le
 // profil écrit ou qui doit réellement dériver à cette taille. Ne pas l'utiliser
-// avec t.Parallel : le réglage est partagé par tout le paquet.
+// avec t.Parallel : le réglage est partagé par tout le paquet. Aucune garde
+// peu coûteuse n'existe (Go ne dit pas à un helper si son test est parallèle) ;
+// aucun test de pkg n'appelle t.Parallel aujourd'hui.
 func profilReel(t *testing.T) {
 	t.Helper()
 	avant := argonAlegeDesTests.Swap(false)
