@@ -235,7 +235,8 @@ func TestCodeSortieApresEchec(t *testing.T) {
 	st.ecranSuivant()
 	taper(t, st.h, abime)
 	st.toucher(touche("enter"))
-	st.ecranSuivant() // lecture de l'en-tête : l'écran se ferme de lui-même
+	// La lecture de l'en-tête, instantanée, n'affiche aucun écran
+	// (seuilEcranEnCours) : l'écran suivant est celui de l'échec.
 	if !st.ecranSuivant() {
 		t.Fatal("aucun écran après l'échec")
 	}

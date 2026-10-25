@@ -201,9 +201,11 @@ ne dépasse jamais l'avancement réel. En plein écran, il s'affiche dans le cad
 de l'écran hôte : toutes ses lignes ont la largeur du cadre, qu'elles suivent
 au redimensionnement, sans couleur ni emoji. Échap n'abandonne pas une écriture
 déjà lancée ; l'aide peut s'ouvrir par-dessus sans arrêter l'opération.
-Ctrl+C l'interrompt.
+Ctrl+C l'interrompt. Un travail sans progression (lecture de l'en-tête,
+changement de mot de passe) n'affiche son écran « en cours » qu'au-delà de
+100 ms : une lecture d'en-tête ne fait pas clignoter le cadre.
 
-Tests : TestAnimationVisible, TestAnimationNeDepassePasLeReel, TestDureeEcranReelle, TestRenduLargeurConstante, TestProgressionSuitLeCadre, TestProgressionDansLeCadreDeLHote, TestProgressionAutonomeLargeurFixe, TestRenduSansCouleur, TestCtrlCInterromptLaProgression, TestEchapPendantEcritureIgnore, TestAidePendantProgression, TestRunJobDansLHote, TestRunJobCtrlCDansLHote
+Tests : TestEnCoursRapideSansEcran, TestEnCoursPendantLeTravail, TestEnCoursCtrlCAttendLeTravail, TestAnimationVisible, TestAnimationNeDepassePasLeReel, TestDureeEcranReelle, TestRenduLargeurConstante, TestProgressionSuitLeCadre, TestProgressionDansLeCadreDeLHote, TestProgressionAutonomeLargeurFixe, TestRenduSansCouleur, TestCtrlCInterromptLaProgression, TestEchapPendantEcritureIgnore, TestAidePendantProgression, TestRunJobDansLHote, TestRunJobCtrlCDansLHote
 
 ### R-TUI-09 — Écrasement d'un dossier jamais proposé
 L'interface peut demander confirmation avant d'écraser un fichier, jamais un

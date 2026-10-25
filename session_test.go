@@ -475,8 +475,7 @@ func TestPasswdNeProposePasLaPhrase(t *testing.T) {
 
 	issue := make(chan error, 1)
 	go func() { issue <- tuiPasswd(chiffre) }()
-	demandeRecue(t, h, boite) // lecture de l'en-tête, qui se ferme d'elle-même
-	demandeRecue(t, h, boite)
+	demandeRecue(t, h, boite) // la lecture de l'en-tête, instantanée, n'a pas d'écran
 	vue := h.View()
 	if strings.Contains(vue, titreUtiliser) {
 		t.Errorf("la phrase en mémoire est proposée pour changer de mot de passe :\n%s", vue)

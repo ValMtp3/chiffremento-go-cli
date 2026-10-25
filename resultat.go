@@ -4,6 +4,7 @@ import (
 	"errors"
 	"io/fs"
 	"strings"
+	"time"
 
 	"chiffremento-cli/pkg"
 
@@ -173,6 +174,11 @@ func (e *ecranEnCours) Touches() string                     { return "" }
 // moitié réécrit serait pire qu'une attente.
 func (e *ecranEnCours) gardeEchap() bool { return true }
 
+// seuilEcranEnCours : en deçà, un travail se fait sans écran « en cours ».
+// Une image dure 33 ms à 30 images/s ; 100 ms, c'est en dessous de ce que
+// l'œil attend d'une réponse, et au-dessus d'une lecture d'en-tête.
+const seuilEcranEnCours = 100 * time.Millisecond
+
 // enCours mène travail en montrant texte dans le cadre. Hors plein écran,
 // elle se contente de le mener.
 //
@@ -197,6 +203,16 @@ func enCours(titre, texte string, travail func() error) error {
 		defer close(fini)
 		err = travail()
 	}()
+	// Un travail bref (la lecture d'un en-tête) finit avant le seuil : aucun
+	// écran, il ne ferait que clignoter une image. Le minuteur n'existe que
+	// pendant le travail.
+	seuil := time.NewTimer(seuilEcranEnCours)
+	defer seuil.Stop()
+	select {
+	case <-fini:
+		return err
+	case <-seuil.C:
+	}
 	_, errEcran := h.afficher(&ecranEnCours{titre: titre, texte: texte, fini: fini})
 	<-fini
 	if errEcran != nil {

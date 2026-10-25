@@ -221,6 +221,22 @@ func TestEnCoursPendantLeTravail(t *testing.T) {
 	}
 }
 
+// TestEnCoursRapideSansEcran : un travail plus court que seuilEcranEnCours
+// (la lecture d'un en-tête) n'affiche rien — l'écran « en cours » ne ferait
+// que clignoter une image.
+func TestEnCoursRapideSansEcran(t *testing.T) {
+	_, boite := hoteSynchrone(t, 100, 30)
+	attendue := errors.New("en-tête illisible")
+	if err := enCours("lecture", "lecture de l'en-tête…", func() error { return attendue }); !errors.Is(err, attendue) {
+		t.Fatalf("enCours = %v, attendu %v", err, attendue)
+	}
+	select {
+	case msg := <-boite:
+		t.Fatalf("un écran a été demandé pour un travail instantané : %T", msg)
+	default:
+	}
+}
+
 // TestEnCoursCtrlCAttendLeTravail : Ctrl+C ferme l'écran, mais enCours ne
 // rend la main qu'à la fin du travail — l'appelant effacerait sinon un mot de
 // passe encore lu.
