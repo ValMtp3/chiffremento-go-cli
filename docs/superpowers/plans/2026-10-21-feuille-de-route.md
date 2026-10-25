@@ -12,12 +12,15 @@ nouvelle demande.
 | # | Étape | Branche | Plan détaillé | État |
 |---|---|---|---|---|
 | 0 | Filet de sécurité : SPEC.md + tests | `test/filet-securite` | `2026-10-21-filet-de-securite.md` | fait (PR #21) |
-| 1 | zxcvbn allégé | `perf/zxcvbn-interne` | `2026-10-23-zxcvbn-interne.md` | en cours (branche prête, PR à ouvrir) |
+| 1 | zxcvbn allégé | `perf/zxcvbn-interne` | `2026-10-23-zxcvbn-interne.md` | fait (PR #22) |
+| 3 | Interface plein écran | `feat/plein-ecran` | `2026-10-24-plein-ecran.md` | en cours (branche prête, PR à ouvrir) |
 | 2 | Releases signées | `ci/releases-signees` | à écrire | à faire |
-| 3 | Interface plein écran | `feat/plein-ecran` | à écrire | à faire |
 | 4 | Format v5 | `feat/format-v5` | à écrire | à faire |
 | 5 | Mode destinataire | `feat/destinataire` | à écrire (séance de questions d'abord) | à faire |
 | 6 | FORMAT.md + explication courte + ROADMAP.md | `docs/format` | à écrire | à faire |
+
+Décision du 2026-10-24 : l'étape 3 passe avant l'étape 2 et avant la
+release v2.4.0.
 
 L'étape 0 passe en premier : les parcours de l'interface (`tuiEncrypt`,
 `tuiDecrypt`, `tuiVerify`, `runTUI`, `run`, la suppression) sont couverts à

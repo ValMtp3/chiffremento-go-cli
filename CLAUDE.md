@@ -37,8 +37,15 @@ pas terminée.
   RSS, qui compte encore les pages rendues.
 - Archivage et extraction : un seul tampon de copie par opération, jamais un
   par fichier (`io.Copy` en alloue un de 32 Kio à chaque appel).
-- Interface : 30 images/s (`imagesParSeconde`, `navigation.go`) : ~110 à 150
-  réveils par seconde au repos au lieu de ~250 ; premier écran en ~62 ms.
+- Interface : 30 images/s (`imagesParSeconde`, `navigation.go`) : ~120 à 170
+  changements de contexte par seconde au repos au lieu de ~250 (menu ~123,
+  formulaire ~165, plein écran et ancienne interface pareils à 3 % près ; les
+  « idle wakeups » de `top` fluctuent, eux, de 14 à 57/s d'une mesure à
+  l'autre) ; premier écran en ~39 ms, plein écran comme avant.
+- Session plein écran (`hote.go`) : « chiffrer un fichier puis quitter » garde
+  le même pic mémoire qu'avant (~290 Mo, le bloc d'Argon2). La phrase gardée
+  pour la session pèse quelques dizaines d'octets ; son minuteur n'existe que
+  tant qu'elle est gardée.
 - zxcvbn (copie interne, `internal/zxcvbn`) : listes zstd embarquées, chargées
   au premier usage. Coût au lancement ≈ 0 : `-version` ~4,2 Mo de pic au lieu
   de ~15,5 Mo, `-mode genpass` ~4,9 Mo au lieu de ~15,9 Mo. Premier
@@ -49,7 +56,8 @@ pas terminée.
   prénoms et noms français sont compris dans ces chiffres.
 - Indicateur de force, coût par frappe (`BenchmarkFrappe`) : 12 caractères
   ~76 µs (~106 µs accentués), 64 caractères ~2,1 ms (~3,5 ms accentués).
-- Binaire : ~6,2 Mo (`-s -w`), 6 160 850 o (avant : 8 348 898 o).
+- Binaire : ~6,2 Mo (`-s -w`), 6 160 898 o (avant zxcvbn interne : 8 348 898 o) ;
+  6 295 682 o avec le plein écran (+132 Kio).
 - L'écran de progression dure au moins 4 s : c'est un choix esthétique, pas un
   coût de calcul.
 - La concurrence de l'encodeur zstd est voulue : la brider à 1 coûte ~22 % de
