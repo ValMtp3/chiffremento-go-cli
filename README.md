@@ -135,9 +135,30 @@ Sans aucun argument, dans un terminal :
 chiffremento
 ```
 
-Elle demande l'opération, puis comment désigner la cible : **saisir un chemin** (ou le glisser-déposer), ou **parcourir les fichiers**. Dans l'explorateur, `↑↓` se déplacent, `→` entre dans un dossier et `entrée` choisit.
+Elle demande l'opération, puis comment désigner la cible : **saisir un chemin** (ou le glisser-déposer), ou **parcourir les fichiers**. Dans l'explorateur, `↑↓` se déplacent, `→` entre dans un dossier, `échap` remonte d'un dossier et `entrée` choisit.
 
 Les décisions suivent la même grammaire : `↑↓` parcourent les réponses, `→` (ou `entrée`) valide, `←` revient à la décision précédente — y compris d'un écran à l'autre, en gardant les réponses déjà données. Dans un champ texte et dans l'explorateur, où `←` sert déjà, le retour se fait avec `shift+tab`.
+
+Elle occupe tout le terminal, dans un écran à part que la sortie rend tel qu'il était : une barre en haut (`chiffremento v2.3.0 · chiffrer › mot de passe`, et `● phrase en mémoire` à droite quand une phrase est gardée), le cadre au centre (de 52 à 80 colonnes selon la fenêtre), les touches de l'écran courant en bas. Sur un terminal trop petit, les barres disparaissent et le cadre prend toute la place. Le menu revient après chaque opération : une carte donne le résultat, un écran d'erreur donne la cause et quoi faire, `entrée` revient au menu. On quitte par la ligne « quitter » du menu ou par `q`. Les résumés complets de la session sont alors imprimés dans le terminal.
+
+| Touche | Rôle |
+|---|---|
+| `↑ ↓` | parcourir les réponses |
+| `→` ou `⏎` | valider |
+| `←` | revenir à la décision précédente |
+| `shift+tab` | revenir, dans un champ texte ou l'explorateur |
+| `échap` | abandonner l'opération, retour au menu |
+| | dans l'explorateur : remonter d'un dossier |
+| `q` | quitter, depuis le menu |
+| `o` | oublier la phrase en mémoire, hors d'un champ texte |
+| `?` | ouvrir ou fermer cette aide |
+| `ctrl+c` | quitter tout de suite |
+
+Code de sortie de la session : `0` si tout a réussi, `1` si au moins une opération a échoué, `130` sur Ctrl+C, `129` si la fenêtre du terminal est fermée. Avant son lancement, une opération s'abandonne sans rien écrire ; une écriture déjà lancée n'est pas coupée par `échap`.
+
+Après une opération réussie avec une phrase saisie ou générée, elle demande s'il faut **garder la phrase pour la session** (« ne pas la garder » par défaut). Si oui, elle est proposée à la saisie suivante : `⏎` l'utilise, ou on la retape. Elle est oubliée, octets mis à zéro, après 5 min sans touche (sur l'heure murale comme sur l'horloge monotone, donc aussi après une mise en veille), par `o`, et à la sortie. Seule la phrase est gardée, jamais une clé dérivée : Argon2 tourne à chaque opération. La mémoire n'est pas verrouillée : comme toute phrase tapée, elle peut être écrite dans le fichier d'échange du système.
+
+Avec `-mode …`, ou quand l'entrée ou la sortie n'est pas un terminal, rien ne change : pas d'écran à part, la sortie reste simple.
 
 Au chiffrement, une fois le nom et la date conservés à l'intérieur du chiffré, elle propose de **brouiller ceux du fichier produit** : sortie sous un nom tiré au hasard — `3fb8db8ee5db3891.chto` — et datée du 1er janvier 2000. Le déchiffrement les restitue tous les deux. La date de *création*, elle, reste celle de l'écriture : aucun appel en espace utilisateur ne la change, le brouillage cache la date au regard ordinaire, pas à l'examen du disque.
 
@@ -473,9 +494,30 @@ With no arguments, in a terminal:
 chiffremento
 ```
 
-It asks for the operation, then how to point at the target: **type a path** (or drag and drop it), or **browse files**. In the browser, `↑↓` move, `→` enters a folder and `enter` selects.
+It asks for the operation, then how to point at the target: **type a path** (or drag and drop it), or **browse files**. In the browser, `↑↓` move, `→` enters a folder, `esc` goes up a folder and `enter` selects.
 
 Every decision follows the same grammar: `↑↓` move through the answers, `→` (or `enter`) confirms, `←` goes back to the previous decision — across screens too, keeping the answers already given. In a text field and in the browser, where `←` already has a job, going back is `shift+tab`.
+
+It takes over the whole terminal, in a separate screen that the exit restores as it was: a bar at the top (`chiffremento v2.3.0 · chiffrer › mot de passe`, and `● phrase en mémoire` on the right while a passphrase is kept), the frame in the middle (52 to 80 columns depending on the window), the keys of the current screen at the bottom. On a terminal that is too small, the bars disappear and the frame takes all the room. The menu comes back after every operation: a card shows the result, an error screen shows the cause and what to do, `enter` returns to the menu. You quit with the "quitter" line of the menu or with `q`. The full summaries of the session are then printed in the terminal.
+
+| Key | Role |
+|---|---|
+| `↑ ↓` | move through the answers |
+| `→` or `⏎` | confirm |
+| `←` | back to the previous decision |
+| `shift+tab` | back, in a text field or the browser |
+| `esc` | abandon the operation, back to the menu |
+| | in the browser: go up a folder |
+| `q` | quit, from the menu |
+| `o` | forget the passphrase kept in memory, outside a text field |
+| `?` | open or close this help |
+| `ctrl+c` | quit right away |
+
+Exit code of the session: `0` if everything succeeded, `1` if at least one operation failed, `130` on Ctrl+C, `129` if the terminal window is closed. Before it starts, an operation is abandoned without writing anything; `esc` does not cut a write that is already running.
+
+After a successful operation with a typed or generated passphrase, it asks whether to **keep the passphrase for the session** ("ne pas la garder" by default). If yes, it is offered at the next prompt: `⏎` uses it, or you retype it. It is forgotten, bytes zeroed, after 5 minutes without a key (on the wall clock and on the monotonic clock, so also after a sleep), by `o`, and on exit. Only the passphrase is kept, never a derived key: Argon2 runs on every operation. Memory is not locked: like any typed passphrase, it can be written to the system's swap file.
+
+With `-mode …`, or when input or output is not a terminal, nothing changes: no separate screen, the output stays plain.
 
 When encrypting, once the original name and date are kept inside the ciphertext, it offers to **scramble those of the file it writes**: a randomly drawn name — `3fb8db8ee5db3891.chto` — dated 1 January 2000. Decryption restores both. The *creation* date stays that of the actual write: no userspace call changes it, so the scrambling hides the date from an ordinary look, not from an inspection of the filesystem.
 

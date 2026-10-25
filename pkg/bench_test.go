@@ -1,12 +1,15 @@
 package pkg
 
 import (
+	"archive/tar"
 	"bytes"
+	"fmt"
 	"io"
 	"math/rand"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 // Benchmarks de débit.
@@ -228,5 +231,49 @@ func BenchmarkDeriveKeys(b *testing.B) {
 			b.Fatal(err)
 		}
 		keys.wipe()
+	}
+}
+
+// tarDePetitsFichiers construit en mémoire une archive de n petits fichiers,
+// répartis dans quelques dossiers.
+func tarDePetitsFichiers(tb testing.TB, n int) []byte {
+	tb.Helper()
+	var tampon bytes.Buffer
+	tw := tar.NewWriter(&tampon)
+	contenu := []byte("petit fichier\n")
+	for i := 0; i < n; i++ {
+		hdr := &tar.Header{
+			Name:     fmt.Sprintf("d%02d/f%05d.txt", i%20, i),
+			Typeflag: tar.TypeReg,
+			Mode:     0600,
+			Size:     int64(len(contenu)),
+			ModTime:  time.Unix(1_700_000_000, 0),
+		}
+		if err := tw.WriteHeader(hdr); err != nil {
+			tb.Fatal(err)
+		}
+		if _, err := tw.Write(contenu); err != nil {
+			tb.Fatal(err)
+		}
+	}
+	if err := tw.Close(); err != nil {
+		tb.Fatal(err)
+	}
+	return tampon.Bytes()
+}
+
+// BenchmarkExtraction5000 mesure l'extraction de 5 000 petits fichiers :
+// dominée par les appels système (création, synchronisation légère).
+// Référence : ~0,55 s par extraction (CLAUDE.md).
+func BenchmarkExtraction5000(b *testing.B) {
+	archive := tarDePetitsFichiers(b, 5000)
+	for i := 0; i < b.N; i++ {
+		dest := filepath.Join(b.TempDir(), "extrait")
+		if err := os.Mkdir(dest, 0700); err != nil {
+			b.Fatal(err)
+		}
+		if err := extractArchive(bytes.NewReader(archive), dest); err != nil {
+			b.Fatal(err)
+		}
 	}
 }

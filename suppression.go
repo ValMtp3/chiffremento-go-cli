@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
@@ -43,11 +44,11 @@ type suppressionRefusee string
 // ci-dessous n'est qu'un garde-fou.
 func supprimerOriginal(source, chiffre string, password []byte, estDossier bool, avant *instantane) error {
 	if avant == nil {
-		fmt.Printf("  %s\n\n", styleFaint.Render("suppression non proposée : la source n'a pas pu être relevée avant le chiffrement"))
+		annoncer(os.Stdout, "  %s\n\n", styleFaint.Render("suppression non proposée : la source n'a pas pu être relevée avant le chiffrement"))
 		return nil
 	}
 	if raison := suppressionPossible(source, chiffre, estDossier); raison != "" {
-		fmt.Printf("  %s\n\n", styleFaint.Render(string(raison)))
+		annoncer(os.Stdout, "  %s\n\n", styleFaint.Render(string(raison)))
 		return nil
 	}
 
@@ -176,8 +177,14 @@ func demanderSuppression(titre, detail string) (bool, error) {
 	champ := questionFermee(titre, detail, "supprimer", "garder", &supprimer)
 	form := huh.NewForm(huh.NewGroup(champ)).
 		WithTheme(formTheme()).WithKeyMap(formKeyMap()).WithShowHelp(true)
-	// Pas d'ancre : l'opération est faite, il n'y a plus d'écran où revenir.
-	if err := lancerEtape(form, nil); err != nil {
+	// Sous le ✓ de l'opération, comme le veut la première règle ci-dessus.
+	err := lancerQuestionApresResultat("suppression", form)
+	// Échap ramène au menu, mais l'écriture est déjà faite : rien ne
+	// s'abandonne plus. Partir sans répondre, c'est garder — jamais un échec.
+	if errors.Is(err, errMenu) {
+		return false, nil
+	}
+	if err != nil {
 		return false, err
 	}
 	return supprimer, nil
@@ -216,6 +223,6 @@ func effacer(chemin string, estDossier bool) error {
 	if err != nil {
 		return fmt.Errorf("suppression de %s: %w", chemin, err)
 	}
-	fmt.Printf("  %s  %s\n\n", styleAccent.Render("✓"), styleText.Render(chemin+" supprimé"))
+	annoncer(os.Stdout, "  %s  %s\n\n", styleAccent.Render("✓"), styleText.Render(chemin+" supprimé"))
 	return nil
 }

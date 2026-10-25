@@ -11,6 +11,8 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
+	"time"
 
 	"github.com/klauspost/compress/zstd"
 	"github.com/minio/sio"
@@ -113,35 +115,159 @@ var (
 	// supprimer un fichier encore ouvert, il faut donc le fermer d'abord. Elle
 	// est nil pour les répertoires temporaires d'extraction.
 	pending = map[string]*os.File{}
+
+	// fermes : FermerTemporaires est passé, le processus va sortir. Écrit
+	// sous pendingMu ; atomique pour rester lisible sans verrou.
+	fermes atomic.Bool
+
+	// extraitOuvert : le fichier que l'extraction est en train d'écrire, sous
+	// pendingMu. Le nettoyage le ferme avant de supprimer le dossier
+	// temporaire : Windows refuse de supprimer un fichier ouvert, et le
+	// dossier resterait avec son clair. Une seule extraction à la fois
+	// (une opération par processus).
+	extraitOuvert *os.File
 )
 
-// CleanupTemporaries supprime les temporaires encore en cours d'écriture.
-// À appeler depuis un gestionnaire de signal. RemoveAll et non Remove : une
-// extraction de dossier travaille dans un répertoire temporaire.
-func CleanupTemporaries() {
+// FermerTemporaires nettoie les temporaires pour de bon, juste avant la
+// sortie du processus (Ctrl+C, signal). RemoveAll et non Remove : une
+// extraction de dossier travaille dans un répertoire temporaire. L'opération interrompue tourne encore
+// dans sa goroutine jusqu'à os.Exit : désormais elle ne peut plus rien créer
+// (errNettoye), un temporaire qu'elle enregistrerait est supprimé aussitôt, et
+// l'extraction s'arrête à l'entrée suivante. Sans ça, l'entrée suivante
+// recréait le dossier temporaire supprimé et y écrivait du clair, que rien ne
+// nettoyait plus.
+func FermerTemporaires() {
 	pendingMu.Lock()
 	defer pendingMu.Unlock()
+	fermes.Store(true)
+	nettoyerRegistre()
+}
+
+// nettoyerRegistre s'appelle sous pendingMu.
+func nettoyerRegistre() {
+	// Fermer un fichier pendant qu'une autre goroutine y écrit est sûr en
+	// Go : l'écriture suivante échoue, et l'extraction s'arrête.
+	if extraitOuvert != nil {
+		extraitOuvert.Close()
+		extraitOuvert = nil
+	}
 	for p, f := range pending {
 		if f != nil {
 			f.Close()
 		}
-		os.RemoveAll(p)
+		supprimerAvecNouvelEssai(p)
 		delete(pending, p)
 	}
 }
 
-func trackTemp(p string) { trackTempFile(p, nil) }
+// supprimerTout est os.RemoveAll ; les tests simulent un échec.
+var supprimerTout = os.RemoveAll
 
-func trackTempFile(p string, f *os.File) {
+// delaiNouvelEssai : sous Windows, un fichier qu'on vient de fermer peut
+// rester verrouillé un court instant (antivirus, indexation, écriture d'une
+// autre goroutine pas encore retombée). Un seul nouvel essai, après ce délai
+// borné : le nettoyage précède la sortie du processus, il ne doit pas
+// l'arrêter longtemps.
+const delaiNouvelEssai = 30 * time.Millisecond
+
+// supprimerAvecNouvelEssai supprime p, et réessaie une fois si ça échoue.
+// Un second échec est abandonné : il n'y a plus personne à qui le dire.
+func supprimerAvecNouvelEssai(p string) {
+	if supprimerTout(p) == nil {
+		return
+	}
+	time.Sleep(delaiNouvelEssai)
+	_ = supprimerTout(p)
+}
+
+func trackTemp(p string) error { return trackTempFile(p, nil) }
+
+// trackTempFile enregistre un temporaire. Après FermerTemporaires, il est
+// supprimé sur-le-champ et errNettoye est rendu : l'appelant s'arrête.
+func trackTempFile(p string, f *os.File) error {
 	pendingMu.Lock()
+	defer pendingMu.Unlock()
+	if fermes.Load() {
+		if f != nil {
+			f.Close()
+		}
+		os.RemoveAll(p)
+		return errNettoye
+	}
 	pending[p] = f
-	pendingMu.Unlock()
+	return nil
+}
+
+// sortirDuRegistre retire un temporaire du registre parce qu'il devient un
+// fichier à garder (la sauvegarde d'en-tête de passwd). Refusé s'il a déjà
+// été nettoyé : l'appelant ne doit pas continuer sans lui.
+func sortirDuRegistre(p string) error {
+	pendingMu.Lock()
+	defer pendingMu.Unlock()
+	if _, suivi := pending[p]; !suivi {
+		return errNettoye
+	}
+	delete(pending, p)
+	return nil
+}
+
+// suivreExtrait note le fichier d'extraction ouvert ; à appeler sous pendingMu
+// (depuis creer, dans dansLeTemporaire).
+func suivreExtrait(f *os.File) { extraitOuvert = f }
+
+// oublierExtrait retire f du suivi une fois fermé par l'extraction.
+func oublierExtrait(f *os.File) {
+	pendingMu.Lock()
+	defer pendingMu.Unlock()
+	if extraitOuvert == f {
+		extraitOuvert = nil
+	}
+}
+
+// dansLeTemporaire exécute creer (création de dossiers ou de fichiers dans
+// un temporaire d'extraction) sous le verrou du registre, sauf après
+// FermerTemporaires : soit la fermeture passe avant et rien n'est créé, soit
+// la création passe avant et la fermeture la supprime avec le reste. Le
+// verrou n'est tenu que le temps des appels de création, jamais pendant la
+// copie des données.
+func dansLeTemporaire(creer func() error) error {
+	pendingMu.Lock()
+	defer pendingMu.Unlock()
+	if fermes.Load() {
+		return errNettoye
+	}
+	return creer()
 }
 
 func untrackTemp(p string) {
 	pendingMu.Lock()
 	delete(pending, p)
 	pendingMu.Unlock()
+}
+
+// errNettoye : les temporaires ont été nettoyés par une interruption
+// (FermerTemporaires sur Ctrl+C ou signal) avant que
+// l'opération ait fini : création refusée, extraction arrêtée, bascule
+// refusée. L'opération est abandonnée, la destination reste intacte.
+var errNettoye = errors.New("opération interrompue : le temporaire a été nettoyé")
+
+// basculer renomme le temporaire sur la destination, seulement s'il est encore
+// suivi, et le sort du registre. Le tout sous le verrou du registre : soit
+// FermerTemporaires passe avant et le renommage est refusé, soit la bascule
+// passe avant et il n'y a plus rien à nettoyer. Sans ce verrou, une opération
+// qui finit pendant le nettoyage pouvait installer un dossier recréé à moitié
+// par l'extraction (MkdirAll refait les parents supprimés).
+func basculer(temp, dest string) error {
+	pendingMu.Lock()
+	defer pendingMu.Unlock()
+	if _, suivi := pending[temp]; !suivi {
+		return errNettoye
+	}
+	if err := os.Rename(temp, dest); err != nil {
+		return fmt.Errorf("renommage vers %s: %w", dest, err)
+	}
+	delete(pending, temp)
+	return nil
 }
 
 // newAtomicFile prépare l'écriture de dest. Sauf force, une destination qui
@@ -173,7 +299,9 @@ func newAtomicFile(dest string, force bool) (*atomicFile, error) {
 		os.Remove(f.Name())
 		return nil, fmt.Errorf("permissions du fichier temporaire: %w", err)
 	}
-	trackTempFile(f.Name(), f)
+	if err := trackTempFile(f.Name(), f); err != nil {
+		return nil, err
+	}
 	return &atomicFile{f: f, dest: dest}, nil
 }
 
@@ -186,11 +314,10 @@ func (a *atomicFile) commit() error {
 	if err := a.f.Close(); err != nil {
 		return fmt.Errorf("fermeture du fichier temporaire: %w", err)
 	}
-	if err := os.Rename(a.f.Name(), a.dest); err != nil {
-		return fmt.Errorf("renommage vers %s: %w", a.dest, err)
+	if err := basculer(a.f.Name(), a.dest); err != nil {
+		return err
 	}
 	a.committed = true
-	untrackTemp(a.f.Name())
 
 	// Le rename doit être rendu durable lui aussi : les données sont sur le
 	// disque après le Sync, mais l'entrée de répertoire ne l'est pas forcément.
@@ -252,7 +379,9 @@ func newAtomicDir(dest string) (*atomicDir, error) {
 		os.RemoveAll(p)
 		return nil, fmt.Errorf("permissions du dossier temporaire: %w", err)
 	}
-	trackTemp(p)
+	if err := trackTemp(p); err != nil {
+		return nil, err
+	}
 	return &atomicDir{path: p, dest: dest}, nil
 }
 
@@ -264,11 +393,10 @@ func (a *atomicDir) commit() error {
 	if err := rendreDurable(a.path); err != nil {
 		return err
 	}
-	if err := os.Rename(a.path, a.dest); err != nil {
-		return fmt.Errorf("renommage vers %s: %w", a.dest, err)
+	if err := basculer(a.path, a.dest); err != nil {
+		return err
 	}
 	a.committed = true
-	untrackTemp(a.path)
 	syncDir(filepath.Dir(a.dest))
 	return nil
 }

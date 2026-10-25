@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+
+	"github.com/minio/sio"
 )
 
 // Format de fichier .chto
@@ -177,6 +179,23 @@ var (
 	errBadMagic  = errors.New("format inconnu : ce fichier n'a pas été produit par chiffremento")
 	errTruncated = errors.New("fichier tronqué : header incomplet")
 )
+
+// FichierAbime dit si err vient d'un fichier abîmé ou qui n'est pas un .chto :
+// en-tête inconnu ou tronqué, ou contenu qui ne s'authentifie pas. L'appelant
+// en tire un conseil (repartir d'une copie intacte) sans comparer des textes.
+// Les sentinelles restent privées : leur message ne change pas.
+func FichierAbime(err error) bool {
+	return errors.Is(err, errBadMagic) || errors.Is(err, errTruncated) || ContenuNonAuthentifie(err)
+}
+
+// ContenuNonAuthentifie dit si err vient d'un contenu que l'AEAD refuse. Sur
+// un fichier d'avant l'engagement de clé (VersionEnveloppe), une mauvaise
+// phrase donne exactement cette erreur : rien ne la distingue d'un fichier
+// abîmé.
+func ContenuNonAuthentifie(err error) bool {
+	var e sio.Error
+	return errors.As(err, &e)
+}
 
 type argonParams struct {
 	Time    uint32

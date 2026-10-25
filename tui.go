@@ -5,13 +5,16 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"math"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"chiffremento-cli/internal/zxcvbn"
 	"chiffremento-cli/pkg"
@@ -27,7 +30,259 @@ func isInteractive() bool {
 	return term.IsTerminal(int(os.Stdin.Fd())) && term.IsTerminal(int(os.Stdout.Fd()))
 }
 
-// runTUI enchaîne les formulaires puis l'écran de progression.
+// runTUI lance l'interface guidée et rend le code de sortie de la session.
+//
+// En plein écran, un seul programme Bubble Tea tient le terminal (l'écran
+// hôte, en écran alternatif) et les parcours tournent dans une goroutine qui
+// lui confie chaque écran. Le menu revient après chaque opération, jusqu'à ce
+// que l'utilisateur quitte : code 0 si tout a réussi, 1 si une opération au
+// moins a échoué, 130 sur Ctrl+C, 129 si le terminal est fermé (SIGHUP), 2 si
+// le parcours a paniqué (terminal rendu, temporaires supprimés, phrase
+// oubliée, puis la panique imprimée).
+//
+// TERM=dumb garde le comportement d'avant : huh en mode accessible, sans
+// écran alternatif, une seule opération ; l'erreur éventuelle remonte à main.
+func runTUI() (int, error) {
+	if os.Getenv("TERM") == "dumb" {
+		// Pas de mode brut ici : Ctrl+C arrive en signal, et c'est le
+		// gestionnaire global qui nettoie et sort en 130, comme avant.
+		installSignalHandler()
+		err := uneOperation(&choixMenu{action: "enc", mode: "saisie"})
+		if errors.Is(err, errQuitter) {
+			err = nil
+		}
+		return 0, err
+	}
+
+	s := &session{}
+	var programme *tea.Program
+	h := nouvelHote(func(msg tea.Msg) { programme.Send(msg) })
+	programme = tea.NewProgram(h, optionsPleinEcran()...)
+	// Posés avant le lancement du parcours et jamais remis à nil : un
+	// parcours encore en vie après Ctrl+C (une dérivation Argon2 ne
+	// s'interrompt pas) les lit sans verrou.
+	hoteCourant, sessionCourante = h, s
+	// L'hôte connaît la phrase de session : il arme le minuteur d'oubli et
+	// l'efface à la sortie (fermer, appelé par executer et par Ctrl+C), donc
+	// avant que main n'appelle os.Exit.
+	h.phrase = &s.phrase
+	return menerSession(h, s, programme, func() { parcoursSession(h, s) })
+}
+
+// fermerTemporaires est pkg.FermerTemporaires ; les tests la remplacent, le
+// registre de pkg resterait sinon fermé pour la suite.
+var fermerTemporaires = pkg.FermerTemporaires
+
+// delaiFinParcours borne l'attente du parcours à la sortie : assez pour
+// qu'une dérivation Argon2 en cours finisse (~1 s en profil standard, plus
+// en « fort » ou « maximum » sur une machine lente), pas assez pour qu'un
+// parcours bloqué retienne le processus. Au-delà, on sort quand même : les
+// copies du mot de passe encore tenues par l'opération ne sont alors pas
+// mises à zéro, comme avant. Une variable pour les tests.
+var delaiFinParcours = 3 * time.Second
+
+// menerSession fait tourner le programme de l'hôte pendant que parcours
+// mène les opérations dans sa propre goroutine, puis rend le code de sortie.
+//
+// Sur une sortie qui n'est pas « quitter » (Ctrl+C, SIGHUP, panique), le
+// parcours tourne peut-être encore : l'opération lancée ne s'interrompt pas,
+// et ses copies du mot de passe ne sont mises à zéro que par ses defer, à sa
+// fin. main fait os.Exit dès le retour : on attend donc la fin du parcours,
+// au plus delaiFinParcours. Rien n'est effacé d'ici : un tampon encore lu par
+// Argon2 depuis une autre goroutine ne doit jamais être touché.
+func menerSession(h *hote, s *session, programme *tea.Program, parcours func()) (int, error) {
+	// Fenêtre du terminal fermée : même nettoyage que Ctrl+C, sortie en 129.
+	var raccroche atomic.Bool
+	arreterRaccrochage := surRaccrochage(func() {
+		raccroche.Store(true)
+		fermerTemporaires()
+		programme.Kill()
+	})
+	defer arreterRaccrochage()
+	var garde gardeParcours
+	parcoursFini := make(chan struct{})
+	go func() {
+		defer close(parcoursFini)
+		garde.mener(parcours, func() {
+			// Une panique dans le parcours tuerait le processus sur-le-champ :
+			// écran alternatif affiché, terminal en mode brut, clair d'une
+			// extraction laissé. On nettoie, on oublie la phrase, puis Kill
+			// fait rendre la main à Run, qui rend le terminal.
+			fermerTemporaires()
+			h.fermer()
+			programme.Kill()
+		})
+	}()
+
+	interrompu, err := h.executer(programme)
+	if interrompu || err != nil {
+		// L'opération en cours (progression, changement de mot de passe)
+		// tourne encore dans la goroutine du parcours. FermerTemporaires
+		// supprime ses temporaires et l'empêche d'en créer d'autres ; puis
+		// on la laisse finir, le temps borné qu'il faut.
+		fermerTemporaires()
+	}
+	attendreFinParcours(parcoursFini, delaiFinParcours, os.Stderr)
+	// L'écran alternatif est quitté : ce qui y a été annoncé s'imprime
+	// maintenant, sur le terminal ordinaire.
+	s.imprimer(os.Stdout)
+	fmt.Fprint(os.Stderr, noteVerrouillage())
+	if note := garde.panique.Load(); note != nil {
+		fmt.Fprintf(os.Stderr, "\nerreur interne : %v\n\n%s", note.valeur, note.pile)
+		return exitErreurInterne, nil
+	}
+	if raccroche.Load() {
+		return exitRaccroche, nil
+	}
+	switch {
+	case err != nil:
+		return 1, err
+	case interrompu:
+		return exitInterrompu, nil
+	}
+	return s.codeSortie(), nil
+}
+
+// delaiAnnonceFin : passé ce délai après la remise du terminal, un parcours
+// encore en vie est annoncé — sinon l'invite du shell tarderait sans
+// explication pendant la fin d'une dérivation.
+const delaiAnnonceFin = 200 * time.Millisecond
+
+// messageFinOperation est écrit une fois sur stderr pendant cette attente.
+const messageFinOperation = "fin de l'opération en cours…\n"
+
+// attendreFinParcours attend que fini soit fermé, au plus delai en tout. Si
+// l'attente dépasse delaiAnnonceFin, messageFinOperation est écrit une fois
+// sur sortie. Les minuteurs n'existent que pendant la sortie.
+func attendreFinParcours(fini <-chan struct{}, delai time.Duration, sortie io.Writer) {
+	limite := time.NewTimer(delai)
+	defer limite.Stop()
+	annonce := time.NewTimer(min(delaiAnnonceFin, delai))
+	defer annonce.Stop()
+	select {
+	case <-fini:
+		return
+	case <-limite.C:
+		return
+	case <-annonce.C:
+		fmt.Fprint(sortie, messageFinOperation)
+	}
+	select {
+	case <-fini:
+	case <-limite.C:
+	}
+}
+
+// exitErreurInterne : le code d'une panique Go non rattrapée. Une panique du
+// parcours, rattrapée pour rendre le terminal, sort avec le même.
+const exitErreurInterne = 2
+
+// paniqueParcours : ce qu'une panique du parcours laisse, sa valeur et la
+// pile de la goroutine où elle est née.
+type paniqueParcours struct {
+	valeur any
+	pile   []byte
+}
+
+// gardeParcours rattrape une panique de la goroutine du parcours.
+type gardeParcours struct {
+	panique atomic.Pointer[paniqueParcours]
+}
+
+// mener exécute parcours. S'il panique, la panique est notée, puis rendre
+// est appelé : à lui de nettoyer et de faire sortir le programme. La pile est
+// prise dans le recover, avant de quitter la goroutine : c'est la seule qui
+// montre l'origine.
+func (g *gardeParcours) mener(parcours, rendre func()) {
+	defer func() {
+		r := recover()
+		if r == nil {
+			return
+		}
+		note := &paniqueParcours{valeur: r, pile: debug.Stack()}
+		// Panique d'une opération relancée par le parcours : sa pile à elle
+		// montre l'origine, celle du parcours seulement la relance.
+		if p, ok := r.(*paniqueOperation); ok {
+			note = &paniqueParcours{valeur: p.valeur, pile: p.pile}
+		}
+		g.panique.Store(note)
+		rendre()
+	}()
+	parcours()
+}
+
+// optionsPleinEcran : les réglages communs (sortie sur stderr, 30 images/s)
+// et l'écran alternatif, qui rend au terminal son contenu à la sortie.
+func optionsPleinEcran() []tea.ProgramOption {
+	return append(optionsProgramme(), tea.WithAltScreen())
+}
+
+// errQuitter : l'utilisateur a choisi « quitter » au menu.
+var errQuitter = errors.New("quitter")
+
+// actionQuitter est la ligne « quitter » du menu.
+const actionQuitter = "quitter"
+
+// choixMenu porte les deux réponses du menu.
+type choixMenu struct{ action, mode string }
+
+// parcoursSession enchaîne les opérations jusqu'à « quitter » ou Ctrl+C.
+// Tourne dans sa propre goroutine, jamais dans celle de l'interface.
+//
+// Une opération réussie finit sur sa carte résultat ; un échec est compté et
+// finit sur l'écran d'erreur. Dans les deux cas, ⏎ ramène au menu. Échap
+// avant le lancement y ramène directement, sans rien compter : rien n'a été
+// écrit, il n'y a rien à montrer.
+func parcoursSession(h *hote, s *session) {
+	for {
+		s.ouvrirOperation()
+		// Le menu repart toujours de la première ligne : le curseur au même
+		// endroit à chaque retour vaut mieux que la dernière opération faite.
+		err := uneOperation(&choixMenu{action: "enc", mode: "saisie"})
+		relancerPanique(err)
+		lignes := s.resumesOperation()
+		var fin sousEcran
+		switch {
+		case errors.Is(err, errQuitter):
+			h.quitter()
+			return
+		case errors.Is(err, huh.ErrUserAborted):
+			// Ctrl+C : l'hôte est déjà fermé, le programme sort en 130.
+			return
+		case compteCommeEchec(err):
+			s.noterEchec()
+			fin = ecranErreurApres(lignes, err)
+		case len(lignes) > 0:
+			fin = carteResultat(lignes)
+		}
+		if fin == nil {
+			continue
+		}
+		if _, err := h.afficher(fin); errors.Is(err, huh.ErrUserAborted) {
+			return
+		}
+	}
+}
+
+// compteCommeEchec dit si une opération terminée par err a échoué. Un
+// abandon voulu (Échap, Ctrl+C, quitter) n'est pas un échec.
+func compteCommeEchec(err error) bool {
+	switch {
+	case err == nil, errors.Is(err, errMenu), errors.Is(err, errQuitter), errors.Is(err, huh.ErrUserAborted):
+		return false
+	}
+	var a annulation
+	return !errors.As(err, &a)
+}
+
+// annulation : l'utilisateur a refusé d'écraser la destination. Un choix, pas
+// une panne : en plein écran, retour au menu sans échec. Hors plein écran
+// (TERM=dumb), le message reste celui d'une erreur, comme avant.
+type annulation struct{ dest string }
+
+func (a annulation) Error() string { return "annulé : " + a.dest + " n'a pas été touché" }
+
+// uneOperation montre le menu puis mène l'opération choisie jusqu'au bout.
 //
 // Deux formulaires successifs et non un seul à groupes masqués : le second est
 // donc construit *après* que l'opération et le mode de saisie sont connus. Ça
@@ -39,9 +294,7 @@ func isInteractive() bool {
 // huh ne recule qu'à l'intérieur d'un formulaire. D'où les deux boucles — un
 // écran qui rend errRetour renvoie à celui d'avant, et les réponses déjà
 // données restent dans les variables, donc à l'écran.
-func runTUI() error {
-	action := "enc"
-	mode := "saisie"
+func uneOperation(choix *choixMenu) error {
 	path := ""
 	// Les options de chiffrement vivent ici, et non dans tuiEncrypt : un « ← » de
 	// trop sur la première question repasse par la boucle ci-dessous, et des
@@ -51,17 +304,19 @@ func runTUI() error {
 	//
 	// Elles sont en revanche remises à neuf quand la cible change : le choix de
 	// compresser suit le fait que ce soit un dossier ou un fichier, et le nom du
-	// fichier a pu peser sur les autres réponses.
+	// fichier a pu peser sur les autres réponses. Et elles ne survivent pas à
+	// l'opération : le menu suivant repart de zéro.
 	var options optionsChiffrement
 	optionsPour := ""
 	for {
-		// Premier écran : rien derrière lui, donc aucune ancre de retour.
-		if err := lancerEtape(choixForm(&action, &mode), nil); err != nil {
+		nommerOperation("")
+		if err := lancerMenu(choix); err != nil {
 			return err
 		}
+		nommerOperation(nomOperation(choix.action))
 
 		for {
-			err := etapeCible(action, mode, &path)
+			err := etapeCible(choix.action, choix.mode, &path)
 			if errors.Is(err, errRetour) {
 				break // retour au choix de l'opération
 			}
@@ -69,7 +324,7 @@ func runTUI() error {
 				return err
 			}
 
-			switch action {
+			switch choix.action {
 			case "dec":
 				err = tuiDecrypt(path)
 			case "verify":
@@ -90,6 +345,102 @@ func runTUI() error {
 	}
 }
 
+// nomOperation est le nom de l'opération dans le fil d'Ariane.
+func nomOperation(action string) string {
+	switch action {
+	case "dec":
+		return "déchiffrer"
+	case "verify":
+		return "vérifier"
+	case "passwd":
+		return "changer le mot de passe"
+	default:
+		return "chiffrer"
+	}
+}
+
+// nommerOperation met à jour le fil d'Ariane, s'il y a un hôte.
+func nommerOperation(nom string) {
+	if h := hoteCourant; h != nil {
+		h.definirOperation(nom)
+	}
+}
+
+// lancerMenu montre le menu. Rend errQuitter si l'utilisateur part.
+//
+// En plein écran, le menu est un sous-écran à lui (menuModel) : il connaît q
+// et la ligne « quitter », que le formulaire seul ne sait pas distinguer.
+// Ailleurs (TERM=dumb), « quitter » se choisit comme une opération.
+func lancerMenu(choix *choixMenu) error {
+	h := hoteDuCadre()
+	pleinEcran := h != nil
+	form := choixForm(&choix.action, &choix.mode, pleinEcran)
+	if !pleinEcran {
+		if err := lancerEtape(form, nil); err != nil {
+			return err
+		}
+	} else {
+		m := &menuModel{etapeModel: etapeDansLeCadre(form, nil), action: &choix.action}
+		m.titre = "menu"
+		if _, err := h.afficher(m); err != nil {
+			return err
+		}
+		if m.quitter {
+			return errQuitter
+		}
+		if form.State == huh.StateAborted {
+			return huh.ErrUserAborted
+		}
+	}
+	if choix.action == actionQuitter {
+		return errQuitter
+	}
+	return nil
+}
+
+// menuModel est le menu affiché par l'hôte : le formulaire du choix, plus
+// la sortie (q, ou « quitter » validé).
+type menuModel struct {
+	*etapeModel
+	action  *string
+	quitter bool
+}
+
+func (m *menuModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if k, ok := msg.(tea.KeyMsg); ok && m.veutQuitter(k) {
+		m.quitter = true
+		*m.action = actionQuitter
+		return m, tea.Quit
+	}
+	_, cmd := m.etapeModel.Update(msg)
+	return m, cmd
+}
+
+// veutQuitter : q partout sur le menu, qui n'a aucun champ texte ; ou une
+// touche de validation sur la ligne « quitter ». Sans cette dernière, huh
+// passerait au champ suivant, « désigner la cible », qui n'a plus de sens.
+// huh écrit la valeur à chaque mouvement du curseur : *m.action est donc
+// la ligne surlignée.
+func (m *menuModel) veutQuitter(k tea.KeyMsg) bool {
+	if k.String() == "q" {
+		return true
+	}
+	premier := m.form.GetFocusedField() == m.premier
+	switch k.String() {
+	case "enter", "right", "tab":
+		return premier && *m.action == actionQuitter
+	}
+	return false
+}
+
+// gardeEchap : sur le menu, Échap ne fait rien — il n'y a rien à abandonner.
+func (m *menuModel) gardeEchap() bool { return true }
+
+// saisitDuTexte : le menu n'a que des listes ; ? y ouvre toujours l'aide.
+func (m *menuModel) saisitDuTexte() bool { return false }
+
+func (m *menuModel) Touches() string { return "↑↓ choisir  → valider  q quitter" }
+
 // etapeCible demande la cible jusqu'à en obtenir une.
 //
 // La boucle est là parce que l'explorateur tolère une sélection vide pour ne
@@ -99,7 +450,7 @@ func runTUI() error {
 func etapeCible(action, mode string, path *string) error {
 	for {
 		form, ancre := cibleForm(action, mode, path)
-		if err := lancerEtape(form, ancre); err != nil {
+		if err := lancerEtapeNommee("cible", form, ancre); err != nil {
 			return err
 		}
 		*path = trimTrailingSeparator(strings.TrimSpace(expandHome(devirerGuillemets(*path))))
@@ -110,18 +461,26 @@ func etapeCible(action, mode string, path *string) error {
 }
 
 // choixForm demande l'opération et la façon de désigner la cible.
-func choixForm(action *string, mode *string) *huh.Form {
+//
+// La ligne « quitter » n'existe qu'en plein écran (avecQuitter), où le menu
+// revient après chaque opération. En TERM=dumb, une seule opération est
+// menée : le menu garde ses quatre lignes d'avant.
+func choixForm(action *string, mode *string, avecQuitter bool) *huh.Form {
+	operations := []huh.Option[string]{
+		huh.NewOption("chiffrer un fichier ou un dossier", "enc"),
+		huh.NewOption("déchiffrer un "+extension+"  (fichier ou dossier)", "dec"),
+		huh.NewOption("vérifier un "+extension+"  (sans rien écrire)", "verify"),
+		huh.NewOption("changer le mot de passe d'un "+extension, "passwd"),
+	}
+	if avecQuitter {
+		operations = append(operations, huh.NewOption(actionQuitter, actionQuitter))
+	}
 	return huh.NewForm(
 		huh.NewGroup(
 			huh.NewSelect[string]().
 				Key("action").
 				Title("opération").
-				Options(
-					huh.NewOption("chiffrer un fichier ou un dossier", "enc"),
-					huh.NewOption("déchiffrer un "+extension+"  (fichier ou dossier)", "dec"),
-					huh.NewOption("vérifier un "+extension+"  (sans rien écrire)", "verify"),
-					huh.NewOption("changer le mot de passe d'un "+extension, "passwd"),
-				).
+				Options(operations...).
 				Value(action),
 
 			huh.NewSelect[string]().
@@ -285,6 +644,21 @@ type optionsChiffrement struct {
 	// l'avoir enregistrée.
 	genererPhrase bool
 	phrase        string
+	// phraseBits : l'entropie exacte de la phrase générée, pour son verdict
+	// de force sans zxcvbn (forceAGarder).
+	phraseBits float64
+
+	// memoire : une phrase est gardée pour la session au moment d'afficher
+	// l'écran, et la question qui la propose est donc posée. Ce n'est pas
+	// une réponse : tuiEncrypt le relit à chaque affichage.
+	memoire bool
+	// saisirMalgreMemoire : l'utilisateur a écarté la phrase en mémoire. Le
+	// zéro vaut « l'utiliser », le défaut voulu, sans toucher à
+	// appliquerDefauts.
+	saisirMalgreMemoire bool
+	// forceMemoire : le verdict de force de la phrase en mémoire, montré sous
+	// la question qui la propose (forcePhrase). Vide sans phrase.
+	forceMemoire string
 }
 
 // secretChoisi rend le secret qui chiffrera le fichier : la phrase générée si
@@ -377,12 +751,18 @@ func encryptForm(o *optionsChiffrement, estDossier bool, tailleClair int64) (*hu
 		// bien au-delà de ce qu'un mot de passe tapé à la main atteint. Le
 		// groupe de saisie disparaît alors, et l'écran de la phrase vient après
 		// les options (etapePhrase).
+		// Une phrase gardée pour la session est proposée d'abord. L'utiliser
+		// saute la génération, la saisie et la confirmation : elle a déjà
+		// servi à une opération réussie.
+		huh.NewGroup(questionMemoire(&o.saisirMalgreMemoire, o.forceMemoire)).
+			WithHideFunc(func() bool { return !o.memoire }),
+
 		huh.NewGroup(
 			questionFermee("mot de passe",
 				fmt.Sprintf("une phrase de %d mots tirée au hasard (≈%.0f bits), ou un mot de passe de ton choix",
 					pkg.DefautMotsPhrase, pkg.EntropiePhrase(pkg.DefautMotsPhrase)),
 				"générer une phrase de passe", "le saisir moi-même", &o.genererPhrase),
-		),
+		).WithHideFunc(func() bool { return depuisLaSession(o) }),
 
 		huh.NewGroup(
 			huh.NewInput().
@@ -407,7 +787,7 @@ func encryptForm(o *optionsChiffrement, estDossier bool, tailleClair int64) (*hu
 					}
 					return nil
 				}),
-		).WithHideFunc(func() bool { return o.genererPhrase }),
+		).WithHideFunc(func() bool { return o.genererPhrase || depuisLaSession(o) }),
 	).WithTheme(formTheme()).WithKeyMap(formKeyMap()).WithShowHelp(true)
 
 	return form, algoChamp
@@ -456,8 +836,13 @@ func tuiEncrypt(path string, o *optionsChiffrement) error {
 	// La boucle sert au retour depuis la question de l'écrasement : on
 	// réaffiche les options, avec les réponses déjà saisies.
 	for {
+		o.memoire = phraseCourante().active()
+		o.forceMemoire = ""
+		if o.memoire {
+			o.forceMemoire = forcePhrase(phraseCourante())
+		}
 		form, ancre := encryptForm(o, estDossier, tailleClair)
-		if err := lancerEtape(form, ancre); err != nil {
+		if err := lancerEtapeNommee("options", form, ancre); err != nil {
 			return err
 		}
 
@@ -504,7 +889,8 @@ func tuiEncrypt(path string, o *optionsChiffrement) error {
 		// jamais tirer de phrase pour rien. Revenir aux options depuis l'écran
 		// de la phrase en tire une nouvelle au passage suivant ; aucune n'est
 		// utilisée avant d'avoir été confirmée comme enregistrée.
-		if o.genererPhrase {
+		depuisSession := depuisLaSession(o)
+		if o.genererPhrase && !depuisSession {
 			phrase, err := etapePhrase()
 			if errors.Is(err, errRetour) {
 				continue // retour aux options
@@ -512,7 +898,7 @@ func tuiEncrypt(path string, o *optionsChiffrement) error {
 			if err != nil {
 				return err
 			}
-			o.phrase = phrase
+			o.phrase, o.phraseBits = phrase.Texte, phrase.Bits
 		}
 
 		// La ligne « sel » du cadre reste sur une seule ligne : les mentions
@@ -537,6 +923,7 @@ func tuiEncrypt(path string, o *optionsChiffrement) error {
 			KDF:     o.kdf.KDFLabel(),
 			Salt:    salt,
 			Success: out,
+			Ecrit:   true,
 		}
 		// Une seule copie du mot de passe, en []byte, effacée à la sortie.
 		//
@@ -548,7 +935,20 @@ func tuiEncrypt(path string, o *optionsChiffrement) error {
 		//
 		// L'effacement n'a lieu qu'ici, après le lancement de l'opération : plus
 		// haut, un retour en arrière doit encore retrouver la saisie à l'écran.
-		motDePasse := []byte(secretChoisi(o))
+		//
+		// La phrase de session, elle, arrive déjà en []byte (prendre) : aucune
+		// string n'en est tirée. Oubliée depuis la question (délai, touche o),
+		// on réaffiche les options, où la saisie est revenue.
+		var motDePasse []byte
+		if depuisSession {
+			secret, ok := phraseCourante().prendre()
+			if !ok {
+				continue
+			}
+			motDePasse = secret
+		} else {
+			motDePasse = []byte(secretChoisi(o))
+		}
 		defer func() {
 			zero(motDePasse)
 			// Le mot de passe passe par l'accesseur : un calcul de robustesse
@@ -573,7 +973,7 @@ func tuiEncrypt(path string, o *optionsChiffrement) error {
 		}
 		var errSuppression error
 		if errReleve != nil {
-			fmt.Printf("  %s\n\n", styleFaint.Render(raisonSansReleve(errReleve)))
+			annoncer(os.Stdout, "  %s\n\n", styleFaint.Render(raisonSansReleve(errReleve)))
 		} else {
 			errSuppression = supprimerOriginal(path, out, motDePasse, estDossier, avant)
 		}
@@ -589,11 +989,27 @@ func tuiEncrypt(path string, o *optionsChiffrement) error {
 			// laisse la vraie date en place, donc il se dit. Le taire ferait
 			// croire à une protection qui n'a pas eu lieu.
 			if err := brouillerDate(out); err != nil {
-				fmt.Fprintf(os.Stderr, "  %s  %s\n\n", styleError.Render("!"), err)
+				annoncer(os.Stderr, "  %s  %s\n\n", styleError.Render("!"), err)
 			}
 		}
-		return errSuppression
+		// Phrase tapée ou générée, opération réussie jusqu'au bout : on
+		// propose de la garder. Pas si elle venait déjà de la session.
+		if errSuppression != nil || depuisSession {
+			return errSuppression
+		}
+		return proposerDeGarder(motDePasse, forceAGarder(o))
 	}
+}
+
+// forceAGarder rend le verdict de force gardé avec la phrase de
+// l'opération : celui de son entropie exacte pour une phrase générée (sans
+// charger zxcvbn), celui de l'indicateur pour une phrase tapée — zxcvbn est
+// déjà chargé, il l'a calculé à chaque frappe.
+func forceAGarder(o *optionsChiffrement) string {
+	if o.genererPhrase {
+		return verdictDeForce(o.phraseBits)
+	}
+	return strengthHint(o.password)
 }
 
 // passwordForm est l'écran commun au déchiffrement et à la vérification : le
@@ -601,11 +1017,7 @@ func tuiEncrypt(path string, o *optionsChiffrement) error {
 // aussi le champ de saisie, ancre du retour vers le choix de la cible — la note
 // qui le précède n'est pas sélectionnable, huh la saute.
 func passwordForm(details string, password *string) (*huh.Form, huh.Field) {
-	champ := huh.NewInput().
-		Title("mot de passe").
-		EchoMode(huh.EchoModePassword).
-		Value(password).
-		Validate(validatePassword)
+	champ := champMotDePasse(password)
 
 	form := huh.NewForm(
 		huh.NewGroup(
@@ -617,10 +1029,19 @@ func passwordForm(details string, password *string) (*huh.Form, huh.Field) {
 	return form, champ
 }
 
+// champMotDePasse est le champ masqué du déchiffrement et de la vérification.
+func champMotDePasse(password *string) huh.Field {
+	return huh.NewInput().
+		Title("mot de passe").
+		EchoMode(huh.EchoModePassword).
+		Value(password).
+		Validate(validatePassword)
+}
+
 func tuiDecrypt(path string) error {
 	// L'en-tête est lisible sans mot de passe : on affiche les vrais
 	// paramètres du fichier avant de demander quoi que ce soit.
-	d, err := pkg.Inspect(path)
+	d, err := lireEnTete(path)
 	if err != nil {
 		return err
 	}
@@ -639,14 +1060,16 @@ func tuiDecrypt(path string) error {
 	}
 
 	password := ""
+	saisir := false // la phrase en mémoire, s'il y en a une, par défaut
 	out := strings.TrimSuffix(path, extension)
 	// La boucle sert au retour depuis la question de l'écrasement : on
 	// redemande le mot de passe, déjà saisi et donc déjà rempli.
 	for {
-		form, ancre := passwordForm(details, &password)
-		if err := lancerEtape(form, ancre); err != nil {
+		form, ancre, proposee := formulaireMotDePasse(details, &password, &saisir)
+		if err := lancerEtapeNommee("mot de passe", form, ancre); err != nil {
 			return err
 		}
+		depuisSession := proposee && !saisir
 
 		ecraser, err := confirmerEcrasement(out)
 		if errors.Is(err, errRetour) {
@@ -663,6 +1086,7 @@ func tuiDecrypt(path string) error {
 			KDF:     d.KDF,
 			Salt:    fmt.Sprintf("format v%d · lu dans l'en-tête", d.Version),
 			Success: out,
+			Ecrit:   true,
 		}
 		// DecryptTo et non Decrypt : le nom d'origine, quand le fichier en
 		// porte un, ne remonte que par le résultat — Decrypt le jette. La
@@ -672,7 +1096,13 @@ func tuiDecrypt(path string) error {
 		// saisie reste une string imposée par huh, mais rien n'oblige à en semer
 		// des copies. L'effacement vient après la boucle de retour en arrière, qui
 		// doit encore pouvoir réafficher la saisie.
-		motDePasse := []byte(password)
+		//
+		// La phrase de session est prise le plus tard possible, juste avant
+		// l'opération ; oubliée depuis la question, on redemande.
+		motDePasse, ok := secretPourOperation(depuisSession, password)
+		if !ok {
+			continue
+		}
 		defer func() {
 			zero(motDePasse)
 			password = ""
@@ -689,7 +1119,10 @@ func tuiDecrypt(path string) error {
 		if err := restituerNom(out, meta); err != nil {
 			return err
 		}
-		return supprimerChiffre(path)
+		if err := supprimerChiffre(path); err != nil || depuisSession {
+			return err
+		}
+		return proposerDeGarder(motDePasse, "")
 	}
 }
 
@@ -706,11 +1139,11 @@ func restituerNom(out string, meta *pkg.FileMetadata) error {
 	if meta == nil || meta.Name == filepath.Base(out) {
 		return nil
 	}
-	fmt.Printf("  %s  %s\n\n", styleDim.Render("nom d'origine"), styleText.Render(meta.Name))
+	annoncer(os.Stdout, "  %s  %s\n\n", styleDim.Render("nom d'origine"), styleText.Render(meta.Name))
 
 	cible, libre := cibleRestitution(out, meta)
 	if !libre {
-		fmt.Printf("  %s\n\n", styleFaint.Render("un fichier de ce nom existe déjà ici : rien n'a été renommé"))
+		annoncer(os.Stdout, "  %s\n\n", styleFaint.Render("un fichier de ce nom existe déjà ici : rien n'a été renommé"))
 		return nil
 	}
 
@@ -730,8 +1163,15 @@ func restituerNom(out string, meta *pkg.FileMetadata) error {
 		"renommer en "+nomCible, "garder "+filepath.Base(out), &renommer)
 	form := huh.NewForm(huh.NewGroup(champ)).
 		WithTheme(formTheme()).WithKeyMap(formKeyMap()).WithShowHelp(true)
-	// Pas d'ancre : le fichier est déchiffré, il n'y a plus d'écran où revenir.
-	if err := lancerEtape(form, nil); err != nil {
+	// Sous le ✓ du déchiffrement, sans ancre : le fichier est déchiffré, il
+	// n'y a plus d'écran où revenir.
+	err := lancerQuestionApresResultat("nom d'origine", form)
+	// Échap après l'écriture : le déchiffrement est fait, partir sans
+	// répondre garde le nom actuel, comme « garder ».
+	if errors.Is(err, errMenu) {
+		return nil
+	}
+	if err != nil {
 		return err
 	}
 	if !renommer {
@@ -744,12 +1184,12 @@ func restituerNom(out string, meta *pkg.FileMetadata) error {
 	// de périphériques réservés là où l'assainissement du nom d'origine, pensé
 	// pour les séparateurs, les laisse passer.
 	if err := os.Rename(out, cible); err != nil {
-		fmt.Fprintf(os.Stderr, "  %s  %s\n\n", styleError.Render("!"),
+		annoncer(os.Stderr, "  %s  %s\n\n", styleError.Render("!"),
 			fmt.Sprintf("renommage en %s impossible (%v) : le fichier reste sous %s",
 				nomCible, err, filepath.Base(out)))
 		return nil
 	}
-	fmt.Printf("  %s  %s\n\n", styleAccent.Render("✓"), styleText.Render(cible))
+	annoncer(os.Stdout, "  %s  %s\n\n", styleAccent.Render("✓"), styleText.Render(cible))
 	return nil
 }
 
@@ -783,7 +1223,7 @@ func cibleRestitution(out string, meta *pkg.FileMetadata) (cible string, libre b
 // confirmation. Le contrôle de l'actuel n'a lieu qu'à la validation, dans pkg —
 // le vérifier champ par champ coûterait une dérivation Argon2 à chaque frappe.
 func tuiPasswd(path string) error {
-	d, err := pkg.Inspect(path)
+	d, err := lireEnTete(path)
 	if err != nil {
 		return err
 	}
@@ -832,7 +1272,7 @@ func tuiPasswd(path string) error {
 		),
 	).WithTheme(formTheme()).WithKeyMap(formKeyMap()).WithShowHelp(true)
 
-	if err := lancerEtape(form, champ); err != nil {
+	if err := lancerEtapeNommee("mots de passe", form, champ); err != nil {
 		return err
 	}
 
@@ -849,17 +1289,22 @@ func tuiPasswd(path string) error {
 		ancien, confirme = "", ""
 	}()
 
-	if err := pkg.ChangePassword(path, ancienOctets, nouveauOctets); err != nil {
+	// Deux dérivations Argon2 sans progression à montrer : le cadre dit ce
+	// qui se passe plutôt que de rester vide.
+	err = enCours("mots de passe", "changement du mot de passe en cours…", func() error {
+		return pkg.ChangePassword(path, ancienOctets, nouveauOctets)
+	})
+	if err != nil {
 		return err
 	}
-	fmt.Printf("  %s  %s\n", styleAccent.Render("✓"),
+	annoncer(os.Stdout, "  %s  %s\n", styleAccent.Render("✓"),
 		styleText.Render("mot de passe changé, le contenu n'a pas été retouché"))
-	fmt.Printf("  %s\n\n", styleFaint.Render(avertissementRevocation))
+	annoncer(os.Stdout, "  %s\n\n", styleFaint.Render(avertissementRevocation))
 	return nil
 }
 
 func tuiVerify(path string) error {
-	d, err := pkg.Inspect(path)
+	d, err := lireEnTete(path)
 	if err != nil {
 		return err
 	}
@@ -874,9 +1319,22 @@ func tuiVerify(path string) error {
 	details += "\nrien ne sera écrit sur le disque"
 
 	password := ""
-	form, ancre := passwordForm(details, &password)
-	if err := lancerEtape(form, ancre); err != nil {
-		return err
+	saisir := false // la phrase en mémoire, s'il y en a une, par défaut
+	var motDePasse []byte
+	depuisSession := false
+	// La boucle ne resert que si la phrase en mémoire a été oubliée entre la
+	// question et son usage (délai, touche o) : on redemande alors.
+	for {
+		form, ancre, proposee := formulaireMotDePasse(details, &password, &saisir)
+		if err := lancerEtapeNommee("mot de passe", form, ancre); err != nil {
+			return err
+		}
+		depuisSession = proposee && !saisir
+		secret, ok := secretPourOperation(depuisSession, password)
+		if ok {
+			motDePasse = secret
+			break
+		}
 	}
 
 	info := jobInfo{
@@ -888,14 +1346,17 @@ func tuiVerify(path string) error {
 		Salt:    fmt.Sprintf("format v%d · lu dans l'en-tête", d.Version),
 		Success: verifySucces(d.Archive),
 	}
-	motDePasse := []byte(password)
 	defer func() {
 		zero(motDePasse)
 		password = ""
 	}()
-	return runJob(info, func(p func(int64, int64)) error {
+	err = runJob(info, func(p func(int64, int64)) error {
 		return pkg.Verify(path, motDePasse, pkg.Options{Progress: p})
 	})
+	if err != nil || depuisSession {
+		return err
+	}
+	return proposerDeGarder(motDePasse, "")
 }
 
 // teaOptions est vide en production. Les tests s'en servent pour faire
@@ -903,24 +1364,143 @@ func tuiVerify(path string) error {
 var teaOptions []tea.ProgramOption
 
 // runJob lance l'opération dans une goroutine et affiche l'écran animé.
+//
+// En plein écran, l'écran de progression est un sous-écran de l'hôte, dans
+// le cadre ; sinon (TERM=dumb, tests sans terminal) il a son propre
+// programme.
 func runJob(info jobInfo, op func(progress func(done, total int64)) error) error {
+	if h := hoteDuCadre(); h != nil {
+		return runJobDansHote(h, info, op)
+	}
+	return runJobSeul(info, op)
+}
+
+// lancerOperation démarre op dans sa goroutine et rend l'écran qui la suit :
+// op dépose son avancement dans un compteur atomique et sa fin dans un canal,
+// que l'écran attend (progressModel.Init). Le canal a une place : la
+// goroutine de l'opération n'attend jamais l'écran, même s'il est déjà fermé.
+// finie est fermé quand op a rendu la main, quoi qu'il soit arrivé à l'écran.
+func lancerOperation(info jobInfo, op func(progress func(done, total int64)) error, largeur int) (model *progressModel, finie <-chan struct{}) {
 	if size, err := pkg.InputSize(info.In); err == nil {
 		info.Size = size
 	}
+	done := new(atomic.Int64)
+	fin := make(chan error, 1)
+	fini := make(chan struct{})
+	model = newProgressModel(info, done, largeur)
+	model.fin = fin
+	go func() {
+		defer close(fini)
+		err := menerOperation(op, done)
+		// La sortie est sur le disque, mais son ✓ attendra la fin de
+		// l'animation : noté ici, à l'instant même, il survit à un Ctrl+C
+		// pendant ces quelques secondes (session.imprimer).
+		if s := sessionCourante; err == nil && info.Ecrit && s != nil {
+			s.noterEcritAvantInterruption(fmt.Sprintf("  %s  %s\n\n", styleAccent.Render("✓"),
+				styleText.Render(info.Out+" écrit avant l'interruption")))
+		}
+		fin <- err
+	}()
+	return model, fini
+}
 
-	var done atomic.Int64
-	model := newProgressModel(info, &done)
+// menerOperation exécute op. Une panique y est rattrapée : elle tuerait le
+// processus sur-le-champ, terminal en mode brut et clair d'une extraction
+// laissé. Les temporaires sont fermés, et la panique remonte comme une
+// erreur, paniqueOperation, que le parcours relance (relancerPanique) pour
+// suivre le chemin de F5 : terminal rendu, phrase oubliée, sortie en 2.
+//
+// Pourquoi pas une simple erreur et le retour au menu : après une panique au
+// milieu du chiffrement, l'état du processus n'est plus sûr, et le registre
+// des temporaires est fermé pour de bon — l'opération suivante échouerait.
+func menerOperation(op func(progress func(done, total int64)) error, done *atomic.Int64) error {
+	return sansPanique(func() error { return op(func(d, _ int64) { done.Store(d) }) })
+}
+
+// sansPanique exécute travail et change une panique en paniqueOperation,
+// temporaires fermés (voir menerOperation). Sert à toute goroutine qui mène
+// un travail pour le parcours : opération avec progression, travail « en
+// cours » (enCours).
+func sansPanique(travail func() error) (err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			fermerTemporaires()
+			err = &paniqueOperation{valeur: r, pile: debug.Stack()}
+		}
+	}()
+	return travail()
+}
+
+// paniqueOperation : une panique rattrapée dans la goroutine d'une
+// opération, avec sa valeur et la pile où elle est née.
+type paniqueOperation struct {
+	valeur any
+	pile   []byte
+}
+
+func (p *paniqueOperation) Error() string {
+	return fmt.Sprintf("erreur interne dans l'opération : %v", p.valeur)
+}
+
+// relancerPanique relance, dans la goroutine du parcours, la panique d'une
+// opération remontée en erreur ; sans effet sur toute autre erreur. Hors
+// plein écran, l'erreur remonte simplement à main.
+func relancerPanique(err error) {
+	var p *paniqueOperation
+	if errors.As(err, &p) {
+		panic(p)
+	}
+}
+
+// runJobDansHote affiche la progression dans le cadre de l'hôte.
+//
+// Ctrl+C : l'hôte ferme l'écran et afficher rend huh.ErrUserAborted alors
+// que l'opération tourne encore. Pas d'os.Exit ici : le programme de l'hôte
+// sort en interruption, et runTUI nettoie les temporaires avant de rendre 130
+// à main. Une opération qui finirait malgré tout après ce nettoyage ne peut
+// plus basculer son temporaire sur la destination (pkg.basculer).
+//
+// En attendant la sortie du processus, runJob ne rend pas la main avant la
+// fin de l'opération : l'appelant effacerait sinon le mot de passe (zero)
+// pendant qu'Argon2 ou le chiffrement le lisent encore.
+func runJobDansHote(h *hote, info jobInfo, op func(progress func(done, total int64)) error) error {
+	// Ctrl+C a pu fermer l'hôte juste avant : l'opération ne doit alors
+	// même pas commencer, elle écrirait pendant que le processus sort.
+	select {
+	case <-h.termine:
+		return huh.ErrUserAborted
+	default:
+	}
+	// La largeur de départ est provisoire : l'hôte donne celle du cadre dès
+	// l'ouverture de l'écran.
+	ecran, finie := lancerOperation(info, op, contentWidth+2)
+	final, err := h.afficher(ecran)
+	if err != nil {
+		<-finie
+		return err
+	}
+	model, ok := final.(*progressModel)
+	if !ok {
+		return fmt.Errorf("écran de progression : modèle final inattendu %T", final)
+	}
+	if model.err != nil {
+		return model.err
+	}
+	// Le ✓ ordinaire prend le relais de la mention d'interruption.
+	if s := sessionCourante; s != nil {
+		s.confirmerEcrit()
+	}
+	annoncer(os.Stdout, "  %s  %s\n\n", styleAccent.Render("✓"), styleText.Render(info.Success))
+	return nil
+}
+
+// runJobSeul affiche l'écran animé dans un programme à lui, à la largeur
+// historique, avec son titre.
+func runJobSeul(info jobInfo, op func(progress func(done, total int64)) error) error {
+	model, _ := lancerOperation(info, op, contentWidth+2)
+	model.autonome = true
 	// Même cadence que les formulaires ; la sortie reste celle par défaut.
 	prog := tea.NewProgram(model, append([]tea.ProgramOption{tea.WithFPS(imagesParSeconde)}, teaOptions...)...)
-
-	// L'erreur passe par un canal plutôt que par une variable partagée : elle
-	// est écrite par la goroutine de chiffrement et lue ici après coup.
-	errCh := make(chan error, 1)
-	go func() {
-		err := op(func(d, _ int64) { done.Store(d) })
-		errCh <- err
-		prog.Send(doneMsg{err: err})
-	}()
 
 	if _, err := prog.Run(); err != nil {
 		// Ctrl+C ferme l'écran mais ne prévient pas l'opération : sans cette
@@ -929,21 +1509,23 @@ func runJob(info jobInfo, op func(progress func(done, total int64)) error) error
 		// temporaires puis on quitte, comme le handler de signal — la mort du
 		// processus est ce qui interrompt réellement le chiffrement.
 		if errors.Is(err, tea.ErrInterrupted) || errors.Is(err, tea.ErrProgramKilled) {
-			pkg.CleanupTemporaries()
+			pkg.FermerTemporaires()
 			fmt.Fprintln(os.Stderr, "\ninterrompu")
 			os.Exit(exitInterrompu)
 		}
 		// Toute autre panne de l'affichage laisse l'opération en cours : la même
 		// sortie franche s'impose, sinon le processus meurt sur le retour d'erreur
 		// en abandonnant un .chto-tmp-* dans le dossier de l'utilisateur.
-		pkg.CleanupTemporaries()
+		pkg.FermerTemporaires()
 		return err
 	}
-	if err := <-errCh; err != nil {
-		return err
+	// Le programme ne sort normalement qu'après doneMsg : l'erreur de
+	// l'opération est alors dans le modèle.
+	if model.err != nil {
+		return model.err
 	}
 
-	fmt.Printf("  %s  %s\n\n", styleAccent.Render("✓"), styleText.Render(info.Success))
+	annoncer(os.Stdout, "  %s  %s\n\n", styleAccent.Render("✓"), styleText.Render(info.Success))
 	return nil
 }
 
@@ -1161,7 +1743,13 @@ func strengthHint(s string) string {
 	if s == "" {
 		return "jamais affiché, jamais visible dans ps ni dans l'historique"
 	}
-	bits := passwordEntropy(s)
+	return verdictDeForce(passwordEntropy(s))
+}
+
+// verdictDeForce met en mots une entropie : bits, verdict, ordre de grandeur
+// d'une attaque hors ligne. Sans zxcvbn : une phrase générée connaît son
+// entropie exacte (pkg.Phrase.Bits).
+func verdictDeForce(bits float64) string {
 	verdict := "solide"
 	switch {
 	case bits < bitsFaible:
@@ -1244,11 +1832,11 @@ func confirmerEcrasement(dest string) (bool, error) {
 	// L'ancre rend errRetour quand l'utilisateur recule : l'appelant réaffiche
 	// alors ses options plutôt que d'abandonner l'opération. Reculer et annuler
 	// ne disent pas la même chose — annuler arrête tout.
-	if err := lancerEtape(form, champ); err != nil {
+	if err := lancerEtapeNommee("écrasement", form, champ); err != nil {
 		return false, err
 	}
 	if !ecraser {
-		return false, fmt.Errorf("annulé : %s n'a pas été touché", dest)
+		return false, annulation{dest: dest}
 	}
 	return true, nil
 }
@@ -1347,4 +1935,16 @@ func metaEncodee(garder bool) pkg.MetadataMode {
 		return pkg.MetadataMinimal
 	}
 	return pkg.MetadataNone
+}
+
+// lireEnTete lit l'en-tête d'un .chto, en le disant dans le cadre plutôt que
+// de le laisser vide le temps de la lecture.
+func lireEnTete(path string) (pkg.Details, error) {
+	var d pkg.Details
+	err := enCours("en-tête", "lecture de l'en-tête…", func() error {
+		var err error
+		d, err = pkg.Inspect(path)
+		return err
+	})
+	return d, err
 }

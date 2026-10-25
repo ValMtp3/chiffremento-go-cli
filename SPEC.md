@@ -57,7 +57,8 @@ Tests : TestScripts
 
 ### R-CLI-08 — Erreurs et abandon
 Une erreur s'écrit `erreur : <cause>` sur stderr avec le code 1. Un abandon
-volontaire par Ctrl+C sort avec le code 130, sans message d'erreur. Échap ne
+volontaire par Ctrl+C sort avec le code 130, sans message d'erreur ; la
+fermeture du terminal (SIGHUP), avec le code 129. Échap ne
 fait pas quitter l'interface guidée (voir R-TUI-04).
 
 Tests : TestScripts, TestE2EInterruption
@@ -148,26 +149,50 @@ Tests : TestE2EVerifier
 
 ### R-TUI-04 — Abandon par Ctrl+C : code 130, terminal restauré, rien d'écrit
 Ctrl+C dans l'interface sort avec le code 130, sans message d'erreur, et rend
-le terminal (écho, curseur) dans son état d'origine. Un abandon avant le
+le terminal (écho, curseur, écran alternatif quitté) dans son état d'origine. Un abandon avant le
 lancement de l'opération laisse le dossier tel qu'il était. Pendant le
 chiffrement d'un gros fichier, écran de progression affiché et temporaire
 `.chto-tmp-*` déjà présent sur le disque, il sort aussi en 130, rend le
 terminal, garde l'original intact, supprime le temporaire et ne laisse aucun
-chiffré. Échap ne fait pas quitter l'interface : son rôle sera fixé à la refonte plein écran.
+chiffré. Si l'opération a déjà écrit sa sortie quand Ctrl+C arrive (fin de
+l'animation), les résumés imprimés à la sortie le disent : « ✓ <sortie> écrit
+avant l'interruption ». Avant de sortir (Ctrl+C, SIGHUP, panique), la
+session attend la fin de l'opération en cours, qui met à zéro ses copies du
+mot de passe, au plus 3 s ; au-delà, elle sort quand même. Si l'attente
+dépasse 200 ms, « fin de l'opération en cours… » s'écrit une fois sur la
+sortie d'erreur, avant les résumés. Le terminal est déjà rendu : un second
+Ctrl+C pendant cette attente tue le processus sur-le-champ. Les temporaires
+sont alors déjà supprimés ; seule la copie du mot de passe tenue par
+l'opération n'est pas mise à zéro.
 
-Tests : TestE2EInterruption, TestE2EInterruptionPendantOperation
+Échap ne fait jamais quitter l'interface. Avant le lancement de l'opération,
+il l'abandonne sans rien écrire et ramène au menu ; sur le menu, il ne fait
+rien ; dans l'explorateur, il remonte d'un dossier. Après l'écriture, sur la
+question de suppression ou de renommage, il vaut « garder » et ne compte pas
+comme un échec.
+
+Tests : TestE2EInterruption, TestE2EInterruptionPendantOperation, TestE2EInterruptionApresEcriture, TestCtrlCApresEcritureLeDit, TestCtrlCAttendQueLeParcoursEfface, TestSortieMalgreUnParcoursBloque, TestAnnonceFinDOperationLente, TestPasDAnnoncePourUnParcoursRapide, TestE2ECtrlCAvecPhraseGardee, TestEchapAvantLancementRevientAuMenu, TestEchapDansUnChampTexteRevientAuMenu, TestEchapSurLeMenuNeFaitRien, TestEchapApresEcritureGarde, TestEchapRemonteDansLExplorateur
 
 ### R-TUI-05 — Mauvaise phrase de passe dans l'interface
-Une mauvaise phrase de passe donne un message clair, et rien n'est écrit.
+Une mauvaise phrase de passe donne un message clair, et rien n'est écrit. En
+plein écran, comme tout échec, elle s'affiche dans le cadre : la cause, puis
+« quoi faire ». Le conseil porté par le message passe en premier, et seul ;
+sinon les erreurs courantes ont un conseil court : mauvaise phrase (vérifier
+majuscules, séparateurs, disposition du clavier), fichier abîmé ou qui n'est
+pas un fichier chiffremento (repartir d'une copie intacte ; sur un fichier
+d'ancien format, une mauvaise phrase donne la même erreur), droits refusés
+(vérifier les droits ou choisir un autre emplacement), destination apparue
+entre la question et l'écriture (la déplacer ou la renommer — l'interface ne
+propose pas -force). `entrée` revient au menu.
 
-Tests : TestE2EMauvaisePhrase
+Tests : TestE2EMauvaisePhrase, TestEcranErreurMauvaisePhrase, TestEcranErreurQuoiFaire, TestConseilReplieGardeSonRetrait, TestFichierAbime, TestContenuNonAuthentifie
 
 ### R-TUI-06 — Grammaire de navigation
 `↑↓` parcourent les réponses, `→` ou `entrée` valident, `←` revient à la
 décision précédente en gardant les réponses déjà données ; dans un champ texte
 et dans l'explorateur, le retour se fait avec `shift+tab`.
 
-Tests : TestAuditValidationAuClavier, TestAuditRetourEnArriere, TestAuditDeplacementDansLesListes, TestAuditExplorateurFleches, TestRetourDepuis, TestRetourDepuisUneListe, TestRetourDepuisUneSaisie, TestRetourDepuisLexplorateur, TestPasDeRetourDepuisLesQuestionsSuivantes, TestEcranMotDePasseRevientEnArriere, TestOptionsSurviventAuRetour, TestFlecheDroiteValideLeDernierChamp, TestFlecheDroiteValideUneQuestionUnique, TestEntreeValideAussiLeDernierChamp, TestFlecheDroiteNeSoumetPasTropTot
+Tests : TestAuditValidationAuClavier, TestAuditRetourEnArriere, TestAuditDeplacementDansLesListes, TestAuditExplorateurFleches, TestRetourDepuis, TestRetourDepuisUneListe, TestRetourDepuisUneSaisie, TestRetourDepuisLexplorateur, TestPasDeRetourDepuisLesQuestionsSuivantes, TestEcranMotDePasseRevientEnArriere, TestOptionsSurviventAuRetour, TestFlecheDroiteValideLeDernierChamp, TestFlecheDroiteValideUneQuestionUnique, TestEntreeValideAussiLeDernierChamp, TestFlecheDroiteNeSoumetPasTropTot, TestTouchesExplorateurFerme, TestPremierChampLuApresInit
 
 ### R-TUI-07 — Changement de mot de passe réservé à la v4
 L'interface refuse de changer le mot de passe d'un fichier d'un ancien format,
@@ -177,10 +202,15 @@ Tests : TestTuiPasswdRefuseLesAnciensFormats
 
 ### R-TUI-08 — Écran de progression
 L'écran de progression dure au moins la durée d'animation prévue, mais la barre
-ne dépasse jamais l'avancement réel. Sa mise en page garde une largeur
-constante, sans couleur ni emoji. Ctrl+C l'interrompt.
+ne dépasse jamais l'avancement réel. En plein écran, il s'affiche dans le cadre
+de l'écran hôte : toutes ses lignes ont la largeur du cadre, qu'elles suivent
+au redimensionnement, sans couleur ni emoji. Échap n'abandonne pas une écriture
+déjà lancée ; l'aide peut s'ouvrir par-dessus sans arrêter l'opération.
+Ctrl+C l'interrompt. Un travail sans progression (lecture de l'en-tête,
+changement de mot de passe) n'affiche son écran « en cours » qu'au-delà de
+100 ms : une lecture d'en-tête ne fait pas clignoter le cadre.
 
-Tests : TestAnimationVisible, TestAnimationNeDepassePasLeReel, TestDureeEcranReelle, TestRenduLargeurConstante, TestRenduSansCouleur, TestCtrlCInterromptLaProgression
+Tests : TestEnCoursRapideSansEcran, TestEnCoursPendantLeTravail, TestEnCoursCtrlCAttendLeTravail, TestAnimationVisible, TestAnimationNeDepassePasLeReel, TestDureeEcranReelle, TestRenduLargeurConstante, TestProgressionSuitLeCadre, TestProgressionDansLeCadreDeLHote, TestProgressionAutonomeLargeurFixe, TestRenduSansCouleur, TestCtrlCInterromptLaProgression, TestEchapPendantEcritureIgnore, TestAidePendantProgression, TestRunJobDansLHote, TestRunJobCtrlCDansLHote
 
 ### R-TUI-09 — Écrasement d'un dossier jamais proposé
 L'interface peut demander confirmation avant d'écraser un fichier, jamais un
@@ -194,6 +224,29 @@ L'interface guidée change le mot de passe d'un `.chto` v4 : ensuite, l'ancien
 mot de passe est refusé, le nouveau ouvre le fichier et le contenu est intact.
 
 Tests : TestE2EChangerMotDePasse
+
+### R-TUI-11 — Menu persistant, quitter et code de sortie
+En plein écran, le menu revient après chaque opération, réussie, abandonnée ou
+ratée. Une opération réussie finit sur une carte résultat (le ✓, le fichier
+produit, puis la question de suppression ou de renommage, « garder » par
+défaut) ; un échec, sur l'écran d'erreur ; `entrée` revient au menu. Refuser d'écraser une
+destination (« annuler ») est un choix, pas un échec. On quitte par la ligne
+« quitter » du menu ou par la touche `q`, qui n'agit que sur le menu, jamais
+pendant une saisie. Le code de sortie de la session vaut 0 si tout a réussi, 1
+si au moins une opération a échoué, 130 sur Ctrl+C, 129 si le terminal est
+fermé (SIGHUP). Les résumés des
+opérations faites, ceux-là mêmes qu'affiche la carte, s'impriment une fois
+l'écran alternatif quitté, y compris sur Ctrl+C pendant une opération
+suivante. Hors plein écran (TERM=dumb), une seule opération est menée et le
+menu garde ses quatre lignes, sans « quitter ». Une panique dans le parcours
+ne laisse ni l'écran alternatif ni le terminal en mode brut ni de
+temporaire : la phrase est oubliée, le terminal rendu, puis la panique est
+imprimée (« erreur interne : … » et la pile) et la session sort en 2. Une
+panique dans la goroutine d'une opération (progression, travail « en
+cours ») suit le même chemin, avec la pile de l'opération ; hors plein
+écran, elle remonte en erreur (« erreur interne dans l'opération : … »).
+
+Tests : TestQuitterDepuisLeMenu, TestMenuSansQuitterEnTermDumb, TestHoteDuCadreEnTermDumb, TestAfficherPrefereLaReponseDeposee, TestPaniqueDuParcoursRendLeTerminal, TestParcoursSansPaniqueNeRendRien, TestPaniqueDeLOperationDevientErreur, TestPaniqueDeLOperationSuitLeCheminDeF5, TestEnCoursPaniqueDevientErreur, TestQSansEffetPendantSaisie, TestCodeSortieApresEchec, TestAnnulerLEcrasementNEstPasUnEchec, TestCtrlCTermineLaSession, TestSortieExterneLibereLeParcours, TestE2EChiffrerPuisDechiffrer, TestE2EMauvaisePhrase, TestE2EInterruptionGardeLesResumes, TestCarteResultatRevientAuMenu, TestQuestionSuppressionDansLaCarte, TestResumesImprimesALaSortie
 
 ## FMT — compatibilité des formats
 
@@ -347,9 +400,15 @@ détruite, aucun `.chto-tmp-*` ne reste, et aucun dossier à moitié extrait
 n'apparaît. L'interruption nettoie les temporaires en cours. Un abandon dans
 l'interface avant le lancement de l'opération n'écrit rien ; un abandon pendant
 l'écriture, temporaire `.chto-tmp-*` déjà créé, le supprime et ne laisse aucun
-chiffré.
+chiffré. Après le nettoyage d'une interruption, l'opération qui tourne encore
+jusqu'à la sortie du processus ne peut plus rien créer ni installer : aucune
+sortie, aucun temporaire, aucun dossier d'extraction recréé. La fermeture du
+terminal (SIGHUP) est une interruption comme les autres, en plein écran comme
+en `-mode` : mêmes nettoyages, sortie en 129 (128 + SIGHUP). Une
+suppression de temporaire qui échoue (Windows : fichier tout juste fermé)
+est réessayée une fois, après 30 ms.
 
-Tests : TestEchecNeDetruitPasLaCible, TestDecryptFluxMauvaisMotDePasseGardeLaDestination, TestDecryptFluxMauvaisMotDePasseNeLaissePasDeFichier, TestNettoyageTemporaires, TestDossierMauvaisMotDePasse, TestE2EInterruption, TestE2EInterruptionPendantOperation, TestNettoyageFermeLeDescripteur, TestEncryptDossierIllisibleRemonteLErreur
+Tests : TestEchecNeDetruitPasLaCible, TestDecryptFluxMauvaisMotDePasseGardeLaDestination, TestDecryptFluxMauvaisMotDePasseNeLaissePasDeFichier, TestNettoyageTemporaires, TestDossierMauvaisMotDePasse, TestE2EInterruption, TestE2EInterruptionPendantOperation, TestNettoyageFermeLeDescripteur, TestEncryptDossierIllisibleRemonteLErreur, TestCommitApresNettoyageRefuse, TestFermerTemporairesRefuseLesNouveaux, TestFermerTemporairesSupprimeCeQuiArrive, TestExtractionInterrompueNeLaisseRien, TestDechiffrementApresFermetureNeLaisseRien, TestExtractionFermeLeFichierOuvert, TestChangePasswordSauvegardeNettoyeeNeTouchePasLEntete, TestE2EInterruptionPendantExtraction, TestCLIRaccrochePendantExtraction, TestCodeDuSignal, TestSurRaccrochageSArrete, TestNettoyageReessaieUneFois, TestNettoyageUnSeulEssaiSiReussi, TestRunJobApresFermetureNeLancePasLOperation
 
 ### R-FS-03 — Fichier vide : aller-retour exact
 Un fichier vide se chiffre et se déchiffre en un fichier vide, ainsi qu'un
@@ -429,6 +488,47 @@ Un nom d'origine restitué est adapté aux règles de la plateforme (caractères
 interdits et espaces de fin sous Windows) avant tout renommage.
 
 Tests : TestAdapterNomReglesWindows, TestNomUtilisableAdapteSousWindows, TestNomUtilisableIdentiteSousUnix
+
+### R-TUI-12 — Phrase gardée pour la session, sur demande
+En plein écran, après une opération réussie (chiffrer, déchiffrer, vérifier)
+dont la phrase a été tapée ou générée, l'interface demande « garder cette
+phrase pour la session ? », « ne pas la garder » par défaut ; Échap vaut non.
+Rien n'est gardé sans oui. Une phrase gardée est signalée par « ● phrase en
+mémoire » en haut, et proposée à la saisie suivante (« utiliser la phrase en
+mémoire », par défaut, ou « la saisir ») ; l'utiliser au chiffrement saute la
+génération, la saisie et la confirmation ; au chiffrement, la question
+montre sous elle le même verdict de force que l'indicateur habituel (pas au
+déchiffrement ni à la vérification). Ce verdict, texte court et non secret,
+est gardé avec la phrase et oublié avec elle : tiré de l'entropie exacte
+pour une phrase générée (zxcvbn n'est pas chargé), repris de l'indicateur
+pour une phrase tapée au chiffrement ; seule une phrase tapée au
+déchiffrement le fait calculer par zxcvbn, une fois, sur une copie mise à
+zéro ensuite. La question de la garder n'est pas
+reposée quand la phrase venait de la session. Changer de mot de passe demande
+toujours une saisie.
+
+La phrase est oubliée, octets mis à zéro et indicateur éteint, après 5 min
+sans touche (sur n'importe quel écran, progression comprise), par la touche
+`o` (hors d'un champ texte), et à la sortie, normale ou par Ctrl+C, avant la
+fin du processus. Le délai court à la fois sur l'heure murale et sur
+l'horloge monotone : ni une heure qui recule (réglage, NTP) ni une mise en
+veille ne prolongent la phrase, et le premier message reçu après l'échéance
+l'efface. Seule la phrase est gardée, jamais une clé dérivée. Un seul
+minuteur est en attente quand une phrase est gardée, aucun sinon.
+
+La phrase gardée vit dans une page verrouillée en mémoire vive, au mieux
+(`mlock` sous macOS et Linux, `VirtualLock` sous Windows) : elle n'est pas
+écrite dans le fichier d'échange du système. Si le verrouillage est refusé
+(limite `RLIMIT_MEMLOCK`, phrase plus longue qu'une page, autre système), la
+phrase est gardée quand même et une note le dit une fois, à la sortie. La
+page est mise à zéro puis déverrouillée à l'oubli.
+
+Limite qui reste : pendant la saisie, huh tient le mot de passe dans des
+chaînes Go (`string`), immuables, qui ne peuvent pas être mises à zéro : elles
+vivent jusqu'au passage du ramasse-miettes et ne sont pas verrouillées. Seules
+les copies en `[]byte` (opération, phrase gardée) sont effacées.
+
+Tests : TestPrendreRendUneCopie, TestPhraseOublieeApresDelai, TestPhraseOublieeMemeSiLHorlogeBouge, TestToucheOOublie, TestPhraseOublieeALaSortie, TestUnSeulMinuteur, TestGarderDemandeAccord, TestPhraseProposeeALaSaisie, TestForcePhraseSession, TestForcePhraseGenereeSansZxcvbn, TestForcePhraseTapeeAuChiffrement, TestVerdictOublieAvecLaPhrase, TestPhraseGardeeVerrouillee, TestPhraseNonVerrouilleeContinue, TestPhraseTropLonguePourUnePage, TestVerrouillageDeLaPlateforme, TestPasswdNeProposePasLaPhrase, TestE2EPhraseGardeePourLaSession
 
 ## PHR — phrase de passe
 

@@ -18,6 +18,10 @@ import (
 // modèle Bubble Tea à part entière. Le chiffrement tourne dans sa propre
 // goroutine et ne fait que déposer un compteur d'octets ; l'animation le lit à
 // chaque frame. Elle ne peut donc jamais ralentir la copie.
+//
+// En plein écran, c'est un sous-écran de l'hôte : il s'affiche dans le cadre,
+// à sa largeur. Hors plein écran (TERM=dumb), runJobSeul lui donne un
+// programme à lui et la largeur historique.
 
 const (
 	frameRate = 66 * time.Millisecond // ~15 images/seconde
@@ -39,6 +43,18 @@ const (
 	// s'efface de lui-même sur un gros fichier, où la progression réelle est
 	// plus lente que le rythme imposé.
 	minDuration = 4 * time.Second
+
+	// largeurMinProgression : en dessous, la ligne d'octets (41 colonnes)
+	// ne tient plus dans le cadre des détails. C'est l'intérieur du plus
+	// petit cadre de l'hôte ; plus étroit (terminal minuscule), l'écran se
+	// dessine à cette largeur et l'hôte coupe ce qui dépasse.
+	largeurMinProgression = largeurCadreMin - bordureEtMarge
+	// cadreDetails : la bordure (1 colonne) et le padding (2 colonnes) de
+	// styleBox, de chaque côté.
+	cadreDetails = 6
+	// largeurDebit : la place réservée à droite de la barre pour le débit ou
+	// la taille, au plus « 1023.9 Mo/s ».
+	largeurDebit = 11
 )
 
 type tickMsg time.Time
@@ -57,6 +73,9 @@ type jobInfo struct {
 	Salt   string
 	// Success : la ligne affichée une fois l'opération réussie.
 	Success string
+	// Ecrit : l'opération pose Out sur le disque (chiffrer, déchiffrer).
+	// Une vérification n'écrit rien.
+	Ecrit bool
 }
 
 type progressModel struct {
@@ -74,6 +93,17 @@ type progressModel struct {
 	err      error
 
 	rng *rand.Rand
+
+	// largeur : les colonnes données par l'hôte (l'intérieur du cadre).
+	largeur int
+	// fin rend l'erreur de l'opération quand elle se termine. Nil dans les
+	// tests qui pilotent opDone à la main.
+	fin <-chan error
+	// autonome : hors plein écran (programme à lui, TERM=dumb), l'écran
+	// affiche lui-même son titre et garde sa largeur historique, quelle que
+	// soit la taille du terminal. Dans l'hôte, la barre du haut porte le titre
+	// et la largeur suit le cadre.
+	autonome bool
 }
 
 // displayRatio est l'avancement *affiché*. Il ne dépasse jamais l'avancement
@@ -106,19 +136,44 @@ func (m *progressModel) displayRatio() float64 {
 	return real
 }
 
-func newProgressModel(info jobInfo, done *atomic.Int64) *progressModel {
+func newProgressModel(info jobInfo, done *atomic.Int64, largeur int) *progressModel {
 	return &progressModel{
-		info:  info,
-		done:  done,
-		total: info.Size,
-		start: time.Now(),
+		info:    info,
+		done:    done,
+		total:   info.Size,
+		start:   time.Now(),
+		largeur: largeur,
 		// Aléa purement décoratif : math/rand suffit largement, inutile de
 		// consommer de l'entropie cryptographique pour du scintillement.
 		rng: rand.New(rand.NewSource(time.Now().UnixNano())),
 	}
 }
 
-func (m *progressModel) Init() tea.Cmd { return tick() }
+// Init lance l'animation et, quand l'opération est branchée, l'attente de sa
+// fin : une commande qui bloque sur le canal puis rend doneMsg. Passer par une
+// commande de l'écran, plutôt qu'un Send de la goroutine de l'opération, garantit
+// que la fin arrive à cet écran-là : un Send pourrait être traité avant que
+// l'hôte ait ouvert l'écran, et se perdre.
+func (m *progressModel) Init() tea.Cmd {
+	if m.fin == nil {
+		return tick()
+	}
+	return tea.Batch(tick(), attendreFin(m.fin))
+}
+
+func attendreFin(fin <-chan error) tea.Cmd {
+	return func() tea.Msg { return doneMsg{err: <-fin} }
+}
+
+// Titre et Touches font de l'écran un sous-écran de l'hôte. Aucune touche
+// propre : seules les globales (aide, Ctrl+C) s'appliquent.
+func (m *progressModel) Titre() string   { return "progression" }
+func (m *progressModel) Touches() string { return "" }
+
+// gardeEchap : l'écriture est lancée, Échap ne doit pas l'abandonner à moitié.
+// L'hôte lui passe donc la touche, que l'écran ignore. Ctrl+C, lui, quitte
+// toujours : le nettoyage des temporaires rend la destination intacte.
+func (m *progressModel) gardeEchap() bool { return true }
 
 func tick() tea.Cmd {
 	return tea.Tick(frameRate, func(t time.Time) tea.Msg { return tickMsg(t) })
@@ -126,6 +181,13 @@ func tick() tea.Cmd {
 
 func (m *progressModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case tea.WindowSizeMsg:
+		// Bubble Tea envoie la taille du terminal au démarrage, même hors de
+		// l'hôte : seule celle du cadre compte.
+		if !m.autonome {
+			m.largeur = msg.Width
+		}
+		return m, nil
 	case tickMsg:
 		// On ne ferme l'écran que quand l'opération est finie *et* que la barre
 		// a fini de se remplir, sinon on n'aurait rien vu passer.
@@ -147,9 +209,10 @@ func (m *progressModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case tea.KeyMsg:
 		// En mode brut, Ctrl+C arrive comme une touche et non comme un signal.
-		// On le transforme en interruption : runJob nettoie alors les
+		// On le transforme en interruption : runJobSeul nettoie alors les
 		// temporaires et sort en 130. Rien n'est perdu — l'écriture atomique
-		// n'a pas encore touché la destination.
+		// n'a pas encore touché la destination. Dans l'hôte, Ctrl+C n'arrive
+		// pas jusqu'ici : l'hôte le traite lui-même.
 		if msg.Type == tea.KeyCtrlC {
 			return m, tea.Interrupt
 		}
@@ -163,22 +226,33 @@ func (m *progressModel) View() string {
 
 	var b strings.Builder
 
+	// Toute la largeur suit le cadre : le cadre des détails prend exactement
+	// la place donnée, et chaque valeur est coupée à ce qui reste. Une valeur
+	// trop longue repliée ajouterait une ligne et ferait sauter la barre.
+	largeur := max(m.largeur, largeurMinProgression)
+	texte := largeur - cadreDetails
+	valeur := texte - labelWidth
+
 	const sizeCol = 9
-	nameWidth := innerWidth - labelWidth - sizeCol
+	nameWidth := valeur - sizeCol
 
 	b.WriteString(styleLabel.Render("entrée") + styleText.Render(pad(base(m.info.In), nameWidth)) +
 		styleDim.Render(rightAlign(humanSize(m.info.Size), sizeCol)) + "\n")
-	b.WriteString(styleLabel.Render("sortie") + styleText.Render(pad(base(m.info.Out), nameWidth+sizeCol)) + "\n\n")
+	b.WriteString(styleLabel.Render("sortie") + styleText.Render(pad(base(m.info.Out), valeur)) + "\n\n")
 
-	b.WriteString(styleLabel.Render("aead") + styleAccent.Render(m.info.AEAD) + "\n")
-	b.WriteString(styleLabel.Render("kdf") + styleAccent.Render(m.info.KDF) + "\n")
-	b.WriteString(styleLabel.Render("sel") + styleDim.Render(m.info.Salt) + "\n\n")
+	b.WriteString(styleLabel.Render("aead") + styleAccent.Render(pad(m.info.AEAD, valeur)) + "\n")
+	b.WriteString(styleLabel.Render("kdf") + styleAccent.Render(pad(m.info.KDF, valeur)) + "\n")
+	b.WriteString(styleLabel.Render("sel") + styleDim.Render(pad(m.info.Salt, valeur)) + "\n\n")
 
 	b.WriteString(m.scramble(ratio) + "\n")
-	b.WriteString(m.bar(ratio, done))
+	b.WriteString(m.bar(ratio, done, texte))
 
+	// Width compte le padding mais pas la bordure (convention lipgloss).
+	box := styleBox.Width(largeur - 2).Render(b.String())
+	if !m.autonome {
+		return box
+	}
 	title := styleDim.Render("chiffremento ") + styleAccent.Render(m.info.Action)
-	box := styleBox.Width(contentWidth).Render(b.String())
 	return "\n" + lipgloss.JoinVertical(lipgloss.Left,
 		"  "+title+styleFaint.Render("  "+version),
 		box,
@@ -205,13 +279,13 @@ func (m *progressModel) scramble(ratio float64) string {
 	return strings.Join(parts, " ")
 }
 
-func (m *progressModel) bar(ratio float64, done int64) string {
-	filled := int(ratio * barWidth)
-	if filled > barWidth {
-		filled = barWidth
-	}
+// bar dessine la barre sur barWidth colonnes, moins si le cadre le plus étroit
+// ne laisse pas la place du pourcentage et du débit à côté.
+func (m *progressModel) bar(ratio float64, done int64, texte int) string {
+	longueur := max(min(barWidth, texte-len(" 100% ")-largeurDebit), 0)
+	filled := min(int(ratio*float64(longueur)), longueur)
 	bar := styleAccent.Render(strings.Repeat("█", filled)) +
-		styleFaint.Render(strings.Repeat("░", barWidth-filled))
+		styleFaint.Render(strings.Repeat("░", longueur-filled))
 
 	// Le débit est calculé sur les octets réellement traités, pas sur la barre
 	// bridée. Une fois l'opération finie il n'a plus de sens, on le remplace

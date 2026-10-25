@@ -5,6 +5,8 @@ package main
 import (
 	"bytes"
 	"errors"
+	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -97,6 +99,7 @@ type pilote struct {
 	err  error         // résultat de cmd.Wait, lisible après fini
 
 	action string // dernière opération choisie, pour reconnaître l'écran suivant
+	menuVu bool   // le menu est à l'écran, et aucune touche n'est partie depuis
 }
 
 // lancerPilote démarre le binaire de test comme un chiffremento sans argument,
@@ -289,6 +292,7 @@ func (p *pilote) attendreFinDeSortie() {
 // a été traitée.
 func (p *pilote) touches(seq string) {
 	p.t.Helper()
+	p.menuVu = false
 	if _, err := p.maitre.WriteString(seq); err != nil {
 		p.t.Fatalf("écriture sur le terminal: %v", err)
 	}
@@ -474,6 +478,27 @@ func (p *pilote) repondreSuppression(supprimer bool) {
 	p.touches(toucheEntree)
 }
 
+// repondreGarder répond à la question posée après une opération réussie avec
+// une phrase tapée : la garder pour la session ou non. « ne pas la garder »
+// est sous le curseur ; « la garder » est juste au-dessus.
+func (p *pilote) repondreGarder(garder bool) {
+	p.t.Helper()
+	p.attendre(curseur + "ne pas la garder")
+	if garder {
+		p.touches(toucheHaut)
+		p.attendre(curseur + "la garder")
+	}
+	p.touches(toucheEntree)
+}
+
+// accepterPhraseEnMemoire valide « utiliser la phrase en mémoire », proposé
+// par défaut à la place du champ du mot de passe.
+func (p *pilote) accepterPhraseEnMemoire() {
+	p.t.Helper()
+	p.attendre(curseur + "utiliser la phrase en mémoire")
+	p.touches(toucheEntree)
+}
+
 // attendreSuccesVerification attend le message de fin d'une vérification
 // réussie d'un fichier.
 func (p *pilote) attendreSuccesVerification() {
@@ -481,10 +506,37 @@ func (p *pilote) attendreSuccesVerification() {
 	p.attendre(verifySucces(false))
 }
 
-// attendreRefusMotDePasse attend l'annonce d'une mauvaise phrase de passe.
+// attendreRefusMotDePasse attend l'annonce d'une mauvaise phrase de passe,
+// affichée dans le cadre, puis revient au menu.
 func (p *pilote) attendreRefusMotDePasse() {
 	p.t.Helper()
 	p.attendre(pkg.ErrBadPassword.Error())
+	p.revenirAuMenu()
+}
+
+// revenirAuMenu referme la carte résultat ou l'écran d'erreur par ⏎. Le
+// repère est la barre du bas, propre à ces deux écrans : le ✓ peut occuper
+// la même ligne que sur la question d'avant, et bubbletea ne réécrit pas une
+// ligne inchangée. La touche part après le repère : sans écran ouvert, l'hôte
+// la jetterait.
+func (p *pilote) revenirAuMenu() {
+	p.t.Helper()
+	p.attendre(touchesResultat)
+	p.touches(toucheEntree)
+}
+
+// apresEcranAlternatif rend, débarrassé des séquences de contrôle, ce que le
+// programme a écrit après avoir quitté l'écran alternatif pour la dernière
+// fois : les résumés de la session.
+func (p *pilote) apresEcranAlternatif() string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	brut := string(p.sortie)
+	i := strings.LastIndex(brut, "\x1b[?1049l")
+	if i < 0 {
+		return ""
+	}
+	return ansi.Strip(brut[i:])
 }
 
 // abandonnerParCtrlC appuie sur Ctrl+C. En mode brut, c'est une touche et non
@@ -492,6 +544,46 @@ func (p *pilote) attendreRefusMotDePasse() {
 func (p *pilote) abandonnerParCtrlC() {
 	p.t.Helper()
 	p.touches(toucheCtrlC)
+}
+
+// chiffreAnnonceUneFois vérifie, une fois le processus sorti, que le
+// terminal ordinaire annonce nom par un ✓, exactement une fois : soit le ✓
+// ordinaire, soit la mention « écrit avant l'interruption », jamais les deux
+// ni aucun.
+func (p *pilote) chiffreAnnonceUneFois(nom string) {
+	p.t.Helper()
+	p.attendreFinDeSortie()
+	apres := p.apresEcranAlternatif()
+	if n := strings.Count(apres, "✓  "+nom); n != 1 {
+		p.t.Fatalf("%q annoncé %d fois après l'écran alternatif, attendu 1 : %q", nom, n, apres)
+	}
+}
+
+// raccrocher envoie SIGHUP au programme, comme la fermeture de la fenêtre du
+// terminal. L'enfant est dans sa propre session (Setsid) : fermer le pty ne
+// le lui enverrait pas.
+func (p *pilote) raccrocher() {
+	p.t.Helper()
+	if err := p.cmd.Process.Signal(syscall.SIGHUP); err != nil {
+		p.t.Fatal(err)
+	}
+}
+
+// attendreMenu attend le retour au menu après une opération.
+func (p *pilote) attendreMenu() {
+	p.t.Helper()
+	p.attendre("désigner la cible")
+	p.menuVu = true
+}
+
+// quitter quitte la session depuis le menu, par la touche q, une fois le
+// menu revenu.
+func (p *pilote) quitter() {
+	p.t.Helper()
+	if !p.menuVu {
+		p.attendreMenu()
+	}
+	p.touches("q")
 }
 
 // codeDeSortie attend que le programme se termine de lui-même et rend son code.
@@ -516,8 +608,9 @@ func (p *pilote) codeDeSortie() int {
 }
 
 // terminalRestaure vérifie, une fois le programme sorti, que le terminal a
-// retrouvé ses réglages d'origine (écho, mode ligne) et que le curseur a été
-// rendu visible après avoir été masqué.
+// retrouvé ses réglages d'origine (écho, mode ligne), que le curseur a été
+// rendu visible après avoir été masqué, et que l'écran alternatif, ouvert par
+// le plein écran, a été quitté.
 func (p *pilote) terminalRestaure() {
 	p.t.Helper()
 	etat, err := term.GetState(int(p.esclave.Fd()))
@@ -534,6 +627,21 @@ func (p *pilote) terminalRestaure() {
 	if strings.LastIndex(brut, masque) > strings.LastIndex(brut, montre) {
 		p.t.Error("le curseur est resté masqué à la sortie")
 	}
+	const entreeAlt, sortieAlt = "\x1b[?1049h", "\x1b[?1049l"
+	if strings.LastIndex(brut, entreeAlt) < 0 {
+		p.t.Error("l'interface ne s'est pas ouverte en plein écran (écran alternatif)")
+	}
+	if strings.LastIndex(brut, entreeAlt) > strings.LastIndex(brut, sortieAlt) {
+		p.t.Error("l'écran alternatif n'a pas été quitté à la sortie")
+	}
+}
+
+// ecranAlternatifQuitte dit si le programme a déjà quitté l'écran alternatif
+// une fois au moins.
+func (p *pilote) ecranAlternatifQuitte() bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return bytes.Contains(p.sortie, []byte("\x1b[?1049l"))
 }
 
 // contenuDossier liste les noms présents dans dossier, triés.
@@ -559,8 +667,9 @@ func ecrireFichier(t *testing.T, chemin string, contenu []byte) {
 	}
 }
 
-// R-TUI-01 et R-TUI-02 : un fichier chiffré par l'interface se déchiffre par
-// l'interface, à l'octet près.
+// R-TUI-01, R-TUI-02 et R-TUI-11 : un fichier chiffré par l'interface se
+// déchiffre par l'interface, à l'octet près, dans la même session : le menu
+// revient après chaque opération, et quitter sort en code 0.
 func TestE2EChiffrerPuisDechiffrer(t *testing.T) {
 	dossier := t.TempDir()
 	original := []byte("données confidentielles\n")
@@ -572,30 +681,101 @@ func TestE2EChiffrerPuisDechiffrer(t *testing.T) {
 	p.validerOptionsParDefaut()
 	p.saisirPhrase("correct horse battery staple", true)
 	p.repondreSuppression(false)
-	if code := p.codeDeSortie(); code != 0 {
-		t.Fatalf("chiffrement : code %d ; fin de l'écran :\n%s", code, p.queue())
-	}
+	p.repondreGarder(false)
+	p.revenirAuMenu()
 	if _, err := os.Stat(filepath.Join(dossier, "secret.txt.chto")); err != nil {
 		t.Fatalf("aucun chiffré produit : %v", err)
 	}
 
+	// L'original retiré pendant que la session continue : le déchiffrement
+	// n'a pas à demander s'il faut l'écraser.
 	if err := os.Remove(filepath.Join(dossier, "secret.txt")); err != nil {
 		t.Fatal(err)
 	}
-	p = lancerPilote(t, dossier)
 	p.choisirAction("déchiffrer")
 	p.saisirChemin("secret.txt.chto")
 	p.saisirPhrase("correct horse battery staple", false)
 	p.repondreSuppression(false)
+	p.repondreGarder(false)
+	p.revenirAuMenu()
+	p.quitter()
 	if code := p.codeDeSortie(); code != 0 {
-		t.Fatalf("déchiffrement : code %d ; fin de l'écran :\n%s", code, p.queue())
+		t.Fatalf("session : code %d ; fin de l'écran :\n%s", code, p.queue())
 	}
+	p.terminalRestaure()
 	obtenu, err := os.ReadFile(filepath.Join(dossier, "secret.txt"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !bytes.Equal(obtenu, original) {
 		t.Fatalf("contenu déchiffré différent : %q", obtenu)
+	}
+}
+
+// R-TUI-12 : la phrase gardée après le chiffrement est proposée au
+// déchiffrement suivant ; l'accepter suffit à restituer le contenu, sans
+// rien retaper, et la question de la garder n'est pas reposée.
+func TestE2EPhraseGardeePourLaSession(t *testing.T) {
+	dossier := t.TempDir()
+	original := []byte("données confidentielles\n")
+	ecrireFichier(t, filepath.Join(dossier, "secret.txt"), original)
+
+	p := lancerPilote(t, dossier)
+	p.choisirAction("chiffrer")
+	p.saisirChemin("secret.txt")
+	p.validerOptionsParDefaut()
+	p.saisirPhrase("correct horse battery staple", true)
+	p.repondreSuppression(false)
+	p.repondreGarder(true)
+	p.attendre("● phrase en mémoire")
+	p.revenirAuMenu()
+
+	if err := os.Remove(filepath.Join(dossier, "secret.txt")); err != nil {
+		t.Fatal(err)
+	}
+	p.choisirAction("déchiffrer")
+	p.saisirChemin("secret.txt.chto")
+	p.accepterPhraseEnMemoire()
+	p.repondreSuppression(false)
+	p.revenirAuMenu()
+	p.quitter()
+	if code := p.codeDeSortie(); code != 0 {
+		t.Fatalf("session : code %d ; fin de l'écran :\n%s", code, p.queue())
+	}
+	p.terminalRestaure()
+	obtenu, err := os.ReadFile(filepath.Join(dossier, "secret.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(obtenu, original) {
+		t.Fatalf("contenu déchiffré différent : %q", obtenu)
+	}
+}
+
+// R-TUI-12 et R-TUI-04 : Ctrl+C avec une phrase gardée sort en 130 et rend
+// le terminal, comme sans phrase. L'effacement lui-même (octets à zéro avant
+// la sortie) se vérifie dans le processus : TestPhraseOublieeALaSortie.
+func TestE2ECtrlCAvecPhraseGardee(t *testing.T) {
+	dossier := t.TempDir()
+	ecrireFichier(t, filepath.Join(dossier, "secret.txt"), []byte("données\n"))
+
+	p := lancerPilote(t, dossier)
+	p.choisirAction("chiffrer")
+	p.saisirChemin("secret.txt")
+	p.validerOptionsParDefaut()
+	p.saisirPhrase("correct horse battery staple", true)
+	p.repondreSuppression(false)
+	p.repondreGarder(true)
+	p.attendre("● phrase en mémoire")
+	p.revenirAuMenu()
+	p.attendreMenu()
+	p.abandonnerParCtrlC()
+	if code := p.codeDeSortie(); code != exitInterrompu {
+		t.Fatalf("code %d, attendu %d ; fin de l'écran :\n%s", code, exitInterrompu, p.queue())
+	}
+	p.terminalRestaure()
+	if strings.Contains(p.ecran(), "erreur :") {
+		t.Errorf("Ctrl+C avec une phrase gardée affiche une erreur ; fin de l'écran :\n%s", p.queue())
 	}
 }
 
@@ -622,7 +802,11 @@ func TestE2EVerifier(t *testing.T) {
 	p.choisirAction("vérifier")
 	p.saisirChemin("notes.txt.chto")
 	p.saisirPhrase("phrase de controle", false)
+	// Le ✓ s'affiche dans la carte résultat, avant le retour au menu.
 	p.attendreSuccesVerification()
+	p.repondreGarder(false)
+	p.revenirAuMenu()
+	p.quitter()
 	if code := p.codeDeSortie(); code != 0 {
 		t.Fatalf("vérification : code %d ; fin de l'écran :\n%s", code, p.queue())
 	}
@@ -631,8 +815,8 @@ func TestE2EVerifier(t *testing.T) {
 	}
 }
 
-// R-TUI-05 : une mauvaise phrase est annoncée clairement, et aucun clair n'est
-// écrit.
+// R-TUI-05 et R-TUI-11 : une mauvaise phrase est annoncée clairement, aucun
+// clair n'est écrit, la session revient au menu, et quitter sort en code 1.
 func TestE2EMauvaisePhrase(t *testing.T) {
 	dossier := t.TempDir()
 	ecrireFichier(t, filepath.Join(dossier, "notes.txt"), []byte("contenu\n"))
@@ -647,9 +831,11 @@ func TestE2EMauvaisePhrase(t *testing.T) {
 	p.saisirChemin("notes.txt.chto")
 	p.saisirPhrase("une autre phrase", false)
 	p.attendreRefusMotDePasse()
+	p.quitter()
 	if code := p.codeDeSortie(); code != 1 {
 		t.Fatalf("mauvaise phrase : code %d, attendu 1", code)
 	}
+	p.terminalRestaure()
 	if apres := contenuDossier(t, dossier); !slices.Equal(avant, apres) {
 		t.Fatalf("un fichier a été écrit malgré la mauvaise phrase : %v puis %v", avant, apres)
 	}
@@ -718,6 +904,11 @@ func TestE2EInterruptionPendantOperation(t *testing.T) {
 	p.saisirPhrase("phrase d'abandon", true)
 	p.attendreProgression()
 	p.attendreTemporaire(dossier)
+	// La progression s'affiche dans le cadre de l'hôte : l'écran alternatif
+	// n'a pas été quitté pour la montrer (le terminal n'est pas prêté).
+	if p.ecranAlternatifQuitte() {
+		t.Error("l'écran alternatif a été quitté pour afficher la progression")
+	}
 	p.abandonnerParCtrlC()
 
 	if code := p.codeDeSortie(); code != exitInterrompu {
@@ -736,6 +927,199 @@ func TestE2EInterruptionPendantOperation(t *testing.T) {
 	}
 }
 
+// R-FS-02 : Ctrl+C pendant l'extraction d'un dossier (beaucoup de petits
+// fichiers) sort en 130 sans laisser de .chto-tmp-* nulle part — l'extraction
+// recréait le dossier temporaire supprimé et y écrivait du clair — ni de
+// destination, et sans toucher au .chto. SIGHUP (fenêtre du terminal fermée)
+// fait de même, et sort en 129 : avant, le processus mourait sur-le-champ en
+// laissant le clair déjà extrait.
+func TestE2EInterruptionPendantExtraction(t *testing.T) {
+	cas := []struct {
+		nom      string
+		abandon  func(p *pilote)
+		code     int
+		terminal bool // le terminal est encore là pour être vérifié
+	}{
+		{"ctrl+c", (*pilote).abandonnerParCtrlC, exitInterrompu, true},
+		{"sighup", (*pilote).raccrocher, exitRaccroche, false},
+	}
+	for _, c := range cas {
+		t.Run(c.nom, func(t *testing.T) {
+			interrompreUneExtraction(t, c.abandon, c.code, c.terminal)
+		})
+	}
+}
+
+// interrompreUneExtraction lance l'extraction d'un dossier de 20 000
+// fichiers dans l'interface, l'abandonne par abandon une fois le temporaire
+// créé, puis vérifie le code de sortie et qu'il ne reste rien.
+func interrompreUneExtraction(t *testing.T, abandon func(p *pilote), code int, verifierTerminal bool) {
+	ext := preparerExtractionLongue(t)
+	p := lancerPilote(t, ext.dossier)
+	p.choisirAction("déchiffrer")
+	p.saisirChemin("archive.chto")
+	p.saisirPhrase(ext.phrase, false)
+	p.attendreProgression()
+	p.attendreTemporaire(ext.dossier)
+	abandon(p)
+
+	if obtenu := p.codeDeSortie(); obtenu != code {
+		t.Fatalf("code %d, attendu %d ; fin de l'écran :\n%s", obtenu, code, p.queue())
+	}
+	if verifierTerminal {
+		p.terminalRestaure()
+	}
+	ext.rienNeReste(t)
+}
+
+// R-FS-02 : en mode -mode, SIGHUP pendant l'extraction d'un dossier sort en
+// 129 sans laisser de temporaire ni de destination, comme Ctrl+C (130).
+func TestCLIRaccrochePendantExtraction(t *testing.T) {
+	ext := preparerExtractionLongue(t)
+	cmd := exec.Command(os.Args[0], "-mode", "dec", "-in", "archive.chto")
+	cmd.Env = append(os.Environ(), "CHIFFREMENTO_E2E_MAIN=1")
+	cmd.Dir = ext.dossier
+	cmd.Stdin = strings.NewReader(ext.phrase + "\n")
+	var sortie bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &sortie, &sortie
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	fini := make(chan error, 1)
+	go func() { fini <- cmd.Wait() }()
+
+	limite := time.Now().Add(delaiEcran)
+	for {
+		temporaires, err := filepath.Glob(filepath.Join(ext.dossier, ".chto-tmp-*"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(temporaires) > 0 {
+			break
+		}
+		if time.Now().After(limite) {
+			_ = cmd.Process.Kill()
+			t.Fatalf("aucun temporaire en %v ; sortie :\n%s", delaiEcran, sortie.String())
+		}
+		time.Sleep(pasDeSondage)
+	}
+	if err := cmd.Process.Signal(syscall.SIGHUP); err != nil {
+		t.Fatal(err)
+	}
+	var err error
+	select {
+	case err = <-fini:
+	case <-time.After(delaiSortie):
+		_ = cmd.Process.Kill()
+		t.Fatal("le programme ne s'est pas terminé après SIGHUP")
+	}
+	var fin *exec.ExitError
+	if !errors.As(err, &fin) || fin.ExitCode() != exitRaccroche {
+		t.Fatalf("fin = %v, attendu le code %d", err, exitRaccroche)
+	}
+	ext.rienNeReste(t)
+}
+
+// extractionLongue : un dossier de 20 000 petits fichiers chiffré, la source
+// supprimée — assez long à extraire pour qu'un abandon tombe au milieu.
+type extractionLongue struct {
+	dossier, source, chiffre, phrase string
+	avant                            []byte
+}
+
+func preparerExtractionLongue(t *testing.T) extractionLongue {
+	t.Helper()
+	dossier := t.TempDir()
+	ext := extractionLongue{
+		dossier: dossier,
+		source:  filepath.Join(dossier, "archive"),
+		chiffre: filepath.Join(dossier, "archive.chto"),
+		phrase:  "phrase du dossier",
+	}
+	// Assez d'entrées pour que l'extraction soit en cours à l'arrivée de
+	// l'abandon (~0,4 s pour 5 000 fichiers).
+	const fichiers = 20000
+	for i := range fichiers {
+		sous := filepath.Join(ext.source, fmt.Sprintf("d%02d", i%20))
+		if i < 20 {
+			if err := os.MkdirAll(sous, 0700); err != nil {
+				t.Fatal(err)
+			}
+		}
+		ecrireFichier(t, filepath.Join(sous, fmt.Sprintf("f%05d.txt", i)), []byte("clair à ne pas laisser\n"))
+	}
+	chiffrerPourTest(t, ext.source, ext.chiffre, ext.phrase)
+	if err := os.RemoveAll(ext.source); err != nil {
+		t.Fatal(err)
+	}
+	avant, err := os.ReadFile(ext.chiffre)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ext.avant = avant
+	return ext
+}
+
+// rienNeReste vérifie qu'un abandon n'a laissé ni .chto-tmp-*, ni
+// destination, et n'a pas touché au .chto.
+func (ext extractionLongue) rienNeReste(t *testing.T) {
+	t.Helper()
+	err := filepath.WalkDir(ext.dossier, func(chemin string, _ fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if strings.HasPrefix(filepath.Base(chemin), ".chto-tmp-") {
+			t.Errorf("temporaire resté après l'interruption : %s", chemin)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(ext.source); !os.IsNotExist(err) {
+		t.Errorf("la destination existe après l'interruption (Lstat : %v)", err)
+	}
+	apres, err := os.ReadFile(ext.chiffre)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(ext.avant, apres) {
+		t.Error("le .chto a été modifié par l'interruption")
+	}
+}
+
+// R-TUI-04 et R-TUI-11 : Ctrl+C pendant une deuxième opération n'efface pas
+// les résumés de la première, mis de côté pendant l'écran alternatif : ils
+// s'impriment avant la sortie en 130.
+func TestE2EInterruptionGardeLesResumes(t *testing.T) {
+	dossier := t.TempDir()
+	ecrireFichier(t, filepath.Join(dossier, "premier.txt"), []byte("premier\n"))
+	ecrireFichier(t, filepath.Join(dossier, "gros.bin"), bytes.Repeat([]byte("contenu à protéger 0123456789\n"), 2<<20))
+
+	p := lancerPilote(t, dossier)
+	p.choisirAction("chiffrer")
+	p.saisirChemin("premier.txt")
+	p.validerOptionsParDefaut()
+	p.saisirPhrase("phrase du premier", true)
+	p.repondreSuppression(false)
+	p.repondreGarder(false)
+	p.revenirAuMenu()
+
+	// choisirAction attend lui-même le retour du menu.
+	p.choisirAction("chiffrer")
+	p.saisirChemin("gros.bin")
+	p.validerOptionsParDefaut()
+	p.saisirPhrase("phrase du second", true)
+	p.attendreProgression()
+	p.attendreTemporaire(dossier)
+	p.abandonnerParCtrlC()
+	if code := p.codeDeSortie(); code != exitInterrompu {
+		t.Fatalf("code %d, attendu %d ; fin de l'écran :\n%s", code, exitInterrompu, p.queue())
+	}
+	p.attendre("✓  premier.txt.chto")
+	p.terminalRestaure()
+}
+
 // La suppression proposée après le chiffrement efface l'original, et le
 // chiffré gardé se déchiffre.
 func TestE2ESuppressionApresCoup(t *testing.T) {
@@ -749,6 +1133,9 @@ func TestE2ESuppressionApresCoup(t *testing.T) {
 	p.validerOptionsParDefaut()
 	p.saisirPhrase("phrase de suppression", true)
 	p.repondreSuppression(true)
+	p.repondreGarder(false)
+	p.revenirAuMenu()
+	p.quitter()
 	if code := p.codeDeSortie(); code != 0 {
 		t.Fatalf("chiffrement : code %d ; fin de l'écran :\n%s", code, p.queue())
 	}
@@ -786,6 +1173,9 @@ func TestE2EChangerMotDePasse(t *testing.T) {
 	p.choisirAction("changer le mot de passe")
 	p.saisirChemin("coffre.txt.chto")
 	p.changerPhrase("ancienne phrase", "nouvelle phrase de passe")
+	p.attendre("mot de passe changé")
+	p.revenirAuMenu()
+	p.quitter()
 	if code := p.codeDeSortie(); code != 0 {
 		t.Fatalf("changement : code %d ; fin de l'écran :\n%s", code, p.queue())
 	}
@@ -803,5 +1193,98 @@ func TestE2EChangerMotDePasse(t *testing.T) {
 	}
 	if !bytes.Equal(obtenu, original) {
 		t.Fatalf("contenu relu différent : %q", obtenu)
+	}
+}
+
+// Les résumés affichés dans la carte sont réimprimés tels quels après la
+// sortie de l'écran alternatif : le ✓ et le chemin produit restent dans le
+// terminal une fois la session finie.
+func TestResumesImprimesALaSortie(t *testing.T) {
+	dossier := t.TempDir()
+	ecrireFichier(t, filepath.Join(dossier, "secret.txt"), []byte("à garder\n"))
+
+	p := lancerPilote(t, dossier)
+	p.choisirAction("chiffrer")
+	p.saisirChemin("secret.txt")
+	p.validerOptionsParDefaut()
+	p.saisirPhrase("phrase des résumés", true)
+	p.repondreSuppression(false)
+	p.repondreGarder(false)
+	p.revenirAuMenu()
+	p.quitter()
+	if code := p.codeDeSortie(); code != 0 {
+		t.Fatalf("code %d ; fin de l'écran :\n%s", code, p.queue())
+	}
+	p.attendreFinDeSortie()
+	if apres := p.apresEcranAlternatif(); !strings.Contains(apres, "✓  secret.txt.chto") {
+		t.Fatalf("le résumé n'est pas réimprimé après l'écran alternatif : %q", apres)
+	}
+}
+
+// R-TUI-04 : Ctrl+C alors que le chiffré est déjà écrit sort en 130 ; les
+// résumés imprimés à la sortie disent que le fichier existe.
+//
+// Sur une machine rapide, Ctrl+C tombe pendant la fin de l'animation et c'est
+// la mention « écrit avant l'interruption » qui le dit. Sur une machine lente
+// (Argon2 plus long que les 4 s de l'animation, runner macOS sous -race),
+// l'écran s'est déjà fermé et c'est le ✓ ordinaire : les deux sont justes,
+// et on ne peut pas choisir lequel sans une pause à l'aveugle. La mention
+// elle-même est vérifiée sans pty par TestMentionEcritAvantInterruption.
+func TestE2EInterruptionApresEcriture(t *testing.T) {
+	dossier := t.TempDir()
+	ecrireFichier(t, filepath.Join(dossier, "petit.txt"), []byte("vite chiffré\n"))
+	chiffre := filepath.Join(dossier, "petit.txt.chto")
+
+	p := lancerPilote(t, dossier)
+	p.choisirAction("chiffrer")
+	p.saisirChemin("petit.txt")
+	p.validerOptionsParDefaut()
+	p.saisirPhrase("phrase interrompue", true)
+	p.attendreProgression()
+	limite := time.Now().Add(delaiEcran)
+	for {
+		if _, err := os.Stat(chiffre); err == nil {
+			break
+		}
+		if time.Now().After(limite) {
+			t.Fatalf("aucun chiffré en %v ; fin de l'écran :\n%s", delaiEcran, p.queue())
+		}
+		time.Sleep(pasDeSondage)
+	}
+	p.abandonnerParCtrlC()
+	if code := p.codeDeSortie(); code != exitInterrompu {
+		t.Fatalf("code %d, attendu %d ; fin de l'écran :\n%s", code, exitInterrompu, p.queue())
+	}
+	p.chiffreAnnonceUneFois("petit.txt.chto")
+	p.terminalRestaure()
+	if _, err := os.Stat(chiffre); err != nil {
+		t.Fatalf("le chiffré annoncé n'existe pas : %v", err)
+	}
+}
+
+// R-TUI-04, machine lente : quand Argon2 dure plus que les 4 s de l'animation
+// (runner macOS sous -race), l'écran se ferme dès que l'opération rend la
+// main, et Ctrl+C tombe sur la question de suppression. C'est l'état où le CI
+// a échoué ; on l'atteint ici sans pause, en attendant la question. Le ✓
+// ordinaire, déjà noté, suffit à dire que le fichier existe.
+func TestE2EInterruptionSurQuestionSuppression(t *testing.T) {
+	dossier := t.TempDir()
+	ecrireFichier(t, filepath.Join(dossier, "petit.txt"), []byte("vite chiffré\n"))
+	chiffre := filepath.Join(dossier, "petit.txt.chto")
+
+	p := lancerPilote(t, dossier)
+	p.choisirAction("chiffrer")
+	p.saisirChemin("petit.txt")
+	p.validerOptionsParDefaut()
+	p.saisirPhrase("phrase interrompue", true)
+	p.attendre(curseur + "garder")
+	p.abandonnerParCtrlC()
+	if code := p.codeDeSortie(); code != exitInterrompu {
+		t.Fatalf("code %d, attendu %d ; fin de l'écran :\n%s", code, exitInterrompu, p.queue())
+	}
+	p.chiffreAnnonceUneFois("petit.txt.chto")
+	p.terminalRestaure()
+	if _, err := os.Stat(chiffre); err != nil {
+		t.Fatalf("le chiffré annoncé n'existe pas : %v", err)
 	}
 }

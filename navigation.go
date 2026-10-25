@@ -64,6 +64,11 @@ func formKeyMap() *huh.KeyMap {
 	k.FilePicker.Down = key.NewBinding(key.WithKeys("down", "j", "ctrl+j", "ctrl+n"), key.WithHelp("↓", "descendre"))
 	k.FilePicker.Open = key.NewBinding(key.WithKeys("l", "right", "enter"), key.WithHelp("→", "ouvrir"))
 	k.FilePicker.Back = key.NewBinding(key.WithKeys("h", "backspace", "left", "esc"), key.WithHelp("←", "remonter"))
+	// Close porte aussi Échap, et huh le teste avant Back : Échap refermait
+	// l'explorateur et passait au champ suivant — le formulaire se validait
+	// sans fichier choisi. On le prive de touche, comme le filtre des listes,
+	// pour qu'Échap remonte d'un dossier comme Back l'annonce.
+	k.FilePicker.Close = key.NewBinding(key.WithKeys(), key.WithHelp("", ""))
 	k.FilePicker.Prev = key.NewBinding(key.WithKeys("shift+tab"), key.WithHelp("shift+tab", "revenir"))
 	k.FilePicker.Next = key.NewBinding(key.WithKeys("tab"), key.WithHelp("tab", "valider"))
 	k.FilePicker.Submit = key.NewBinding(key.WithKeys("enter"), key.WithHelp("entrée", "choisir"))
@@ -167,12 +172,26 @@ func retourDepuis(ancre huh.Field) (touches []string, rappel string) {
 // champ, la touche « précédent » ne mène nulle part, et huh la désactive même
 // à cet endroit. On l'intercepte donc avant lui pour rendre la main à l'écran
 // d'avant.
+//
+// Dans le plein écran, etapeModel est aussi le sous-écran que l'hôte affiche
+// dans son cadre : il annonce ses touches et dit lesquelles il garde.
 type etapeModel struct {
 	form    *huh.Form
 	ancre   huh.Field // champ depuis lequel un retour quitte le formulaire
+	premier huh.Field // champ qui a le focus à l'ouverture
 	touches []string  // touches qui déclenchent ce retour
 	rappel  string
 	retour  bool
+	// dansLeCadre : affiché par l'hôte, dont la barre du bas annonce déjà le
+	// retour ; le rappel sous le formulaire ferait doublon.
+	dansLeCadre bool
+	// titre nomme l'étape dans le fil d'Ariane de l'hôte.
+	titre string
+	// entete s'affiche au-dessus du formulaire, dans le cadre : les résumés
+	// de l'opération (le ✓) au-dessus de la question qui suit l'écriture.
+	entete string
+	// largeur : celle de l'intérieur du cadre, pour replier l'en-tête.
+	largeur int
 }
 
 func newEtapeModel(form *huh.Form, ancre huh.Field) *etapeModel {
@@ -180,16 +199,91 @@ func newEtapeModel(form *huh.Form, ancre huh.Field) *etapeModel {
 	return &etapeModel{form: form, ancre: ancre, touches: touches, rappel: rappel}
 }
 
-func (m *etapeModel) Init() tea.Cmd { return m.form.Init() }
+// Init lit le premier champ après l'initialisation de huh : un champ sauté
+// en tête (une note) n'a alors plus le focus.
+func (m *etapeModel) Init() tea.Cmd {
+	cmd := m.form.Init()
+	m.premier = m.form.GetFocusedField()
+	return cmd
+}
 
 func (m *etapeModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if k, ok := msg.(tea.KeyMsg); ok && m.form.GetFocusedField() == m.ancre && slices.Contains(m.touches, k.String()) {
 		m.retour = true
 		return m, tea.Quit
 	}
+	// huh n'écoute plus les tailles suivantes dès qu'une largeur lui a été
+	// imposée (form.go : « if f.width == 0 ») : on la lui redonne donc à
+	// chaque changement. Dans le cadre, c'est la largeur intérieure que
+	// l'hôte transmet ; hors du cadre, celle du terminal, comme avant.
+	if taille, ok := msg.(tea.WindowSizeMsg); ok {
+		m.form = m.form.WithWidth(taille.Width)
+		m.largeur = taille.Width
+	}
 	modele, cmd := m.form.Update(msg)
 	m.form = modele.(*huh.Form)
 	return m, cmd
+}
+
+// Titre nomme l'étape dans le fil d'Ariane. huh ne dit pas le titre d'un
+// champ : c'est l'appelant qui le donne (lancerEtapeNommee). Vide, le fil
+// d'Ariane omet l'étape.
+func (m *etapeModel) Titre() string { return m.titre }
+
+// Touches annonce celles du champ qui a le focus. Le retour n'est annoncé que
+// là où il mène quelque part : depuis l'ancre vers l'écran d'avant, ou vers
+// la question précédente du même écran.
+func (m *etapeModel) Touches() string {
+	champ := m.form.GetFocusedField()
+	retourPossible := m.ancre != nil || champ != m.premier
+	var touches string
+	switch champ.(type) {
+	case *huh.Input, *huh.Text:
+		touches = "⏎ valider"
+		if retourPossible {
+			touches += "  shift+tab revenir"
+		}
+	case *huh.FilePicker:
+		// Replié, l'explorateur n'a qu'une touche : l'ouvrir. ← et Échap n'y
+		// font rien (huh désactive Back hors dépliage).
+		touches = "⏎ ouvrir"
+		if explorateurDeplie(champ) {
+			touches = "↑↓ choisir  → ouvrir  ← remonter  ⏎ choisir"
+		}
+		if retourPossible {
+			touches += "  shift+tab revenir"
+		}
+	default:
+		touches = "↑↓ choisir  → valider"
+		if retourPossible {
+			touches += "  ← revenir"
+		}
+	}
+	return touches
+}
+
+// saisitDuTexte : dans un champ texte, ? est un caractère comme un autre —
+// une phrase de passe peut en contenir. L'hôte n'ouvre donc pas l'aide.
+func (m *etapeModel) saisitDuTexte() bool {
+	switch m.form.GetFocusedField().(type) {
+	case *huh.Input, *huh.Text:
+		return true
+	}
+	return false
+}
+
+// gardeEchap : dans l'explorateur déplié, Échap remonte d'un dossier
+// (formKeyMap). L'hôte ne la transforme donc pas en retour au menu. Replié,
+// l'explorateur ignore Échap : elle revient à l'hôte.
+func (m *etapeModel) gardeEchap() bool {
+	return explorateurDeplie(m.form.GetFocusedField())
+}
+
+// explorateurDeplie : champ est un explorateur qui montre sa liste. huh ne
+// l'expose que par Zoom, qui vaut exactement cet état.
+func explorateurDeplie(champ huh.Field) bool {
+	f, ok := champ.(*huh.FilePicker)
+	return ok && f.Zoom()
 }
 
 func (m *etapeModel) View() string {
@@ -199,10 +293,13 @@ func (m *etapeModel) View() string {
 	if vue == "" {
 		return vue
 	}
+	if m.dansLeCadre && m.entete != "" {
+		vue = replier(m.entete, m.largeur) + "\n\n" + vue
+	}
 	// Le rappel n'apparaît que sur l'ancre, seul endroit où il est vrai :
 	// ailleurs, la touche annoncée remonte d'une question et non d'un écran, et
 	// l'aide de huh le dit déjà.
-	if m.form.GetFocusedField() != m.ancre {
+	if m.dansLeCadre || m.form.GetFocusedField() != m.ancre {
 		return vue
 	}
 	return vue + styleFaint.Render("  "+m.rappel) + "\n"
@@ -225,21 +322,46 @@ func optionsProgramme() []tea.ProgramOption {
 }
 
 // lancerChamp affiche un champ isolé comme le fait field.Run de huh, mais
-// avec les options du projet.
+// avec les options du projet — et dans le cadre de l'hôte s'il y en a un.
 func lancerChamp(champ huh.Field) error {
-	return huh.NewForm(huh.NewGroup(champ).WithShowHelp(false)).
-		WithShowHelp(false).WithProgramOptions(optionsProgramme()...).Run()
+	return lancerEtape(huh.NewForm(huh.NewGroup(champ).WithShowHelp(false)).WithShowHelp(false), nil)
+}
+
+// hoteCourant est l'écran hôte du plein écran, nil en dehors. Il est posé
+// avant le lancement du parcours et n'est plus modifié ensuite : le parcours
+// le lit sans verrou.
+var hoteCourant *hote
+
+// hoteDuCadre rend l'hôte si les écrans doivent passer par lui : il y en a
+// un, et TERM n'est pas dumb — huh y bascule en mode accessible, sans écran à
+// intercepter. nil sinon. Seule règle pour tous les écrans (formulaires,
+// progression, phrase générée, menu).
+func hoteDuCadre() *hote {
+	if os.Getenv("TERM") == "dumb" {
+		return nil
+	}
+	return hoteCourant
 }
 
 // lancerEtape affiche un formulaire et distingue trois issues : terminé,
-// abandonné (Ctrl+C), ou retour à l'écran précédent — errRetour.
+// abandonné (Ctrl+C), ou retour à l'écran précédent — errRetour. Dans le
+// cadre de l'hôte, Échap ajoute une quatrième issue : errMenu.
 //
 // Une ancre nulle vaut « pas d'écran avant celui-ci » : le formulaire tourne
 // alors comme d'habitude, sous le programme de huh.
 func lancerEtape(form *huh.Form, ancre huh.Field) error {
+	return lancerEtapeNommee("", form, ancre)
+}
+
+// lancerEtapeNommee est lancerEtape avec le nom de l'étape, affiché dans le
+// fil d'Ariane du plein écran : « chiffremento vX · chiffrer › options ».
+func lancerEtapeNommee(titre string, form *huh.Form, ancre huh.Field) error {
 	// TERM=dumb : huh bascule tout seul en mode accessible, une suite de
 	// questions en texte brut sans écran à intercepter. On le laisse faire —
 	// mieux vaut pas de retour arrière qu'une interface illisible.
+	if h := hoteDuCadre(); h != nil {
+		return lancerEtapeDansLeCadre(h, titre, form, ancre)
+	}
 	if ancre == nil || os.Getenv("TERM") == "dumb" {
 		return form.WithProgramOptions(optionsProgramme()...).Run()
 	}
@@ -260,6 +382,59 @@ func lancerEtape(form *huh.Form, ancre huh.Field) error {
 		return err
 	}
 	if final.(*etapeModel).retour {
+		return errRetour
+	}
+	if form.State == huh.StateAborted {
+		return huh.ErrUserAborted
+	}
+	return nil
+}
+
+// etapeDansLeCadre prépare un formulaire pour le cadre de l'hôte.
+func etapeDansLeCadre(form *huh.Form, ancre huh.Field) *etapeModel {
+	// L'hôte traduit ces deux commandes en fin d'écran : tea.Quit ne ferme
+	// que le formulaire, pas tout le programme.
+	form.SubmitCmd = tea.Quit
+	form.CancelCmd = tea.Interrupt
+	// La barre du bas de l'hôte annonce déjà les touches (Touches) : l'aide
+	// de huh les répéterait, et sa ligne, jamais coupée, déborderait d'un
+	// cadre étroit.
+	m := newEtapeModel(form.WithShowHelp(false), ancre)
+	m.dansLeCadre = true
+	return m
+}
+
+// lancerEtapeDansLeCadre confie le formulaire à l'hôte au lieu de lancer un
+// programme. Le modèle est lu directement, pas celui que rend afficher : sur
+// Ctrl+C, ce dernier peut être nul.
+func lancerEtapeDansLeCadre(h *hote, titre string, form *huh.Form, ancre huh.Field) error {
+	m := etapeDansLeCadre(form, ancre)
+	m.titre = titre
+	return afficherEtape(h, m)
+}
+
+// lancerQuestionApresResultat pose une question qui suit l'écriture
+// (suppression, nom d'origine) sous les résumés de l'opération : le ✓ et le
+// fichier produit restent sous les yeux pendant qu'on décide. Pas d'ancre :
+// l'opération est faite, il n'y a plus d'écran où revenir.
+func lancerQuestionApresResultat(titre string, form *huh.Form) error {
+	h := hoteDuCadre()
+	if h == nil {
+		return lancerEtapeNommee(titre, form, nil)
+	}
+	m := etapeDansLeCadre(form, nil)
+	m.titre = titre
+	m.entete = corpsCarte(sessionCourante.resumesOperation())
+	return afficherEtape(h, m)
+}
+
+// afficherEtape confie un formulaire préparé à l'hôte et traduit sa fin.
+func afficherEtape(h *hote, m *etapeModel) error {
+	form := m.form
+	if _, err := h.afficher(m); err != nil {
+		return err
+	}
+	if m.retour {
 		return errRetour
 	}
 	if form.State == huh.StateAborted {

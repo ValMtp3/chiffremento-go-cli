@@ -40,7 +40,7 @@ func ecransDeLInterface() []ecranTeste {
 			nom: "choix de l'opération et de la cible",
 			monter: func(t *testing.T) (*huh.Form, huh.Field, []string) {
 				action, mode := "enc", "saisie"
-				return choixForm(&action, &mode), nil, []string{"right"}
+				return choixForm(&action, &mode, true), nil, []string{"right"}
 			},
 			toucheRetour:    "",
 			valideAuClavier: true,

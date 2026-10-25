@@ -324,16 +324,38 @@ func extractArchive(r io.Reader, dest string) error {
 	tampon := make([]byte, tailleTamponCopie)
 	return walkArchive(r, func(hdr *tar.Header, rel string, body io.Reader) error {
 		target := filepath.Join(dest, filepath.FromSlash(rel))
-		if hdr.Typeflag == tar.TypeDir {
-			if err := os.MkdirAll(target, dirPerm(hdr.FileInfo().Mode())); err != nil {
-				return fmt.Errorf("création de %s: %w", rel, err)
+		// Les créations passent par dansLeTemporaire : après un Ctrl+C
+		// (FermerTemporaires), MkdirAll recréerait sinon le dossier
+		// temporaire supprimé, et l'extraction y écrirait du clair.
+		var f *os.File
+		err := dansLeTemporaire(func() error {
+			if hdr.Typeflag == tar.TypeDir {
+				if err := os.MkdirAll(target, dirPerm(hdr.FileInfo().Mode())); err != nil {
+					return fmt.Errorf("création de %s: %w", rel, err)
+				}
+				return nil
 			}
-			return nil
+			if err := os.MkdirAll(filepath.Dir(target), 0700); err != nil {
+				return fmt.Errorf("création du dossier parent de %s: %w", rel, err)
+			}
+			var err error
+			f, err = creerFichierExtrait(target, rel, hdr)
+			if err == nil {
+				suivreExtrait(f)
+			}
+			return err
+		})
+		if err != nil || f == nil {
+			return err
 		}
-		if err := os.MkdirAll(filepath.Dir(target), 0700); err != nil {
-			return fmt.Errorf("création du dossier parent de %s: %w", rel, err)
+		err = extractFile(f, body, target, rel, hdr, tampon)
+		oublierExtrait(f)
+		// Le fichier a été fermé par FermerTemporaires : l'écriture a
+		// échoué pour cette raison, pas pour une panne du disque.
+		if err != nil && fermes.Load() {
+			return errNettoye
 		}
-		return extractFile(body, target, rel, hdr, tampon)
+		return err
 	})
 }
 
@@ -347,13 +369,19 @@ func checkArchive(r io.Reader) error {
 	})
 }
 
-func extractFile(tr io.Reader, target, rel string, hdr *tar.Header, tampon []byte) error {
+// creerFichierExtrait crée le fichier d'une entrée.
+func creerFichierExtrait(target, rel string, hdr *tar.Header) (*os.File, error) {
 	// O_EXCL : une archive qui décrit deux fois le même chemin ne doit pas
 	// écraser en silence ce que la première entrée a écrit.
 	f, err := os.OpenFile(target, os.O_WRONLY|os.O_CREATE|os.O_EXCL, filePerm(hdr.FileInfo().Mode()))
 	if err != nil {
-		return fmt.Errorf("création de %s: %w", rel, err)
+		return nil, fmt.Errorf("création de %s: %w", rel, err)
 	}
+	return f, nil
+}
+
+// extractFile copie le contenu d'une entrée dans f, déjà créé, puis le ferme.
+func extractFile(f *os.File, tr io.Reader, target, rel string, hdr *tar.Header, tampon []byte) error {
 	// os.File implémente ReadFrom : l'enveloppe force l'usage du tampon fourni.
 	if _, err := io.CopyBuffer(struct{ io.Writer }{f}, tr, tampon); err != nil {
 		f.Close()

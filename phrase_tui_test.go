@@ -5,6 +5,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"chiffremento-cli/pkg"
 
@@ -222,5 +223,58 @@ func TestPhraseMasqueSansLongueur(t *testing.T) {
 	m.phrase.Texte = strings.Repeat("y", 70)
 	if longue := m.View(); longue != courte {
 		t.Error("le masque change avec la longueur de la phrase")
+	}
+}
+
+// TestEtapePhraseParLHote : avec un hôte, la phrase s'affiche dans le cadre,
+// sans programme à part, puis la question de confirmation ; la phrase n'est
+// rendue qu'après « oui ». Échap, lui, ramène au menu.
+func TestEtapePhraseParLHote(t *testing.T) {
+	h, boite := hoteSynchrone(t, 100, 30)
+	type resultat struct {
+		phrase string
+		err    error
+	}
+	issue := make(chan resultat, 1)
+	go func() {
+		p, err := etapePhrase()
+		issue <- resultat{p.Texte, err}
+	}()
+
+	demandeRecue(t, h, boite)
+	if !strings.Contains(h.View(), "phrase de passe générée") {
+		t.Fatalf("la phrase n'est pas dans le cadre :\n%s", h.View())
+	}
+	envoyerHote(t, h, toucheP("entrée"))
+	demandeRecue(t, h, boite)
+	if !strings.Contains(h.View(), "as-tu enregistré cette phrase") {
+		t.Fatalf("la confirmation n'est pas dans le cadre :\n%s", h.View())
+	}
+	envoyerHote(t, h, touche("up"))
+	envoyerHote(t, h, toucheP("entrée"))
+
+	var r resultat
+	select {
+	case r = <-issue:
+	case <-time.After(delaiTest):
+		t.Fatal("etapePhrase n'a pas rendu la main")
+	}
+	if r.err != nil || r.phrase == "" {
+		t.Fatalf("etapePhrase = (%q, %v), attendu une phrase", r.phrase, r.err)
+	}
+
+	go func() {
+		p, err := etapePhrase()
+		issue <- resultat{p.Texte, err}
+	}()
+	demandeRecue(t, h, boite)
+	envoyerHote(t, h, toucheP("échap"))
+	select {
+	case r = <-issue:
+	case <-time.After(delaiTest):
+		t.Fatal("etapePhrase n'a pas rendu la main après Échap")
+	}
+	if !errors.Is(r.err, errMenu) || r.phrase != "" {
+		t.Fatalf("Échap : etapePhrase = (%q, %v), attendu errMenu", r.phrase, r.err)
 	}
 }

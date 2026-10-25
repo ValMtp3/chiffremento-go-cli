@@ -40,6 +40,9 @@ type modelePhrase struct {
 	visible bool
 	message string
 	issue   issueEcranPhrase
+	// dansLeCadre : affiché par l'hôte, dont la barre du bas annonce déjà les
+	// touches ; la ligne d'aide sous la phrase ferait doublon.
+	dansLeCadre bool
 
 	copier  func(string) error
 	generer func(int) (pkg.Phrase, error)
@@ -67,6 +70,14 @@ func (m *modelePhrase) nouvellePhrase() error {
 }
 
 func (m *modelePhrase) Init() tea.Cmd { return nil }
+
+// Titre et Touches font de l'écran un sous-écran de l'hôte. Échap n'y figure
+// pas : dans le cadre, l'hôte la prend pour revenir au menu.
+func (m *modelePhrase) Titre() string { return "phrase générée" }
+
+func (m *modelePhrase) Touches() string {
+	return "a afficher  c copier  r nouvelle  +/- mots  ⏎ continuer  ← revenir"
+}
 
 func (m *modelePhrase) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	touche, ok := msg.(tea.KeyMsg)
@@ -147,6 +158,9 @@ func (m *modelePhrase) View() string {
 	if m.message != "" {
 		b.WriteString("  " + styleText.Render(m.message) + "\n")
 	}
+	if m.dansLeCadre {
+		return b.String()
+	}
 	b.WriteString("\n  " + styleFaint.Render(
 		"a afficher/masquer · c copier · r nouvelle · +/- mots · entrée continuer · échap retour") + "\n")
 	return b.String()
@@ -158,21 +172,18 @@ func (m *modelePhrase) View() string {
 // La question de confirmation part sur « pas encore » : un fichier chiffré
 // avec une phrase que personne n'a notée est perdu, et la touche Entrée
 // machinale ne doit pas suffire à le sceller.
-func etapePhrase() (string, error) {
+func etapePhrase() (pkg.Phrase, error) {
 	m, err := newModelePhrase(pkg.DefautMotsPhrase, clipboard.WriteAll, pkg.GenererPhrase)
 	if err != nil {
-		return "", err
+		return pkg.Phrase{}, err
 	}
 	for {
 		m.issue = issueAucune
-		if _, err := tea.NewProgram(m, tea.WithOutput(os.Stderr)).Run(); err != nil {
-			if errors.Is(err, tea.ErrInterrupted) {
-				return "", huh.ErrUserAborted
-			}
-			return "", err
+		if err := afficherPhrase(m); err != nil {
+			return pkg.Phrase{}, err
 		}
 		if m.issue != issueContinuer {
-			return "", errRetour
+			return pkg.Phrase{}, errRetour
 		}
 
 		enregistree := false
@@ -183,15 +194,37 @@ func etapePhrase() (string, error) {
 			"oui, je l'ai enregistrée", "pas encore", &enregistree)
 		form := huh.NewForm(huh.NewGroup(champ)).
 			WithTheme(formTheme()).WithKeyMap(formKeyMap()).WithShowHelp(true)
-		err := lancerEtape(form, champ)
+		err := lancerEtapeNommee("phrase enregistrée", form, champ)
 		if err != nil && !errors.Is(err, errRetour) {
-			return "", err
+			return pkg.Phrase{}, err
 		}
 		if err == nil && enregistree {
-			return m.phrase.Texte, nil
+			return m.phrase, nil
 		}
 		// « pas encore » ou retour : on revient à la phrase, inchangée.
 	}
+}
+
+// afficherPhrase montre l'écran de la phrase : dans le cadre de l'hôte s'il
+// y en a un, sinon dans un programme aux réglages communs (30 images/s,
+// sortie sur stderr).
+func afficherPhrase(m *modelePhrase) error {
+	if h := hoteDuCadre(); h != nil {
+		m.dansLeCadre = true
+		_, err := h.afficher(m)
+		// Échap et Ctrl+C sont pris par l'hôte avant l'écran, qui n'a donc
+		// pas remasqué la phrase lui-même : on le fait ici, quelle que soit
+		// l'issue.
+		m.visible = false
+		return err
+	}
+	if _, err := tea.NewProgram(m, optionsProgramme()...).Run(); err != nil {
+		if errors.Is(err, tea.ErrInterrupted) {
+			return huh.ErrUserAborted
+		}
+		return err
+	}
+	return nil
 }
 
 // doGenpass écrit une phrase sur la sortie standard, seule sur sa ligne, pour
