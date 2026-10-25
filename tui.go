@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"chiffremento-cli/internal/zxcvbn"
 	"chiffremento-cli/pkg"
@@ -64,33 +65,63 @@ func runTUI() (int, error) {
 	// l'efface à la sortie (fermer, appelé par executer et par Ctrl+C), donc
 	// avant que main n'appelle os.Exit.
 	h.phrase = &s.phrase
+	return menerSession(h, s, programme, func() { parcoursSession(h, s) })
+}
+
+// fermerTemporaires est pkg.FermerTemporaires ; les tests la remplacent, le
+// registre de pkg resterait sinon fermé pour la suite.
+var fermerTemporaires = pkg.FermerTemporaires
+
+// delaiFinParcours borne l'attente du parcours à la sortie : assez pour
+// qu'une dérivation Argon2 en cours finisse (~1 s en profil standard, plus
+// en « fort » ou « maximum » sur une machine lente), pas assez pour qu'un
+// parcours bloqué retienne le processus. Au-delà, on sort quand même : les
+// copies du mot de passe encore tenues par l'opération ne sont alors pas
+// mises à zéro, comme avant. Une variable pour les tests.
+var delaiFinParcours = 3 * time.Second
+
+// menerSession fait tourner le programme de l'hôte pendant que parcours
+// mène les opérations dans sa propre goroutine, puis rend le code de sortie.
+//
+// Sur une sortie qui n'est pas « quitter » (Ctrl+C, SIGHUP, panique), le
+// parcours tourne peut-être encore : l'opération lancée ne s'interrompt pas,
+// et ses copies du mot de passe ne sont mises à zéro que par ses defer, à sa
+// fin. main fait os.Exit dès le retour : on attend donc la fin du parcours,
+// au plus delaiFinParcours. Rien n'est effacé d'ici : un tampon encore lu par
+// Argon2 depuis une autre goroutine ne doit jamais être touché.
+func menerSession(h *hote, s *session, programme *tea.Program, parcours func()) (int, error) {
 	// Fenêtre du terminal fermée : même nettoyage que Ctrl+C, sortie en 129.
 	var raccroche atomic.Bool
 	arreterRaccrochage := surRaccrochage(func() {
 		raccroche.Store(true)
-		pkg.FermerTemporaires()
+		fermerTemporaires()
 		programme.Kill()
 	})
 	defer arreterRaccrochage()
 	var garde gardeParcours
-	go garde.mener(func() { parcoursSession(h, s) }, func() {
-		// Une panique dans le parcours tuerait le processus sur-le-champ :
-		// écran alternatif affiché, terminal en mode brut, clair d'une
-		// extraction laissé. On nettoie, on oublie la phrase, puis Kill fait
-		// rendre la main à Run, qui rend le terminal.
-		pkg.FermerTemporaires()
-		h.fermer()
-		programme.Kill()
-	})
+	parcoursFini := make(chan struct{})
+	go func() {
+		defer close(parcoursFini)
+		garde.mener(parcours, func() {
+			// Une panique dans le parcours tuerait le processus sur-le-champ :
+			// écran alternatif affiché, terminal en mode brut, clair d'une
+			// extraction laissé. On nettoie, on oublie la phrase, puis Kill
+			// fait rendre la main à Run, qui rend le terminal.
+			fermerTemporaires()
+			h.fermer()
+			programme.Kill()
+		})
+	}()
 
 	interrompu, err := h.executer(programme)
 	if interrompu || err != nil {
 		// L'opération en cours (progression, changement de mot de passe)
-		// tourne encore dans la goroutine du parcours : le processus va
-		// sortir sans l'attendre. FermerTemporaires supprime ses temporaires
-		// et l'empêche d'en créer d'autres d'ici la sortie.
-		pkg.FermerTemporaires()
+		// tourne encore dans la goroutine du parcours. FermerTemporaires
+		// supprime ses temporaires et l'empêche d'en créer d'autres ; puis
+		// on la laisse finir, le temps borné qu'il faut.
+		fermerTemporaires()
 	}
+	attendreBorne(parcoursFini, delaiFinParcours)
 	// L'écran alternatif est quitté : ce qui y a été annoncé s'imprime
 	// maintenant, sur le terminal ordinaire.
 	s.imprimer(os.Stdout)
@@ -108,6 +139,17 @@ func runTUI() (int, error) {
 		return exitInterrompu, nil
 	}
 	return s.codeSortie(), nil
+}
+
+// attendreBorne attend que fini soit fermé, au plus delai. Le minuteur n'existe
+// que pendant la sortie.
+func attendreBorne(fini <-chan struct{}, delai time.Duration) {
+	minuteur := time.NewTimer(delai)
+	defer minuteur.Stop()
+	select {
+	case <-fini:
+	case <-minuteur.C:
+	}
 }
 
 // exitErreurInterne : le code d'une panique Go non rattrapée. Une panique du

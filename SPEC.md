@@ -156,7 +156,9 @@ chiffrement d'un gros fichier, écran de progression affiché et temporaire
 terminal, garde l'original intact, supprime le temporaire et ne laisse aucun
 chiffré. Si l'opération a déjà écrit sa sortie quand Ctrl+C arrive (fin de
 l'animation), les résumés imprimés à la sortie le disent : « ✓ <sortie> écrit
-avant l'interruption ».
+avant l'interruption ». Avant de sortir (Ctrl+C, SIGHUP, panique), la
+session attend la fin de l'opération en cours, qui met à zéro ses copies du
+mot de passe, au plus 3 s ; au-delà, elle sort quand même.
 
 Échap ne fait jamais quitter l'interface. Avant le lancement de l'opération,
 il l'abandonne sans rien écrire et ramène au menu ; sur le menu, il ne fait
@@ -164,7 +166,7 @@ rien ; dans l'explorateur, il remonte d'un dossier. Après l'écriture, sur la
 question de suppression ou de renommage, il vaut « garder » et ne compte pas
 comme un échec.
 
-Tests : TestE2EInterruption, TestE2EInterruptionPendantOperation, TestE2EInterruptionApresEcriture, TestCtrlCApresEcritureLeDit, TestEchapAvantLancementRevientAuMenu, TestEchapSurLeMenuNeFaitRien, TestEchapApresEcritureGarde, TestEchapRemonteDansLExplorateur
+Tests : TestE2EInterruption, TestE2EInterruptionPendantOperation, TestE2EInterruptionApresEcriture, TestCtrlCApresEcritureLeDit, TestCtrlCAttendQueLeParcoursEfface, TestSortieMalgreUnParcoursBloque, TestEchapAvantLancementRevientAuMenu, TestEchapSurLeMenuNeFaitRien, TestEchapApresEcritureGarde, TestEchapRemonteDansLExplorateur
 
 ### R-TUI-05 — Mauvaise phrase de passe dans l'interface
 Une mauvaise phrase de passe donne un message clair, et rien n'est écrit. En

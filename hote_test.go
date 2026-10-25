@@ -7,6 +7,7 @@ import (
 	"os"
 	"reflect"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -624,4 +625,72 @@ func TestSurRaccrochageSArrete(t *testing.T) {
 	arreter := surRaccrochage(func() { t.Error("agir appelé sans SIGHUP") })
 	arreter()
 	arreter()
+}
+
+// remplacerFermerTemporaires compte les appels au lieu de fermer pour de bon
+// le registre de pkg, qui resterait fermé pour les tests suivants.
+func remplacerFermerTemporaires(t *testing.T) *atomic.Int32 {
+	t.Helper()
+	var appels atomic.Int32
+	ancien := fermerTemporaires
+	fermerTemporaires = func() { appels.Add(1) }
+	t.Cleanup(func() { fermerTemporaires = ancien })
+	return &appels
+}
+
+// TestCtrlCAttendQueLeParcoursEfface : sur Ctrl+C pendant une opération (une
+// dérivation Argon2 ne s'interrompt pas), la session attend que le parcours
+// ait fini et mis à zéro sa copie du mot de passe avant de rendre la main —
+// main fait os.Exit juste après, et les defer du parcours ne tourneraient
+// jamais.
+func TestCtrlCAttendQueLeParcoursEfface(t *testing.T) {
+	appels := remplacerFermerTemporaires(t)
+	h := nouvelHote(nil)
+	p := programmeSansTerminal(t, h)
+	s := &session{}
+	h.phrase = &s.phrase
+	motDePasse := []byte("phrase de l'opération")
+	parcours := func() {
+		defer zero(motDePasse)
+		if _, err := h.afficher(&ecranDeTest{modele: texteFixe{"dérivation…"}}); errors.Is(err, huh.ErrUserAborted) {
+			time.Sleep(300 * time.Millisecond) // l'opération finit sa dérivation
+		}
+	}
+	go p.Send(tea.KeyMsg{Type: tea.KeyCtrlC})
+
+	code, err := menerSession(h, s, p, parcours)
+	if err != nil || code != exitInterrompu {
+		t.Fatalf("menerSession = (%d, %v), attendu (%d, nil)", code, err, exitInterrompu)
+	}
+	if !toutAZero(motDePasse) {
+		t.Errorf("la copie du mot de passe n'est pas à zéro au retour : %q", motDePasse)
+	}
+	if appels.Load() == 0 {
+		t.Error("les temporaires n'ont pas été fermés")
+	}
+}
+
+// TestSortieMalgreUnParcoursBloque : un parcours qui ne finit pas ne retient
+// pas la sortie au-delà de delaiFinParcours.
+func TestSortieMalgreUnParcoursBloque(t *testing.T) {
+	remplacerFermerTemporaires(t)
+	ancien := delaiFinParcours
+	delaiFinParcours = 100 * time.Millisecond
+	t.Cleanup(func() { delaiFinParcours = ancien })
+	h := nouvelHote(nil)
+	p := programmeSansTerminal(t, h)
+	s := &session{}
+	h.phrase = &s.phrase
+	bloque := make(chan struct{})
+	t.Cleanup(func() { close(bloque) })
+	go p.Send(tea.KeyMsg{Type: tea.KeyCtrlC})
+
+	debut := time.Now()
+	code, _ := menerSession(h, s, p, func() { <-bloque })
+	if code != exitInterrompu {
+		t.Errorf("code %d, attendu %d", code, exitInterrompu)
+	}
+	if duree := time.Since(debut); duree > 2*time.Second {
+		t.Errorf("la sortie a attendu %v un parcours bloqué", duree)
+	}
 }
