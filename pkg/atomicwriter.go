@@ -6,8 +6,9 @@ package pkg
 // tronquée avant que l'en-tête ou le mot de passe soient vérifiés, et le clair
 // partiel restait sur le disque en 0644 après un échec.
 //
-// Mêmes garanties qu'Encrypt et Decrypt : temporaire 0600 voisin, suivi par
-// CleanupTemporaries en cas de Ctrl+C, fsync puis rename au Commit. Tant que
+// Mêmes garanties qu'Encrypt et Decrypt : temporaire 0600 voisin, supprimé
+// par FermerTemporaires en cas de Ctrl+C ou de signal, fsync puis rename au
+// Commit. Tant que
 // Commit n'a pas réussi, la destination n'est pas touchée.
 type AtomicWriter struct {
 	a *atomicFile

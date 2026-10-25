@@ -37,16 +37,11 @@ func carteResultat(lignes []string) sousEcran {
 	return &ecranResultat{titre: "résultat", corps: corpsCarte(lignes)}
 }
 
-// ecranErreur montre la cause d'un échec, puis quoi faire quand un conseil
-// existe : celui de l'erreur elle-même — les lignes qui suivent sa cause —,
-// ou celui d'une erreur courante (conseilCourant).
-func ecranErreur(err error) sousEcran {
-	return ecranErreurApres(nil, err)
-}
-
-// ecranErreurApres est ecranErreur précédé des résumés déjà notés par
-// l'opération : un chiffrement réussi dont la suppression échoue doit encore
-// montrer son ✓.
+// ecranErreurApres montre la cause d'un échec, puis quoi faire quand un
+// conseil existe : celui de l'erreur elle-même — les lignes qui suivent sa
+// cause —, ou celui d'une erreur courante (conseilCourant). Les résumés déjà
+// notés par l'opération passent avant (nil s'il n'y en a pas) : un
+// chiffrement réussi dont la suppression échoue doit encore montrer son ✓.
 func ecranErreurApres(lignes []string, err error) sousEcran {
 	cause, conseil := causeEtConseil(err)
 	var b strings.Builder

@@ -472,8 +472,8 @@ func TestAideFermeeQuandLEcranChange(t *testing.T) {
 
 // programmeSansTerminal fait tourner un vrai programme Bubble Tea autour de
 // l'hôte, sans terminal ni rendu : le relais par programme.Send est réel.
-// L'entrée est un tube muet plutôt que rien : tea.Exec relance la lecture du
-// clavier après coup, et une entrée nulle la ferait paniquer.
+// L'entrée est un tube muet plutôt que rien : sans entrée donnée, Bubble Tea
+// lirait l'entrée standard du processus de test.
 func programmeSansTerminal(t *testing.T, h *hote) *tea.Program {
 	t.Helper()
 	lecture, ecriture := io.Pipe()

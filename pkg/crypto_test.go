@@ -566,10 +566,10 @@ func TestNettoyageTemporaires(t *testing.T) {
 		t.Fatalf("le temporaire devrait exister: %v", err)
 	}
 
-	CleanupTemporaries()
+	nettoyerTemporaires()
 
 	if _, err := os.Stat(tmp); !os.IsNotExist(err) {
-		t.Error("CleanupTemporaries n'a pas supprimé le temporaire en cours")
+		t.Error("nettoyerTemporaires n'a pas supprimé le temporaire en cours")
 	}
 	a.cleanup()
 }
@@ -592,7 +592,7 @@ func TestCommitApresNettoyageRefuse(t *testing.T) {
 		}
 		defer a.cleanup()
 
-		CleanupTemporaries()
+		nettoyerTemporaires()
 		// L'extraction en cours écrit le fichier suivant : MkdirAll recrée
 		// le dossier temporaire que le nettoyage vient de supprimer.
 		if err := os.MkdirAll(filepath.Join(a.path, "sous"), 0700); err != nil {
@@ -616,7 +616,7 @@ func TestCommitApresNettoyageRefuse(t *testing.T) {
 		}
 		defer a.cleanup()
 
-		CleanupTemporaries()
+		nettoyerTemporaires()
 		if err := a.commit(); err == nil {
 			t.Fatal("commit a réussi après le nettoyage")
 		}
@@ -639,10 +639,10 @@ func TestNettoyageFermeLeDescripteur(t *testing.T) {
 	trackTempFile(f.Name(), f)
 	defer untrackTemp(f.Name())
 
-	CleanupTemporaries()
+	nettoyerTemporaires()
 
 	if err := f.Close(); !errors.Is(err, os.ErrClosed) {
-		t.Errorf("CleanupTemporaries n'a pas fermé le descripteur (Close renvoie %v)", err)
+		t.Errorf("nettoyerTemporaires n'a pas fermé le descripteur (Close renvoie %v)", err)
 	}
 	if _, err := os.Stat(f.Name()); !os.IsNotExist(err) {
 		t.Error("le temporaire suivi n'a pas été supprimé")

@@ -127,18 +127,9 @@ var (
 	extraitOuvert *os.File
 )
 
-// CleanupTemporaries supprime les temporaires encore en cours d'écriture.
-// RemoveAll et non Remove : une extraction de dossier travaille dans un
-// répertoire temporaire. Pour une sortie du processus, préférer
-// FermerTemporaires, qui empêche aussi d'en créer d'autres.
-func CleanupTemporaries() {
-	pendingMu.Lock()
-	defer pendingMu.Unlock()
-	nettoyerRegistre()
-}
-
 // FermerTemporaires nettoie les temporaires pour de bon, juste avant la
-// sortie du processus (Ctrl+C, signal). L'opération interrompue tourne encore
+// sortie du processus (Ctrl+C, signal). RemoveAll et non Remove : une
+// extraction de dossier travaille dans un répertoire temporaire. L'opération interrompue tourne encore
 // dans sa goroutine jusqu'à os.Exit : désormais elle ne peut plus rien créer
 // (errNettoye), un temporaire qu'elle enregistrerait est supprimé aussitôt, et
 // l'extraction s'arrête à l'entrée suivante. Sans ça, l'entrée suivante
@@ -234,15 +225,15 @@ func untrackTemp(p string) {
 }
 
 // errNettoye : les temporaires ont été nettoyés par une interruption
-// (FermerTemporaires sur Ctrl+C ou signal, ou CleanupTemporaries) avant que
+// (FermerTemporaires sur Ctrl+C ou signal) avant que
 // l'opération ait fini : création refusée, extraction arrêtée, bascule
 // refusée. L'opération est abandonnée, la destination reste intacte.
 var errNettoye = errors.New("opération interrompue : le temporaire a été nettoyé")
 
 // basculer renomme le temporaire sur la destination, seulement s'il est encore
 // suivi, et le sort du registre. Le tout sous le verrou du registre : soit
-// FermerTemporaires (ou CleanupTemporaries) passe avant et le renommage est
-// refusé, soit la bascule passe avant et il n'y a plus rien à nettoyer. Sans ce verrou, une opération
+// FermerTemporaires passe avant et le renommage est refusé, soit la bascule
+// passe avant et il n'y a plus rien à nettoyer. Sans ce verrou, une opération
 // qui finit pendant le nettoyage pouvait installer un dossier recréé à moitié
 // par l'extraction (MkdirAll refait les parents supprimés).
 func basculer(temp, dest string) error {
