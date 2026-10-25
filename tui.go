@@ -243,9 +243,10 @@ func nommerOperation(nom string) {
 // et la ligne « quitter », que le formulaire seul ne sait pas distinguer.
 // Ailleurs (TERM=dumb), « quitter » se choisit comme une opération.
 func lancerMenu(choix *choixMenu) error {
-	form := choixForm(&choix.action, &choix.mode)
 	h := hoteCourant
-	if h == nil || os.Getenv("TERM") == "dumb" {
+	pleinEcran := menuEnPleinEcran(h)
+	form := choixForm(&choix.action, &choix.mode, pleinEcran)
+	if !pleinEcran {
 		if err := lancerEtape(form, nil); err != nil {
 			return err
 		}
@@ -330,20 +331,33 @@ func etapeCible(action, mode string, path *string) error {
 	}
 }
 
+// menuEnPleinEcran dit si le menu s'affiche dans l'hôte h : il y en a un, et
+// TERM n'est pas dumb.
+func menuEnPleinEcran(h *hote) bool {
+	return h != nil && os.Getenv("TERM") != "dumb"
+}
+
 // choixForm demande l'opération et la façon de désigner la cible.
-func choixForm(action *string, mode *string) *huh.Form {
+//
+// La ligne « quitter » n'existe qu'en plein écran (avecQuitter), où le menu
+// revient après chaque opération. En TERM=dumb, une seule opération est
+// menée : le menu garde ses quatre lignes d'avant.
+func choixForm(action *string, mode *string, avecQuitter bool) *huh.Form {
+	operations := []huh.Option[string]{
+		huh.NewOption("chiffrer un fichier ou un dossier", "enc"),
+		huh.NewOption("déchiffrer un "+extension+"  (fichier ou dossier)", "dec"),
+		huh.NewOption("vérifier un "+extension+"  (sans rien écrire)", "verify"),
+		huh.NewOption("changer le mot de passe d'un "+extension, "passwd"),
+	}
+	if avecQuitter {
+		operations = append(operations, huh.NewOption(actionQuitter, actionQuitter))
+	}
 	return huh.NewForm(
 		huh.NewGroup(
 			huh.NewSelect[string]().
 				Key("action").
 				Title("opération").
-				Options(
-					huh.NewOption("chiffrer un fichier ou un dossier", "enc"),
-					huh.NewOption("déchiffrer un "+extension+"  (fichier ou dossier)", "dec"),
-					huh.NewOption("vérifier un "+extension+"  (sans rien écrire)", "verify"),
-					huh.NewOption("changer le mot de passe d'un "+extension, "passwd"),
-					huh.NewOption(actionQuitter, actionQuitter),
-				).
+				Options(operations...).
 				Value(action),
 
 			huh.NewSelect[string]().

@@ -362,7 +362,7 @@ func TestOptionsNeuvesPrennentLesDefauts(t *testing.T) {
 // l'explorateur restait inaccessible à qui n'essayait pas entrée.
 func TestFlecheDroiteValideLeDernierChamp(t *testing.T) {
 	action, mode := "enc", "saisie"
-	form := choixForm(&action, &mode)
+	form := choixForm(&action, &mode, true)
 	m := ouvrirEtape(t, form, nil)
 
 	envoyerEtape(t, m, touche("right")) // valide l'opération, descend à la cible
@@ -419,7 +419,7 @@ func TestEntreeValideAussiLeDernierChamp(t *testing.T) {
 // jamais les deux à la fois, et ce test le vérifie plutôt que de le supposer.
 func TestFlecheDroiteNeSoumetPasTropTot(t *testing.T) {
 	action, mode := "enc", "saisie"
-	form := choixForm(&action, &mode)
+	form := choixForm(&action, &mode, true)
 	m := ouvrirEtape(t, form, nil)
 
 	envoyerEtape(t, m, touche("right")) // valide l'opération seulement
@@ -655,7 +655,7 @@ func TestTouchesDeLEtape(t *testing.T) {
 	}
 
 	action, mode := "enc", "saisie"
-	m = ouvrirEtape(t, choixForm(&action, &mode), nil)
+	m = ouvrirEtape(t, choixForm(&action, &mode, true), nil)
 	if got := m.Touches(); !strings.Contains(got, "↑↓ choisir") || strings.Contains(got, "revenir") {
 		t.Errorf("touches du premier écran = %q : rien derrière lui, pas de retour", got)
 	}

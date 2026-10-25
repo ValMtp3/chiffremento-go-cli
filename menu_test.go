@@ -377,3 +377,24 @@ func TestAnnulerLEcrasementNEstPasUnEchec(t *testing.T) {
 		t.Error("une vraie erreur ne compte pas comme un échec")
 	}
 }
+
+// TestMenuSansQuitterEnTermDumb : hors plein écran (TERM=dumb, aucun hôte),
+// le menu garde ses quatre opérations d'avant, sans ligne « quitter » — une
+// seule opération y est menée, et Ctrl+C suffit pour partir.
+func TestMenuSansQuitterEnTermDumb(t *testing.T) {
+	t.Setenv("TERM", "dumb")
+	if menuEnPleinEcran(hoteDeTest(t, 84, 30)) || menuEnPleinEcran(nil) {
+		t.Fatal("menuEnPleinEcran = true en TERM=dumb")
+	}
+	action, mode := "enc", "saisie"
+	f := ouvrir(t, choixForm(&action, &mode, menuEnPleinEcran(nil)))
+	vue := f.form.View()
+	for _, attendu := range []string{"chiffrer un fichier", "déchiffrer un", "vérifier un", "changer le mot de passe"} {
+		if !strings.Contains(vue, attendu) {
+			t.Errorf("le menu ne propose plus %q :\n%s", attendu, vue)
+		}
+	}
+	if strings.Contains(vue, actionQuitter) {
+		t.Errorf("le menu TERM=dumb propose « quitter » :\n%s", vue)
+	}
+}

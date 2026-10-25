@@ -23,7 +23,7 @@ type huhForm struct{ form *formulaire }
 // mode de saisie.
 func TestFormulairesSeConstruisent(t *testing.T) {
 	action, mode := "enc", "saisie"
-	if f := choixForm(&action, &mode); f == nil {
+	if f := choixForm(&action, &mode, true); f == nil {
 		t.Fatal("choixForm a renvoyé nil")
 	}
 	for _, a := range []string{"enc", "dec", "verify"} {
@@ -304,7 +304,7 @@ func ouvrir(t *testing.T, form *formulaire) *huhForm {
 // TestChoixFormAfficheLesDeuxQuestions : l'opération, puis le mode de saisie.
 func TestChoixFormAfficheLesDeuxQuestions(t *testing.T) {
 	action, mode := "enc", "saisie"
-	f := ouvrir(t, choixForm(&action, &mode))
+	f := ouvrir(t, choixForm(&action, &mode, true))
 
 	vue := f.form.View()
 	if !strings.Contains(vue, "opération") {
@@ -474,7 +474,7 @@ func TestCibleRestitution(t *testing.T) {
 // la liste, sans quoi la commande n'existe que pour qui lit l'aide du CLI.
 func TestChoixFormProposeLeChangementDeMotDePasse(t *testing.T) {
 	action, mode := "enc", "saisie"
-	f := ouvrir(t, choixForm(&action, &mode))
+	f := ouvrir(t, choixForm(&action, &mode, true))
 	if vue := f.form.View(); !strings.Contains(vue, "changer le mot de passe") {
 		t.Errorf("l'interface ne propose pas le changement de mot de passe:\n%s", vue)
 	}
