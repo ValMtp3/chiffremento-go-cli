@@ -4,7 +4,7 @@
 > - 🔥 **Priorité haute** · ⭐️ **Priorité moyenne** · ☁️ **Idées futures**
 > - 🟢 **Facile** | 🟡 **Moyen** | 🔴 **Difficile**
 
-Dernière version publiée : **v2.3.0**. Le format de fichier en est à la **v4**.
+Dernière version publiée : **v2.4.0**. Le format de fichier en est à la **v4**.
 
 ---
 
@@ -47,6 +47,15 @@ Flèche droite qui ne validait pas la dernière question d'un écran (explorateu
 - **Mémoire d'Argon2 rendue au système** dès la clé dérivée : 272 → 17 Mo pendant le traitement d'un gros fichier, 528 → 272 Mo pour `-mode passwd`
 - **Extraction d'un dossier synchronisée sur disque**, en 0,55 s pour 5 000 fichiers sous macOS, et tolérante aux volumes sans synchronisation (exFAT, SMB, NFS)
 - **Fiabilité** : Ctrl+C, source modifiée jamais effacée, écriture atomique depuis un flux, `install.sh` vérifié par `checksums.txt`
+
+### v2.4 — interface plein écran, force du mot de passe en français, releases signées
+
+- **Interface plein écran** : un seul écran, menu qui revient après chaque opération, `Échap` / `q` / `?` / `o`, carte résultat, écran d'erreur avec conseil
+- **Phrase gardée pour la session**, sur demande : oubliée après 5 minutes, par `o` ou à la sortie
+- **zxcvbn interne et allégé** : mots, prénoms et noms français (INSEE), accents compris ; binaire 8 348 898 → 6 312 914 o ; `-version` ~15,5 → ~4,2 Mo de pic mémoire ; défauts de la version d'origine corrigés (mot de passe estimé à 0 essai, `andré`)
+- **Releases signées** : signature cosign de `checksums.txt`, SBOM par archive, attestation de provenance ; `install.sh` vérifie la signature
+- **Fiabilité** : plus aucun temporaire déchiffré après Ctrl+C, fermeture de la fenêtre ou plantage ; copie du mot de passe effacée avant la sortie ; course de données corrigée entre la saisie du mot de passe et sa confirmation
+- Le format de fichier ne change pas (v4)
 
 ---
 
