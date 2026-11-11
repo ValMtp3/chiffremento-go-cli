@@ -299,6 +299,52 @@ func TestInstallEmpreinteFausseRefuseeMemeSigne(t *testing.T) {
 	}
 }
 
+// Aucun checksums.txt dans le dossier : refus, même avec un binaire nu
+// présent. Ce script finit par un sudo cp : rien ne doit être installé sans
+// aucune empreinte à vérifier.
+func TestInstallBinaireNuSansChecksumsRefuse(t *testing.T) {
+	b := preparerInstall(t, false)
+	if err := os.Remove(filepath.Join(b.dossier, fmt.Sprintf("chiffremento_1.0.0_%s_%s.tar.gz", runtime.GOOS, runtime.GOARCH))); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(b.dossier, "checksums.txt")); err != nil {
+		t.Fatal(err)
+	}
+	nu := []byte("#!/bin/sh\necho nu\n")
+	ecrire(t, filepath.Join(b.dossier, fmt.Sprintf("chiffremento-%s-%s", runtime.GOOS, runtime.GOARCH)), nu)
+	sortie, err := b.lancer(t)
+	if err == nil || b.installe() {
+		t.Fatalf("refus attendu\n%s", sortie)
+	}
+	for _, voulu := range []string{"Aucun checksums.txt", "installation refusée"} {
+		if !strings.Contains(sortie, voulu) {
+			t.Errorf("%q absent du message :\n%s", voulu, sortie)
+		}
+	}
+}
+
+// Binaire nu présent mais absent de checksums.txt : refus, exactement comme
+// pour une archive non listée.
+func TestInstallBinaireNuNonListeRefuse(t *testing.T) {
+	b := preparerInstall(t, true)
+	ecrireFauxCosign(t, b.bin, b.appels, 0, "")
+	if err := os.Remove(filepath.Join(b.dossier, fmt.Sprintf("chiffremento_1.0.0_%s_%s.tar.gz", runtime.GOOS, runtime.GOARCH))); err != nil {
+		t.Fatal(err)
+	}
+	nu := []byte("#!/bin/sh\necho nu\n")
+	ecrire(t, filepath.Join(b.dossier, fmt.Sprintf("chiffremento-%s-%s", runtime.GOOS, runtime.GOARCH)), nu)
+	// checksums.txt ne liste que l'archive supprimée : le binaire nu n'y est pas.
+	sortie, err := b.lancer(t)
+	if err == nil || b.installe() {
+		t.Fatalf("refus attendu\n%s", sortie)
+	}
+	for _, voulu := range []string{"n'est pas listé dans checksums.txt", "installation refusée"} {
+		if !strings.Contains(sortie, voulu) {
+			t.Errorf("%q absent du message :\n%s", voulu, sortie)
+		}
+	}
+}
+
 // Le script ne doit pas sortir en erreur après une installation réussie : le
 // binaire nu n'a pas de dossier temporaire à nettoyer.
 func TestInstallBinaireNuCodeSortieZero(t *testing.T) {

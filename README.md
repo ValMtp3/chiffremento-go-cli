@@ -62,7 +62,7 @@ Lancer `chiffremento` ouvre maintenant une vraie application plein écran, et l'
   - Une source modifiée depuis le chiffrement n'est jamais effacée, et l'écran dit pourquoi la source n'a pas pu être relevée.
   - L'écriture reste atomique quand l'entrée est un flux. `-out /dev/null`, un tube nommé ou un lien symbolique reçoivent de nouveau les octets.
   - Un nom d'origine contenant « : » est accepté avec `-meta minimal`.
-  - `install.sh` refuse une archive absente de `checksums.txt`.
+  - `install.sh` refuse toute installation sans `checksums.txt`, et refuse tout fichier (archive ou binaire nu) qui n'y est pas listé.
 
 ## ✨ Nouveautés v2.2
 
@@ -552,7 +552,7 @@ Running `chiffremento` now opens a real full-screen application, and the strengt
   - A source modified since encryption is never deleted, and the screen says why the source could not be recorded.
   - Writing stays atomic when the input is a stream. `-out /dev/null`, a named pipe or a symlink receive the bytes again.
   - An original name containing « : » is accepted with `-meta minimal`.
-  - `install.sh` refuses an archive missing from `checksums.txt`.
+  - `install.sh` refuses to install anything without `checksums.txt`, and refuses any file (archive or bare binary) not listed in it.
 
 ## ✨ New in v2.2
 

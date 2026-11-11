@@ -164,6 +164,16 @@ done
 # La signature passe avant toute lecture des empreintes (verify_checksum).
 verify_signature
 
+# Sans checksums.txt, rien n'est vérifiable : verify_signature est alors muet,
+# et verify_checksum répondrait « non listé » pour tout. Refus net, quelle que
+# soit la source trouvée ci-dessous — ce script finit par un sudo cp, et une
+# installation sans aucune empreinte ne vaut pas mieux qu'aucune vérification.
+if [ -z "$CHECKSUMS" ]; then
+    echo "❌ Aucun checksums.txt trouvé dans ce dossier : installation refusée."
+    echo "   Télécharge checksums.txt et sa signature depuis la même page de release, dans ce dossier, puis relance."
+    exit 1
+fi
+
 if [ -n "$ARCHIVE" ]; then
     echo "📦 Archive trouvée : $ARCHIVE"
     # Une archive non vérifiable n'est jamais installée : ce script finit par
@@ -196,8 +206,14 @@ else
     fi
 
     echo "✅ Binaire trouvé : $PATH_TO_BIN"
+    # Même règle que pour l'archive : un binaire nu absent de checksums.txt
+    # n'est jamais installé, même avec un avertissement. Ce script finit par
+    # un sudo cp : une installation « non vérifiée » ne vaudrait pas mieux
+    # qu'aucune vérification.
     verify_checksum "$PATH_TO_BIN" || {
-        echo "⚠️  Aucune empreinte disponible pour $(basename "$PATH_TO_BIN") : installation non vérifiée."
+        echo "❌ $(basename "$PATH_TO_BIN") n'est pas listé dans checksums.txt : installation refusée."
+        echo "   Télécharge checksums.txt depuis la même page de release, dans ce dossier, puis relance."
+        exit 1
     }
 fi
 
